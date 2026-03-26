@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: market-server
+    runtime: node
+    rootDir: services/market-server
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: GRAVITY_API_URL
+        value: https://gravity-api.onrender.com
+
+  - type: web
+    name: gravity-api
+    runtime: python
+    rootDir: services/gravity-api
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
