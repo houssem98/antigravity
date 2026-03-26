@@ -1,0 +1,309 @@
+# ─────────────────────────────────────────────────────────────
+#  Antigravity — Infrastructure Services (Docker Compose)
+# ─────────────────────────────────────────────────────────────
+#  Usage: docker compose -f infra/docker-compose.yml up -d
+#  Or from repo root: make infra
+# ─────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL + TimescaleDB ──────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: antigravity-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-antigravity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-antigravity_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-gravity_search}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-antigravity} -d $${POSTGRES_DB:-gravity_search}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: antigravity-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Qdrant (Vector Search) ────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: antigravity-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["NONE"]
+
+  # ── Elasticsearch ─────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
+    container_name: antigravity-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Neo4j (Knowledge Graph) ──────────────────────────────
+  neo4j:
+    image: neo4j:5-community
+    container_name: antigravity-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474" # Browser
+      - "7687:7687" # Bolt
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-antigravity_dev}
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Kafka (KRaft, no Zookeeper) ──────────────────────────
+  # Brokers: gravity.raw-documents, gravity.processed-documents,
+  #          gravity.indexed-documents, gravity.dead-letter
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: antigravity-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092" # Internal (container → container)
+      - "9093:9093" # External (host → container)
+    environment:
+      # KRaft mode — no Zookeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
+      KAFKA_LISTENERS: PLAINTEXT://:9092,EXTERNAL://:9093,CONTROLLER://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Topic defaults
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_LOG_RETENTION_HOURS: 168 # 7 days
+      KAFKA_LOG_RETENTION_BYTES: 5368709120 # 5 GB per topic
+      KAFKA_MESSAGE_MAX_BYTES: 10485760 # 10 MB (for large PDFs)
+      CLUSTER_ID: "antigravity-kafka-cluster-01"
+    volumes:
+      - kafka_data:/tmp/kraft-combined-logs
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1" ]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Kafka UI (visibility dashboard) ──────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: antigravity-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "9080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: antigravity
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ── Ingestion Processing Worker ───────────────────────────
+  # Consumes gravity.raw-documents → text extraction + NER → gravity.processed-documents
+  ingestion-worker-processing:
+    build:
+      context: ../services/gravity-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: python scripts/start_worker.py processing
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_URL: postgresql+asyncpg://${POSTGRES_USER:-antigravity}:${POSTGRES_PASSWORD:-antigravity_dev}@postgres:5432/${POSTGRES_DB:-gravity_search}
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: "4"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  # ── Ingestion Indexing Worker ─────────────────────────────
+  # Consumes gravity.processed-documents → chunk + embed → Qdrant + ES + Neo4j + PG
+  ingestion-worker-indexing:
+    build:
+      context: ../services/gravity-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: python scripts/start_worker.py indexing
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_URL: postgresql+asyncpg://${POSTGRES_USER:-antigravity}:${POSTGRES_PASSWORD:-antigravity_dev}@postgres:5432/${POSTGRES_DB:-gravity_search}
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-antigravity_dev}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      WORKER_CONCURRENCY: "2"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  # ── CryptoBERT Sentiment Classifier ─────────────────────
+  # ElKulako/cryptobert — BERTweet trained on 3.2M crypto posts
+  # Classifies text as Bearish / Neutral / Bullish with confidence scores
+  # REST: POST /classify → [[{"label":"Bullish","score":0.94}, ...], ...]
+  cryptobert:
+    build:
+      context: ../services/sentiment-api
+      dockerfile: Dockerfile
+    image: antigravity-cryptobert:latest
+    container_name: antigravity-cryptobert
+    restart: unless-stopped
+    ports:
+      - "8082:80"
+    environment:
+      MODEL_ID: ElKulako/cryptobert
+      MAX_LENGTH: "128"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    healthcheck:
+      test: [ "CMD", "curl", "-sf", "http://localhost:80/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── SPLADE Sparse Encoder (Channel 3) ────────────────────
+  # Serves a SPLADE-v3 model via HuggingFace text-embeddings-inference
+  # REST: POST /embed → sparse token weights for BM25-style expansion
+  splade:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: antigravity-splade
+    restart: "no"
+    ports:
+      - "8081:80"
+    environment:
+      MODEL_ID: naver/splade-v3
+      POOLING: splade
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      MAX_BATCH_TOKENS: 4096
+    volumes:
+      - splade_model_cache:/data
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    healthcheck:
+      test: [ "CMD", "curl", "-sf", "http://localhost:80/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Prometheus (Metrics scraper) ──────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: antigravity-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost:9090/-/healthy" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Grafana (Dashboards) ──────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: antigravity-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-antigravity_dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gravity.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost:3000/api/health" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  es_data:
+  neo4j_data:
+  kafka_data:
+  splade_model_cache:
+  prometheus_data:
+  grafana_data:

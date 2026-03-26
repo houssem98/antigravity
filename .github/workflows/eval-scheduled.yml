@@ -1,0 +1,44 @@
+name: Scheduled Evaluation
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC against staging
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "API URL to evaluate"
+        required: false
+        default: "http://localhost:8000"
+
+jobs:
+  daily-eval:
+    name: Daily evaluation suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Run evaluation
+        env:
+          GRAVITY_API_URL: ${{ inputs.api_url || vars.STAGING_API_URL || 'http://localhost:8000' }}
+        run: |
+          python eval/run_eval.py \
+            --api-url "$GRAVITY_API_URL" \
+            --output eval/results/scheduled_$(date +%Y%m%d).json
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-daily-$(date +%Y%m%d)
+          path: eval/results/
+          retention-days: 90

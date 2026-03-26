@@ -1,0 +1,88 @@
+{
+  "stocks": {
+    "NVDA": {
+      "symbol": "NVDA",
+      "price": 182.81,
+      "change": -2.21,
+      "positive": false,
+      "volume": 161647400,
+      "marketCap": 4450145009664.0,
+      "companyName": "NVIDIA Corporation"
+    },
+    "TSLA": {
+      "symbol": "TSLA",
+      "price": 417.44,
+      "change": 0.09,
+      "positive": true,
+      "volume": 51351200,
+      "marketCap": 1566415126528.0,
+      "companyName": "Tesla, Inc."
+    },
+    "AVGO": {
+      "symbol": "AVGO",
+      "price": 325.17,
+      "change": -1.81,
+      "positive": false,
+      "volume": 18379500,
+      "marketCap": 1541719982080.0,
+      "companyName": "Broadcom Inc."
+    },
+    "AMD": {
+      "symbol": "AMD",
+      "price": 207.32,
+      "change": 0.67,
+      "positive": true,
+      "volume": 26088600,
+      "marketCap": 338016796672.0,
+      "companyName": "Advanced Micro Devices, Inc."
+    },
+    "QCOM": {
+      "symbol": "QCOM",
+      "price": 140.7,
+      "change": 1.61,
+      "positive": true,
+      "volume": 13132800,
+      "marketCap": 150273949696.0,
+      "companyName": "QUALCOMM Incorporated"
+    }
+  },
+  "news": [
+    {
+      "title": "Walmart earnings, spending data, and more AI disruptions: What to watch this week",
+      "summary": "A holiday-shortened trading week and a continuing series of rolling AI sell-off greet investors in the week ahead.",
+      "source": "finance.yahoo.com",
+      "url": "https://finance.yahoo.com/news/walmart-earnings-spending-data-and-more-ai-disruptions-what-to-watch-this-week-125712762.html"
+    },
+    {
+      "title": "Is This 1 Huge Tailwind for Bitcoin Becoming a Headwind?",
+      "summary": "When the winds change, it's easy to get disoriented or rattled.",
+      "source": "www.fool.com",
+      "url": "https://www.fool.com/investing/2026/02/16/is-this-1-huge-tailwind-for-bitcoin-becoming-a-hea/"
+    },
+    {
+      "title": "If I Could Only Buy and Hold a Single Stock, This Would Be It.",
+      "summary": "This one stock provides exposure to many other stocks representing multiple sectors.",
+      "source": "www.fool.com",
+      "url": "https://www.fool.com/investing/2026/02/16/if-i-could-only-buy-and-hold-a-single-stock-this-w/"
+    },
+    {
+      "title": "Can Silver Reach $200 in 2026? The Answer Might Shock You.",
+      "summary": "History suggests 2026 could be a challenging year for silver investors.",
+      "source": "www.fool.com",
+      "url": "https://www.fool.com/investing/2026/02/16/can-silver-reach-200-in-2026-the-answer-shock-you/"
+    },
+    {
+      "title": "The AI Stock That Could Turn the Tables on the \"Magnificent Seven\"",
+      "summary": "This company is seeing revenue climb in the double digits.",
+      "source": "www.fool.com",
+      "url": "https://www.fool.com/investing/2026/02/16/the-ai-stock-that-could-turn-the-tables-on-the-mag/"
+    },
+    {
+      "title": "Should You Forget Palantir and Buy 2 Other Artificial Intelligence (AI) Stocks Right Now?",
+      "summary": "Like Palantir, these two AI stocks are growing rapidly. Unlike Palantir, they aren't priced for perfection.",
+      "source": "www.fool.com",
+      "url": "https://www.fool.com/investing/2026/02/16/should-you-forget-palantir-and-buy-2-other-artific/"
+    }
+  ],
+  "lastUpdated": "2026-02-16 19:21:34"
+}

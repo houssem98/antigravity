@@ -1,0 +1,31 @@
+{
+    "name": "antigravity",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Antigravity — Unified Market Intelligence & Gravity Search Platform",
+    "workspaces": [
+        "apps/*",
+        "services/*",
+        "packages/*"
+    ],
+    "scripts": {
+        "dev": "concurrently --names \"GRAVITY-API,MARKET-SRV,MARKET-UI\" --prefix-colors \"cyan.bold,yellow.bold,magenta.bold\" \"npm run gravity:api\" \"npm run market:server\" \"npm run market:ui\"",
+        "gravity:api": "cd services/gravity-api && .venv\\Scripts\\python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+        "market:server": "npm -w market-server run dev",
+        "market:ui": "npm -w market-ui run dev",
+        "build": "npm -w shared-types run build && npm -w market-ui run build && npm -w market-server run build",
+        "lint": "npm -ws run lint --if-present",
+        "typecheck": "npm -ws run typecheck --if-present",
+        "install:all": "npm install && cd services/gravity-api && pip install -r requirements.txt",
+        "clean": "rimraf apps/*/node_modules services/*/node_modules packages/*/node_modules node_modules services/gravity-api/.venv"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.0",
+        "rimraf": "^6.0.0"
+    },
+    "engines": {
+        "node": ">=20.0.0",
+        "npm": ">=10.0.0"
+    }
+}

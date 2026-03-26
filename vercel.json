@@ -1,0 +1,7 @@
+{
+  "installCommand": "npm install",
+  "buildCommand": "npm -w market-ui run build",
+  "outputDirectory": "apps/market-ui/dist",
+  "framework": null,
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

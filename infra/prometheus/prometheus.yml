@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: antigravity
+    env: dev
+
+scrape_configs:
+  - job_name: gravity-api
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+    metrics_path: /metrics
+
+  - job_name: qdrant
+    static_configs:
+      - targets: ["qdrant:6333"]
+    metrics_path: /metrics
+
+  - job_name: elasticsearch
+    static_configs:
+      - targets: ["elasticsearch:9200"]
+    metrics_path: /_prometheus/metrics
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis:6379"]
+    # requires redis_exporter sidecar in production
+
+  - job_name: splade
+    static_configs:
+      - targets: ["splade:80"]
+    metrics_path: /metrics
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

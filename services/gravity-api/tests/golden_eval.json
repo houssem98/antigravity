@@ -1,0 +1,82 @@
+[
+  {
+    "id": "eval_001",
+    "category": "simple_lookup",
+    "query": "What was Apple's revenue in Q4 2025?",
+    "expected_patterns": ["124", "billion", "AAPL", "Q4"],
+    "expected_intent": "simple_lookup",
+    "expected_complexity": "simple"
+  },
+  {
+    "id": "eval_002",
+    "category": "multi_doc_synthesis",
+    "query": "Compare FAANG operating margins over the last 4 quarters",
+    "expected_patterns": ["margin", "operating"],
+    "expected_intent": "multi_hop",
+    "expected_complexity": "complex"
+  },
+  {
+    "id": "eval_003",
+    "category": "temporal_reasoning",
+    "query": "How has Tesla's free cash flow trended over 4 quarters?",
+    "expected_patterns": ["cash flow", "trend"],
+    "expected_intent": "trend_analysis",
+    "expected_complexity": "medium"
+  },
+  {
+    "id": "eval_004",
+    "category": "calculation",
+    "query": "What is Microsoft's EV/EBITDA?",
+    "expected_patterns": ["EV", "EBITDA"],
+    "expected_intent": "calculation",
+    "expected_complexity": "math"
+  },
+  {
+    "id": "eval_005",
+    "category": "contradiction_detection",
+    "query": "Does TSMC's CFO guidance align with analyst expectations for Q4 2025?",
+    "expected_patterns": ["guidance", "expectations"],
+    "expected_intent": "contradiction_detection",
+    "expected_complexity": "complex"
+  },
+  {
+    "id": "eval_006",
+    "category": "entity_relationship",
+    "query": "Who are NVIDIA's top 5 customers?",
+    "expected_patterns": ["customer"],
+    "expected_intent": "entity_relationship",
+    "expected_complexity": "medium"
+  },
+  {
+    "id": "eval_007",
+    "category": "simple_lookup",
+    "query": "What is Amazon's current market capitalization?",
+    "expected_patterns": ["market cap", "AMZN"],
+    "expected_intent": "simple_lookup",
+    "expected_complexity": "simple"
+  },
+  {
+    "id": "eval_008",
+    "category": "multi_doc_synthesis",
+    "query": "Compare NVIDIA vs AMD data center revenue growth over last 4 quarters",
+    "expected_patterns": ["data center", "revenue", "growth"],
+    "expected_intent": "multi_hop",
+    "expected_complexity": "complex"
+  },
+  {
+    "id": "eval_009",
+    "category": "temporal_reasoning",
+    "query": "What has management at Meta said about AI spending in recent earnings calls?",
+    "expected_patterns": ["AI", "spending", "Meta"],
+    "expected_intent": "trend_analysis",
+    "expected_complexity": "medium"
+  },
+  {
+    "id": "eval_010",
+    "category": "calculation",
+    "query": "Calculate Alphabet's price-to-earnings ratio relative to the tech sector median",
+    "expected_patterns": ["P/E", "ratio", "Alphabet"],
+    "expected_intent": "calculation",
+    "expected_complexity": "math"
+  }
+]

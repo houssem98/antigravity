@@ -1,0 +1,807 @@
+{
+  "timestamp": "2026-03-05T01:32:27.363694",
+  "api_url": "http://localhost:8000",
+  "overall_accuracy": 0.0345,
+  "total_examples": 29,
+  "total_correct": 1,
+  "benchmarks": {
+    "financebench": {
+      "benchmark": "financebench",
+      "total": 10,
+      "correct": 0,
+      "accuracy": 0.0,
+      "by_category": {
+        "extraction": {
+          "total": 5,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "calculation": {
+          "total": 3,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "comparison": {
+          "total": 2,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "total": 3,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "medium": {
+          "total": 6,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "hard": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "details": [
+        {
+          "example_id": "fb_001",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0716,
+          "predicted": "<thinking>\n1. CLAIM: The user is asking for Apple's total net revenue for fiscal year 2024.\n2. SOURCES: The provided context contains the answer.\n3. NUMBERS: The net sales for the fiscal year ended September 28, 2024 were $391,035 million.\n4. CONTRADICTIONS: There are no contradictions.\n5. GAPS: There are no gaps.\n6. CONFIDENCE: HIGH, because the information comes directly from the user's provided context.\n</thinking>\n\n```json\n{\n  \"answer\": \"Apple's total net sales for the fiscal year ended September 28, 2024 were $391,035 million [Source 1].\",\n  \"citations\": [\n    {\n      \"id\": 1,\n      \"source\": \"Consolidated Statements of Operations\",\n      \"section\": \"Net sales for the fiscal year ended September 28, 2024\",\n      \"text\": \"Net sales for the fiscal year ended September 28, 2024 were $391,035 million.\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+          "expected": "$391.0 billion",
+          "metrics": {
+            "predicted_value": 28.0,
+            "expected_value": 391.0,
+            "deviation_pct": 92.84
+          },
+          "reason": "Numerical match: pred=28.0, exp=391.0"
+        },
+        {
+          "example_id": "fb_002",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "Approximately 56%",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fb_003",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "NVIDIA's gross margin improved from 56.9% in FY2023 to 72.7% in FY2024.",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fb_004",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0,
+          "predicted": "",
+          "expected": "Key risk factors include: competition, supply chain dependencies, regulatory risk, demand uncertainty, EV adoption rate, battery costs, and geopolitical risk from China operations.",
+          "metrics": {
+            "precision": 0,
+            "recall": 0.0,
+            "f1": 0
+          },
+          "reason": "F1=0.000 (P=0.000, R=0.000)"
+        },
+        {
+          "example_id": "fb_005",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "Approximately 12%",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fb_006",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.3239,
+          "predicted": "As of December 31, 2024, Alphabet's cash, cash equivalents, and short-term marketable securities totaled $95,659 million [Source 1].",
+          "expected": "$95.7 billion",
+          "metrics": {
+            "predicted_value": 31.0,
+            "expected_value": 95.7,
+            "deviation_pct": 67.61
+          },
+          "reason": "Numerical match: pred=31.0, exp=95.7"
+        },
+        {
+          "example_id": "fb_007",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "Approximately 48%",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fb_008",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "Net interest income was approximately $92.6 billion vs non-interest income of $67.9 billion. NII represents about 58% of total net revenue.",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fb_009",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "I am sorry, but I cannot answer the user's question because the provided source passages do not contain any information about Apple's stock buybacks in fiscal year 2024.\n",
+          "expected": "$94.9 billion",
+          "metrics": {
+            "predicted_value": 2024.0,
+            "expected_value": 94.9,
+            "deviation_pct": 2032.77
+          },
+          "reason": "Numerical match: pred=2024.0, exp=94.9"
+        },
+        {
+          "example_id": "fb_010",
+          "benchmark": "financebench",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "Between $38 billion and $42 billion",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        }
+      ]
+    },
+    "finqa": {
+      "benchmark": "finqa",
+      "total": 8,
+      "correct": 0,
+      "accuracy": 0.0,
+      "by_category": {
+        "percentage_change": {
+          "total": 2,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "margin_calculation": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "ratio_calculation": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "per_share": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "growth_calculation": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "calculation": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "return_metric": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "total": 3,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "medium": {
+          "total": 4,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "hard": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "details": [
+        {
+          "example_id": "fq_001",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "12.0",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_002",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "47.2",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_003",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "1.45",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_004",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "6.42",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_005",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "9.8",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_006",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "I am unable to answer the question. The provided source passages do not contain the information needed to calculate free cash flow. Free cash flow is typically calculated as operating cash flow less capital expenditures. The provided table includes operating cash flow and capital expenditures, but it does not specify if there are other cash flows that should be considered in the calculation.\n",
+          "expected": "73,005",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_007",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "86.0",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "fq_008",
+          "benchmark": "finqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "157.5",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        }
+      ]
+    },
+    "tatqa": {
+      "benchmark": "tatqa",
+      "total": 6,
+      "correct": 1,
+      "accuracy": 0.1667,
+      "by_category": {
+        "span_extraction": {
+          "total": 1,
+          "correct": 1,
+          "accuracy": 1.0
+        },
+        "arithmetic": {
+          "total": 3,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "comparison": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "boolean": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "total": 2,
+          "correct": 1,
+          "accuracy": 0.5
+        },
+        "medium": {
+          "total": 4,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "details": [
+        {
+          "example_id": "tq_001",
+          "benchmark": "tatqa",
+          "correct": true,
+          "score": 1.0,
+          "predicted": "```json\n{\n  \"answer\": \"The total net sales, which represents total revenue, for the three months ended March 31, 2024, was $143,313 [Source 1].\",\n  \"citations\": [\n    {\n      \"id\": 1,\n      \"source\": \"User Question\",\n      \"section\": \"N/A\",\n      \"text\": \"Total net sales | $143,313 | $122,819\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+          "expected": "$143,313",
+          "metrics": {
+            "predicted_value": 143313.0,
+            "expected_value": 143313.0,
+            "deviation_pct": 0.0
+          },
+          "reason": "Numerical match: pred=143313.0, exp=143313.0"
+        },
+        {
+          "example_id": "tq_002",
+          "benchmark": "tatqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "$11,951",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "tq_003",
+          "benchmark": "tatqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "41.6%",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        },
+        {
+          "example_id": "tq_004",
+          "benchmark": "tatqa",
+          "correct": false,
+          "score": 0.0339,
+          "predicted": "<thinking>\n1. CLAIM: The user wants to know which segment had the highest operating income in FY2024.\n2. SOURCES: The table provided contains the operating income for each segment in FY2024.\n3. NUMBERS: North America: $34,587; International: $6,291; AWS: $39,831.\n4. CONTRADICTIONS: None.\n5. GAPS: None.\n6. CONFIDENCE: HIGH, since the data is directly provided in a table.\n</thinking>\n\n```json\n{\n  \"answer\": \"In FY2024, AWS had the highest operating income at $39,831 [Source Table]. North America had an operating income of $34,587 [Source Table], and International had an operating income of $6,291 [Source Table].\",\n  \"citations\": [\n    {\n      \"id\": \"Table\",\n      \"source\": \"User Query\",\n      \"section\": \"N/A\",\n      \"text\": \"Segment | Operating Income FY2024\\nNorth America | $34,587\\nInternational | $6,291\\nAWS | $39,831\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+          "expected": "AWS (Amazon Web Services)",
+          "metrics": {
+            "precision": 0.018,
+            "recall": 0.25,
+            "f1": 0.034
+          },
+          "reason": "F1=0.034 (P=0.018, R=0.250)"
+        },
+        {
+          "example_id": "tq_005",
+          "benchmark": "tatqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "True",
+          "metrics": {},
+          "reason": "Boolean: pred=None, exp=True"
+        },
+        {
+          "example_id": "tq_006",
+          "benchmark": "tatqa",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "$16,967",
+          "metrics": {},
+          "reason": "No number found in predicted answer"
+        }
+      ]
+    },
+    "fpb": {
+      "benchmark": "fpb",
+      "total": 5,
+      "correct": 0,
+      "accuracy": 0.0,
+      "by_category": {
+        "sentiment": {
+          "total": 5,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "total": 3,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "medium": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        },
+        "hard": {
+          "total": 1,
+          "correct": 0,
+          "accuracy": 0.0
+        }
+      },
+      "details": [
+        {
+          "example_id": "fp_001",
+          "benchmark": "fpb",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "positive",
+          "metrics": {
+            "predicted_label": null,
+            "expected_label": "positive"
+          },
+          "reason": "Sentiment: pred=None, exp=positive"
+        },
+        {
+          "example_id": "fp_002",
+          "benchmark": "fpb",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "negative",
+          "metrics": {
+            "predicted_label": null,
+            "expected_label": "negative"
+          },
+          "reason": "Sentiment: pred=None, exp=negative"
+        },
+        {
+          "example_id": "fp_003",
+          "benchmark": "fpb",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "I am sorry, but I cannot classify the sentiment of the statement 'Revenue was in line with analyst expectations at $45.2 billion for the quarter' because I was not provided with any source passages.",
+          "expected": "neutral",
+          "metrics": {
+            "predicted_label": null,
+            "expected_label": "neutral"
+          },
+          "reason": "Sentiment: pred=None, exp=neutral"
+        },
+        {
+          "example_id": "fp_004",
+          "benchmark": "fpb",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "negative",
+          "metrics": {
+            "predicted_label": null,
+            "expected_label": "negative"
+          },
+          "reason": "Sentiment: pred=None, exp=negative"
+        },
+        {
+          "example_id": "fp_005",
+          "benchmark": "fpb",
+          "correct": false,
+          "score": 0.0,
+          "predicted": "",
+          "expected": "positive",
+          "metrics": {
+            "predicted_label": null,
+            "expected_label": "positive"
+          },
+          "reason": "Sentiment: pred=None, exp=positive"
+        }
+      ]
+    }
+  },
+  "raw_results": [
+    {
+      "example_id": "fb_001",
+      "benchmark": "financebench",
+      "query": "Context: Consolidated Statements of Operations: Net sales for the fiscal year ended September 28, 2024 were $391,035 million.\n\nQuestion: What was Apple's total net revenue for fiscal year 2024?",
+      "predicted_answer": "<thinking>\n1. CLAIM: The user is asking for Apple's total net revenue for fiscal year 2024.\n2. SOURCES: The provided context contains the answer.\n3. NUMBERS: The net sales for the fiscal year ended September 28, 2024 were $391,035 million.\n4. CONTRADICTIONS: There are no contradictions.\n5. GAPS: There are no gaps.\n6. CONFIDENCE: HIGH, because the information comes directly from the user's provided context.\n</thinking>\n\n```json\n{\n  \"answer\": \"Apple's total net sales for the fiscal year ended September 28, 2024 were $391,035 million [Source 1].\",\n  \"citations\": [\n    {\n      \"id\": 1,\n      \"source\": \"Consolidated Statements of Operations\",\n      \"section\": \"Net sales for the fiscal year ended September 28, 2024\",\n      \"text\": \"Net sales for the fiscal year ended September 28, 2024 were $391,035 million.\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+      "latency_ms": 72860.0,
+      "error": null,
+      "raw_response": {
+        "confidence": "HIGH",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "fb_002",
+      "benchmark": "financebench",
+      "query": "Context: Intelligent Cloud segment revenue was $96.8 billion. Total revenue was $245.1 billion.\n\nQuestion: What percentage of Microsoft's revenue came from cloud services in FY2024?",
+      "predicted_answer": "",
+      "latency_ms": 13752.9,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_003",
+      "benchmark": "financebench",
+      "query": "Did NVIDIA's gross margin improve or decline between FY2023 and FY2024?",
+      "predicted_answer": "",
+      "latency_ms": 197.3,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_004",
+      "benchmark": "financebench",
+      "query": "What are the main risk factors disclosed in Tesla's most recent 10-K?",
+      "predicted_answer": "",
+      "latency_ms": 14787.5,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_005",
+      "benchmark": "financebench",
+      "query": "Context: Net sales were $638.0 billion in 2024 and $574.8 billion in 2023.\n\nQuestion: What was the year-over-year revenue growth rate for Amazon in fiscal year 2024?",
+      "predicted_answer": "",
+      "latency_ms": 6.3,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_006",
+      "benchmark": "financebench",
+      "query": "Context: Cash, cash equivalents, and short-term marketable securities totaled $95,659 million as of December 31, 2024.\n\nQuestion: What is Alphabet's total cash and short-term investments as of Q4 2024?",
+      "predicted_answer": "As of December 31, 2024, Alphabet's cash, cash equivalents, and short-term marketable securities totaled $95,659 million [Source 1].",
+      "latency_ms": 17425.1,
+      "error": null,
+      "raw_response": {
+        "confidence": "HIGH",
+        "sources_count": 0,
+        "citations_count": 1
+      }
+    },
+    {
+      "example_id": "fb_007",
+      "benchmark": "financebench",
+      "query": "Context: Q4 2024: Revenue $48.4B, Income from operations $23.4B.\n\nQuestion: What was Meta's operating margin in Q4 2024?",
+      "predicted_answer": "",
+      "latency_ms": 12551.2,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_008",
+      "benchmark": "financebench",
+      "query": "How does JPMorgan's net interest income compare to its non-interest income in FY2024?",
+      "predicted_answer": "",
+      "latency_ms": 6.9,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fb_009",
+      "benchmark": "financebench",
+      "query": "What was the total amount of stock buybacks executed by Apple in fiscal year 2024?",
+      "predicted_answer": "I am sorry, but I cannot answer the user's question because the provided source passages do not contain any information about Apple's stock buybacks in fiscal year 2024.\n",
+      "latency_ms": 17246.5,
+      "error": null,
+      "raw_response": {
+        "confidence": "MEDIUM",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "fb_010",
+      "benchmark": "financebench",
+      "query": "What is TSMC's capital expenditure guidance for 2025?",
+      "predicted_answer": "",
+      "latency_ms": 12182.3,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_001",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| | 2024 | 2023 |\n|---|---|---|\n| Net Sales | $638,013 | $574,785 |\n| Operating Income | $68,594 | $36,852 |\n\nWhat is the percentage change in total revenue from 2023 to 2024?",
+      "predicted_answer": "",
+      "latency_ms": 3.5,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_002",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| | 2024 | 2023 |\n|---|---|---|\n| Revenue | $245,122 | $211,915 |\n| Cost of Revenue | $129,536 | $112,440 |\n| Gross Profit | $115,586 | $99,475 |\n\nWhat was the gross margin in 2024?",
+      "predicted_answer": "",
+      "latency_ms": 11394.0,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_003",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| Balance Sheet | Amount |\n|---|---|\n| Total Debt | $108,040 |\n| Stockholders' Equity | $74,100 |\n\nWhat is the debt-to-equity ratio?",
+      "predicted_answer": "",
+      "latency_ms": 6.7,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_004",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| | 2024 |\n|---|---|\n| Net Income | $101,956M |\n| Diluted Shares | 15,882M |\n\nWhat is the diluted EPS for 2024?",
+      "predicted_answer": "",
+      "latency_ms": 11790.8,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_005",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| Year | Revenue (M) |\n|---|---|\n| 2021 | $168,088 |\n| 2022 | $198,270 |\n| 2023 | $211,915 |\n| 2024 | $245,122 |\n\nWhat is the 3-year CAGR of revenue from 2021 to 2024?",
+      "predicted_answer": "",
+      "latency_ms": 5.9,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_006",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| Cash Flow Statement | 2024 |\n|---|---|\n| Operating Cash Flow | $118,254M |\n| Capital Expenditures | ($10,959M) |\n| Acquisitions | ($2,117M) |\n\nWhat is the free cash flow for 2024?",
+      "predicted_answer": "I am unable to answer the question. The provided source passages do not contain the information needed to calculate free cash flow. Free cash flow is typically calculated as operating cash flow less capital expenditures. The provided table includes operating cash flow and capital expenditures, but it does not specify if there are other cash flows that should be considered in the calculation.\n",
+      "latency_ms": 14094.0,
+      "error": null,
+      "raw_response": {
+        "confidence": "MEDIUM",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "fq_007",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| | 2024 | 2023 |\n|---|---|---|\n| Operating Income | $68,594 | $36,852 |\n\nHow much did operating income grow year-over-year?",
+      "predicted_answer": "",
+      "latency_ms": 13560.0,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fq_008",
+      "benchmark": "finqa",
+      "query": "Given the following financial data:\n| | Amount |\n|---|---|\n| Net Income | $101,956M |\n| Average Equity (FY24) | $64,750M |\n\nWhat is the return on equity?",
+      "predicted_answer": "",
+      "latency_ms": 11.6,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "tq_001",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| | Three Months Ended March 31 |\n| | 2024 | 2023 |\n|---|---|---|\n| Net product sales | $59,641 | $51,098 |\n| Net service sales | $83,672 | $71,721 |\n| Total net sales | $143,313 | $122,819 |\n\nWhat was the total revenue for the three months ended March 31, 2024?",
+      "predicted_answer": "```json\n{\n  \"answer\": \"The total net sales, which represents total revenue, for the three months ended March 31, 2024, was $143,313 [Source 1].\",\n  \"citations\": [\n    {\n      \"id\": 1,\n      \"source\": \"User Question\",\n      \"section\": \"N/A\",\n      \"text\": \"Total net sales | $143,313 | $122,819\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+      "latency_ms": 17420.8,
+      "error": null,
+      "raw_response": {
+        "confidence": "HIGH",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "tq_002",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| | Q1 2024 | Q1 2023 |\n|---|---|---|\n| Net product sales | $59,641 | $51,098 |\n| Net service sales | $83,672 | $71,721 |\n\nHow much did service revenue increase in dollars from Q1 2023 to Q1 2024?",
+      "predicted_answer": "",
+      "latency_ms": 12411.7,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "tq_003",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| | Q1 2024 |\n|---|---|\n| Net product sales | $59,641 |\n| Total net sales | $143,313 |\n\nWhat portion of total revenue came from product sales in Q1 2024?",
+      "predicted_answer": "",
+      "latency_ms": 7.8,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "tq_004",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| Segment | Operating Income FY2024 |\n|---|---|\n| North America | $34,587 |\n| International | $6,291 |\n| AWS | $39,831 |\n\nWhich segment had the highest operating income in FY2024?",
+      "predicted_answer": "<thinking>\n1. CLAIM: The user wants to know which segment had the highest operating income in FY2024.\n2. SOURCES: The table provided contains the operating income for each segment in FY2024.\n3. NUMBERS: North America: $34,587; International: $6,291; AWS: $39,831.\n4. CONTRADICTIONS: None.\n5. GAPS: None.\n6. CONFIDENCE: HIGH, since the data is directly provided in a table.\n</thinking>\n\n```json\n{\n  \"answer\": \"In FY2024, AWS had the highest operating income at $39,831 [Source Table]. North America had an operating income of $34,587 [Source Table], and International had an operating income of $6,291 [Source Table].\",\n  \"citations\": [\n    {\n      \"id\": \"Table\",\n      \"source\": \"User Query\",\n      \"section\": \"N/A\",\n      \"text\": \"Segment | Operating Income FY2024\\nNorth America | $34,587\\nInternational | $6,291\\nAWS | $39,831\"\n    }\n  ],\n  \"contradictions\": [],\n  \"confidence\": \"HIGH\",\n  \"caveats\": [],\n  \"follow_up_queries\": []\n}\n```",
+      "latency_ms": 17547.9,
+      "error": null,
+      "raw_response": {
+        "confidence": "HIGH",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "tq_005",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| | FY2024 | FY2023 |\n|---|---|---|\n| R&D Expenses | $31,370 | $29,915 |\n\nIs the statement 'Apple's R&D expenses exceeded $30 billion in FY2024' true or false?",
+      "predicted_answer": "",
+      "latency_ms": 11534.7,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "tq_006",
+      "benchmark": "tatqa",
+      "query": "Given the following financial data:\n| Operating Expenses | FY2024 | FY2023 |\n|---|---|---|\n| Research and Development | $10,680 | $7,339 |\n| Sales, G&A | $3,014 | $2,440 |\n| Acquisition termination cost | \u2014 | \u2014 |\n| Total Operating Expenses | $16,967 | $11,911 |\n\nWhat is the sum of all operating expenses for NVIDIA in FY2024?",
+      "predicted_answer": "",
+      "latency_ms": 6.2,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fp_001",
+      "benchmark": "fpb",
+      "query": "Classify the sentiment: 'Apple reported record quarterly revenue of $124.3 billion, up 4% year over year.'",
+      "predicted_answer": "",
+      "latency_ms": 12834.2,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fp_002",
+      "benchmark": "fpb",
+      "query": "Classify the sentiment: 'The company announced layoffs affecting approximately 10% of its workforce.'",
+      "predicted_answer": "",
+      "latency_ms": 6.9,
+      "error": "",
+      "raw_response": null
+    },
+    {
+      "example_id": "fp_003",
+      "benchmark": "fpb",
+      "query": "Classify the sentiment: 'Revenue was in line with analyst expectations at $45.2 billion for the quarter.'",
+      "predicted_answer": "I am sorry, but I cannot classify the sentiment of the statement 'Revenue was in line with analyst expectations at $45.2 billion for the quarter' because I was not provided with any source passages.",
+      "latency_ms": 15972.8,
+      "error": null,
+      "raw_response": {
+        "confidence": "LOW",
+        "sources_count": 0,
+        "citations_count": 0
+      }
+    },
+    {
+      "example_id": "fp_004",
+      "benchmark": "fpb",
+      "query": "Classify the sentiment: 'Despite strong revenue growth, management warned of margin pressure from increased competition.'",
+      "predicted_answer": "",
+      "latency_ms": 11503.4,
+      "error": "HTTP 500",
+      "raw_response": null
+    },
+    {
+      "example_id": "fp_005",
+      "benchmark": "fpb",
+      "query": "Classify the sentiment: 'NVIDIA's data center revenue surged 217% year-over-year, significantly exceeding expectations.'",
+      "predicted_answer": "",
+      "latency_ms": 6.2,
+      "error": "",
+      "raw_response": null
+    }
+  ]
+}

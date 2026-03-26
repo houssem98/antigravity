@@ -1,0 +1,312 @@
+"""Gravity Search — Document Routes
+POST /v1/documents/ingest  — upload and index a document
+GET  /v1/documents/{id}    — fetch document metadata
+GET  /v1/documents         — list documents with pagination
+"""
+
+import structlog
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Response
+from typing import Any
+
+from app.api.middleware.auth import require_auth
+from app.api.middleware.rate_limit import check_rate_limit
+
+logger = structlog.get_logger()
+router = APIRouter()
+
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "text/html",
+}
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+async def get_db():
+    from app.db.postgres import async_session
+    async with async_session() as session:
+        yield session
+
+
+def get_ingestion_pipeline():
+    """Lazy-init the ingestion pipeline (cached after first call)."""
+    from app.ingestion.pipeline import IngestionPipeline
+    return IngestionPipeline.create()
+
+
+@router.post("/documents/ingest")
+async def ingest_document(
+    response: Response,
+    file: UploadFile = File(...),
+    ticker: str = Form(default=""),
+    company_name: str = Form(default=""),
+    auth: dict = Depends(require_auth)
+):
+    """
+    Upload and ingest a document (PDF, DOCX, TXT, HTML).
+
+    Multipart form fields:
+      - file: the document file
+      - ticker: optional stock ticker (e.g. AAPL)
+      - company_name: optional company name override
+
+    Returns:
+      {
+        "document_id": str,
+        "chunk_count": int,
+        "ticker": str,
+        "filing_type": str,
+        "sections_found": int,
+        "entities_found": dict,
+        "indexing": dict
+      }
+    """
+    # Rate limit check
+    headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+    for k, v in headers.items():
+        response.headers[k] = v
+
+    # Validate content type
+    content_type = file.content_type or "text/plain"
+    base_type = content_type.split(";")[0].strip()
+    if base_type not in ALLOWED_CONTENT_TYPES:
+        # Allow text/* and application/pdf broadly
+        if not (base_type.startswith("text/") or base_type == "application/pdf"):
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file type: {content_type}. "
+                       f"Supported: PDF, DOCX, TXT, HTML",
+            )
+
+    # Read and size-check the file
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content) / 1024 / 1024:.1f} MB). Max: 50 MB",
+        )
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Reset stream position after reading
+    await file.seek(0)
+
+    logger.info(
+        "document_ingest_request",
+        filename=file.filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        ticker=ticker,
+    )
+
+    pipeline = get_ingestion_pipeline()
+    result = await pipeline.ingest_bytes(
+        content=content,
+        content_type=base_type,
+        filename=file.filename or "upload.bin",
+        ticker=ticker,
+        company_name=company_name,
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    return result
+
+
+@router.post("/transcripts/ingest")
+async def ingest_earnings_transcript(
+    response: Response,
+    ticker: str = Query(..., description="Stock ticker, e.g. AAPL"),
+    company_name: str = Query(default="", description="Full company name (optional)"),
+    quarter: str = Query(default="", description="Quarter string e.g. 'Q3 2024'"),
+    auth: dict = Depends(require_auth),
+):
+    """
+    Fetch and ingest an earnings call transcript for a company.
+
+    Sources tried in order:
+      1. Alpha Vantage EARNINGS_CALL_TRANSCRIPT (if ALPHA_VANTAGE_API_KEY is set)
+      2. Motley Fool public transcripts (HTML scrape, no key required)
+
+    Returns same schema as /v1/documents/ingest.
+    """
+    headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+    for k, v in headers.items():
+        response.headers[k] = v
+
+    from app.config import settings
+    from app.ingestion.sources.earnings import EarningsTranscriptSource
+
+    source = EarningsTranscriptSource(
+        alpha_vantage_key=getattr(settings, "alpha_vantage_api_key", "") or "",
+    )
+
+    logger.info("transcript_ingest_request", ticker=ticker, quarter=quarter)
+
+    transcript = await source.fetch_transcript(
+        ticker=ticker.upper(),
+        company_name=company_name or ticker.upper(),
+        quarter=quarter,
+    )
+
+    if not transcript.get("full_text"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No transcript found for {ticker.upper()} {quarter or '(latest)'}. "
+                   "Try providing a quarter like 'Q3 2024'.",
+        )
+
+    # Build a well-structured document from the transcript
+    period = transcript.get("quarter") or quarter or "Recent"
+    date_str = transcript.get("date", "")
+    speaker_count = len(transcript.get("speakers", []))
+
+    # Prepend metadata header so the chunker extracts it correctly
+    doc_text = (
+        f"[Ticker: {ticker.upper()}] [Filing: earnings_transcript] "
+        f"[Period: {period}] [Date: {date_str}]\n\n"
+        f"{transcript['company_name']} Earnings Call — {period}\n\n"
+        f"PREPARED REMARKS:\n{transcript['sections'].get('prepared_remarks', '')}\n\n"
+        f"Q&A SESSION:\n{transcript['sections'].get('qa_session', '')}"
+    )
+
+    pipeline = get_ingestion_pipeline()
+    result = await pipeline.ingest_bytes(
+        content=doc_text.encode("utf-8"),
+        content_type="text/plain",
+        filename=f"{ticker.upper()}_{period.replace(' ', '_')}_earnings_transcript.txt",
+        ticker=ticker.upper(),
+        company_name=transcript["company_name"],
+        filing_type="earnings_transcript",
+        filing_date=date_str,
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    return {
+        **result,
+        "transcript_meta": {
+            "ticker": ticker.upper(),
+            "company_name": transcript["company_name"],
+            "quarter": period,
+            "date": date_str,
+            "speaker_turns": speaker_count,
+            "has_qa": bool(transcript["sections"].get("qa_session")),
+        },
+    }
+
+
+@router.get("/documents/{document_id}")
+async def get_document(
+    document_id: str,
+    response: Response,
+    db: Any = Depends(get_db),
+    auth: dict = Depends(require_auth)
+):
+    """
+    Retrieve metadata for a specific document by ID.
+
+    Returns document metadata including ticker, filing type, chunk count, status.
+    """
+    try:
+        # Rate limit check
+        headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+        for k, v in headers.items():
+            response.headers[k] = v
+
+        from app.db.models import Document
+        from sqlalchemy import select
+        result = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        doc = result.scalar_one_or_none()
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
+
+        return {
+            "id": doc.id,
+            "ticker": doc.ticker,
+            "company_name": doc.company_name,
+            "filing_type": doc.filing_type,
+            "filing_date": str(doc.filing_date) if doc.filing_date else None,
+            "title": doc.title,
+            "source_url": doc.source_url,
+            "page_count": doc.page_count,
+            "chunk_count": doc.chunk_count,
+            "status": doc.status,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("get_document_failed", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+
+@router.get("/documents")
+async def list_documents(
+    response: Response,
+    ticker: str = Query(default=""),
+    filing_type: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Any = Depends(get_db),
+    auth: dict = Depends(require_auth)
+):
+    """
+    List ingested documents with optional filtering and pagination.
+
+    Query params:
+      - ticker: filter by stock ticker
+      - filing_type: filter by type (10-K, 10-Q, 8-K, earnings)
+      - limit: page size (1-100, default 20)
+      - offset: pagination offset
+    """
+    try:
+        # Rate limit check
+        headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+        for k, v in headers.items():
+            response.headers[k] = v
+
+        from app.db.models import Document
+        from sqlalchemy import and_, select
+
+        filters = []
+        if ticker:
+            filters.append(Document.ticker == ticker.upper())
+        if filing_type:
+            filters.append(Document.filing_type == filing_type.upper())
+
+        query = select(Document).order_by(Document.created_at.desc())
+        if filters:
+            query = query.where(and_(*filters))
+        query = query.limit(limit).offset(offset)
+
+        result = await db.execute(query)
+        docs = result.scalars().all()
+
+        return {
+            "documents": [
+                {
+                    "id": doc.id,
+                    "ticker": doc.ticker,
+                    "company_name": doc.company_name,
+                    "filing_type": doc.filing_type,
+                    "filing_date": str(doc.filing_date) if doc.filing_date else None,
+                    "title": doc.title,
+                    "chunk_count": doc.chunk_count,
+                    "status": doc.status,
+                    "created_at": doc.created_at.isoformat() if doc.created_at else None,
+                }
+                for doc in docs
+            ],
+            "total": len(docs),
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.warning("list_documents_failed", error=str(e))
+        raise HTTPException(status_code=503, detail="Database unavailable")

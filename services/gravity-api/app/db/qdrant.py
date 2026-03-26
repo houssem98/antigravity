@@ -1,0 +1,165 @@
+"""
+Gravity Search — Qdrant Vector Database Client
+Real AsyncQdrantClient with graceful fallback for development.
+"""
+
+import structlog
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models
+
+from app.config import settings
+
+logger = structlog.get_logger()
+
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+
+
+# ── Mock Fallbacks ──────────────────────────────────────────────────────────
+
+class _MockQdrantResult:
+    """Mock for search/upsert results."""
+    def __init__(self, items=None):
+        self.items = items or []
+    def __iter__(self):
+        return iter(self.items)
+    def __len__(self):
+        return len(self.items)
+
+
+class _MockQdrantClient:
+    """Mimics AsyncQdrantClient when Qdrant is down."""
+    async def query_points(self, *args, **kwargs):
+        return _MockQdrantResult()
+        
+    async def upsert(self, *args, **kwargs):
+        return _MockQdrantResult()
+        
+    async def get_collections(self, *args, **kwargs):
+        return models.CollectionsResponse(collections=[])
+        
+    async def get_collection(self, *args, **kwargs):
+        raise ValueError("Mock collection not found")
+
+    async def collection_exists(self, *args, **kwargs):
+        return False
+        
+    async def create_collection(self, *args, **kwargs):
+        return True
+        
+    async def create_payload_index(self, *args, **kwargs):
+        return True
+
+
+# ── Lazy Client ─────────────────────────────────────────────────────────────
+
+class QdrantLazyClient:
+    """
+    Lazy wrapper for AsyncQdrantClient.
+    Connects on first use. Falls back to mock if Qdrant isn't running.
+    """
+    def __init__(self):
+        self._client: AsyncQdrantClient | _MockQdrantClient | None = None
+        self._is_mock = False
+        
+    async def _connect(self):
+        if self._client is not None:
+            return
+
+        try:
+            client = AsyncQdrantClient(url=settings.qdrant_url, timeout=5)
+            # Use get_collections to test the connection eagerly
+            await client.get_collections()
+            self._client = client
+            self._is_mock = False
+            logger.info("qdrant_connected", url=settings.qdrant_url)
+        except Exception as e:
+            logger.warning("qdrant_unavailable_using_mock", url=settings.qdrant_url, error=str(e))
+            self._client = _MockQdrantClient()
+            self._is_mock = True
+
+    @property
+    async def client(self):
+        if self._client is None:
+            await self._connect()
+        return self._client
+
+    @property
+    def is_connected(self) -> bool:
+        """True if using real connection."""
+        return not self._is_mock
+
+    # ── Forwarded Methods ───────────────────────────────────────────────────
+
+    async def query_points(self, *args, **kwargs):
+        client = await self.client
+        return await client.query_points(*args, **kwargs)
+
+    async def upsert(self, *args, **kwargs):
+        client = await self.client
+        return await client.upsert(*args, **kwargs)
+
+    async def get_collections(self, *args, **kwargs):
+        client = await self.client
+        return await client.get_collections(*args, **kwargs)
+
+    async def collection_exists(self, collection_name: str, **kwargs):
+        client = await self.client
+        return await client.collection_exists(collection_name)
+        
+    async def create_collection(self, *args, **kwargs):
+        client = await self.client
+        return await client.create_collection(*args, **kwargs)
+
+    async def create_payload_index(self, *args, **kwargs):
+        client = await self.client
+        return await client.create_payload_index(*args, **kwargs)
+
+
+# Module singleton
+qdrant_client = QdrantLazyClient()
+
+
+async def ensure_collection():
+    """Create the Qdrant collection if it doesn't exist."""
+    collection_name = settings.qdrant_collection
+    
+    # Check if we're actually connected or just mocking
+    client = await qdrant_client.client
+    if qdrant_client.is_connected is False:
+        logger.info("qdrant_collection_skip", reason="using mock client")
+        return
+
+    exists = await qdrant_client.collection_exists(collection_name=collection_name)
+    if exists:
+        logger.debug("qdrant_collection_exists", collection=collection_name)
+        return
+
+    try:
+        # Create collection with named vectors for Hybrid Search
+        await qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config={
+                DENSE_VECTOR_NAME: models.VectorParams(
+                    size=settings.embedding_dimensions,  # default 1024
+                    distance=models.Distance.COSINE,
+                ),
+            },
+            sparse_vectors_config={
+                SPARSE_VECTOR_NAME: models.SparseVectorParams(
+                    modifier=models.Modifier.IDF,
+                ),
+            },
+        )
+        
+        # Create payload indexes for fast filtering
+        for field in ["ticker", "company_name", "filing_type", "document_id"]:
+            await qdrant_client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field,
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+            
+        logger.info("qdrant_collection_created", collection=collection_name)
+    except Exception as e:
+        logger.error("qdrant_collection_creation_failed", error=str(e))

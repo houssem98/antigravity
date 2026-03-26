@@ -1,0 +1,45 @@
+# ── Dependencies ─────────────────────
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Build artifacts ──────────────────
+dist/
+build/
+.next/
+out/
+*.egg-info/
+
+# ── Environment ──────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── IDE ──────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Docker ───────────────────────────
+docker-compose.override.yml
+
+# ── Logs ─────────────────────────────
+*.log
+logs/
+
+# ── Coverage ─────────────────────────
+coverage/
+htmlcov/
+.coverage
+.pytest_cache/
+.nyc_output/
+.vercel

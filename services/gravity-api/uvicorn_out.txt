@@ -1,0 +1,107 @@
+2026-03-23 06:47:26 [info     ] Starting Gravity Search        env=development version=0.1.0
+2026-03-23 06:47:26 [info     ] postgres_mock_active           msg='SQLAlchemy async skipped on Windows due to deadlock'
+2026-03-23 06:47:30 [info     ] qdrant_connected               url=http://localhost:6333
+2026-03-23 06:47:30 [info     ] Connection checks              elasticsearch='unavailable: TimeoutError' qdrant=ok redis='unavailable: TimeoutError'
+2026-03-23 06:47:30 [warning  ] using_local_embedder           reason='no VOYAGE_API_KEY'
+2026-03-23 06:47:30 [info     ] initializing_search_pipeline
+2026-03-23 06:47:30 [info     ] llm_router_init                available_models=['gemini_flash', 'gemini_pro']
+2026-03-23 06:47:34 [info     ] retrieval_orchestrator_init    channels=['dense', 'bm25', 'splade', 'graph', 'structured']
+2026-03-23 06:47:34 [warning  ] no_reranker                    reason='no COHERE_API_KEY'
+2026-03-23 06:47:34 [warning  ] feedback_loop_unavailable      error="cannot import name 'get_db_pool' from 'app.db.postgres' (D:\\Ai\\antiravity -zitoun ai\\gravity-search-starter\\antigravity\\services\\gravity-api\\app\\db\\postgres.py)"
+2026-03-23 06:47:34 [warning  ] ratio_engine_unavailable       error="cannot import name 'get_db_pool' from 'app.db.postgres' (D:\\Ai\\antiravity -zitoun ai\\gravity-search-starter\\antigravity\\services\\gravity-api\\app\\db\\postgres.py)"
+2026-03-23 06:47:34 [info     ] search_pipeline_ready
+2026-03-23 06:47:34 [warning  ] pipeline_warmup_failed         error="'LocalEmbedder' object has no attribute 'embed'"
+2026-03-23 06:47:35 [warning  ] neo4j_unavailable_using_mock   error='{neo4j_code: Neo.ClientError.Security.Unauthorized} {message: The client is unauthorized due to authentication failure.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Unexpected error has occurred. See debug log for details.}' uri=bolt://localhost:7687
+2026-03-23 06:47:35 [info     ] request                        latency_ms=885.2 method=GET path=/ready status=200 trace_id=e7bee3a3-480b-456e-851c-5242aa448816
+2026-03-23 06:47:46 [info     ] request                        latency_ms=2.3 method=GET path=/metrics status=200 trace_id=00421220-d736-4960-9811-fad4807adbb7
+2026-03-23 06:48:02 [info     ] request                        latency_ms=0.9 method=GET path=/metrics status=200 trace_id=daacbb07-ba4a-4e56-9061-62afc2ed66c6
+2026-03-23 06:48:28 [info     ] request                        latency_ms=5.8 method=GET path=/metrics status=200 trace_id=b1d0a965-6634-4a40-a674-72887780649d
+2026-03-23 06:48:31 [info     ] google_generate                input_tokens=345 latency_ms=2663.8 model=gemini-2.0-flash output_tokens=311
+2026-03-23 06:48:31 [info     ] query_analyzed                 channels=['dense', 'bm25', 'structured'] complexity=simple entity_count=3 intent=simple_lookup
+2026-03-23 06:48:31 [info     ] query_understood               complexity=simple entities={'companies': [{'name': 'Apple', 'ticker': 'AAPL'}], 'dates': [{'original': 'FY2024', 'resolved': '2024'}], 'metrics': ['revenue']} intent=simple_lookup latency_ms=15243.3 trace_id=280f7a9f-5dd9-4519-8c1d-6422bb34e69e
+2026-03-23 06:48:31 [info     ] cache_hit                      type=exact
+2026-03-23 06:48:31 [info     ] cache_hit                      trace_id=280f7a9f-5dd9-4519-8c1d-6422bb34e69e
+D:\Ai\antiravity -zitoun ai\gravity-search-starter\antigravity\services\gravity-api\.venv\Lib\site-packages\fastapi\routing.py:116: FastAPIDeprecationWarning: ORJSONResponse is deprecated, FastAPI now serializes data directly to JSON bytes via Pydantic when a return type or response model is set, which is faster and doesn't need a custom response class. Read more in the FastAPI docs: https://fastapi.tiangolo.com/advanced/custom-response/#orjson-or-response-model and https://fastapi.tiangolo.com/tutorial/response-model/
+  response = await f(request)
+2026-03-23 06:48:31 [info     ] request                        latency_ms=15407.2 method=POST path=/v1/search status=200 trace_id=06c27e85-133c-4e52-94f1-c734cbca883e
+2026-03-23 06:48:34 [info     ] request                        latency_ms=1.8 method=GET path=/metrics status=200 trace_id=de2146a2-78f2-49e2-9067-33cf84bd0307
+2026-03-23 06:48:36 [info     ] google_generate                input_tokens=346 latency_ms=2077.4 model=gemini-2.0-flash output_tokens=300
+2026-03-23 06:48:36 [info     ] query_analyzed                 channels=['dense', 'bm25', 'structured'] complexity=simple entity_count=3 intent=simple_lookup
+2026-03-23 06:48:36 [info     ] query_understood               complexity=simple entities={'companies': [{'name': 'Coca Cola', 'ticker': 'KO'}], 'people': [], 'dates': [{'original': '2023', 'resolved': '2023'}], 'metrics': ['revenue'], 'themes': []} intent=simple_lookup latency_ms=2078.2 trace_id=5979f7d5-19e8-4fe9-8788-7cf6cd382cc5
+2026-03-23 06:48:36 [info     ] cache_hit                      type=exact
+2026-03-23 06:48:36 [info     ] cache_hit                      trace_id=5979f7d5-19e8-4fe9-8788-7cf6cd382cc5
+2026-03-23 06:48:36 [info     ] request                        latency_ms=2104.6 method=POST path=/v1/search status=200 trace_id=cac91b47-9d8b-44f5-8895-9f65278f3c4d
+2026-03-23 06:48:40 [info     ] google_generate                input_tokens=342 latency_ms=1321.1 model=gemini-2.0-flash output_tokens=183
+2026-03-23 06:48:40 [info     ] query_analyzed                 channels=['dense', 'bm25', 'structured'] complexity=simple entity_count=2 intent=simple_lookup
+2026-03-23 06:48:40 [info     ] query_understood               complexity=simple entities={'companies': [{'name': 'Apple', 'ticker': 'AAPL'}], 'people': [], 'dates': [], 'metrics': ['free cash flow margin'], 'themes': []} intent=simple_lookup latency_ms=1321.6 trace_id=7fee21cb-c5db-41f8-937c-3e129e1f5e7d
+2026-03-23 06:48:40 [info     ] cache_hit                      type=exact
+2026-03-23 06:48:40 [info     ] cache_hit                      trace_id=7fee21cb-c5db-41f8-937c-3e129e1f5e7d
+2026-03-23 06:48:40 [info     ] request                        latency_ms=1329.1 method=POST path=/v1/search status=200 trace_id=67ebcaf5-4714-4e48-a0d0-1582bb0df19a
+2026-03-23 06:48:44 [info     ] google_generate                input_tokens=343 latency_ms=1774.9 model=gemini-2.0-flash output_tokens=212
+2026-03-23 06:48:44 [info     ] query_analyzed                 channels=['dense', 'bm25', 'structured'] complexity=simple entity_count=2 intent=trend_analysis
+2026-03-23 06:48:44 [info     ] query_understood               complexity=simple entities={'companies': [{'name': 'Apple', 'ticker': None}], 'people': [], 'dates': [], 'metrics': ['revenue'], 'themes': []} intent=trend_analysis latency_ms=1775.6 trace_id=c27a601f-9b42-40a8-9250-25e6778ad7e1
+2026-03-23 06:48:44 [info     ] cache_hit                      type=exact
+2026-03-23 06:48:44 [info     ] cache_hit                      trace_id=c27a601f-9b42-40a8-9250-25e6778ad7e1
+2026-03-23 06:48:44 [info     ] request                        latency_ms=1782.5 method=POST path=/v1/search status=200 trace_id=30822dcc-5060-466e-83b1-5703af85fab8
+2026-03-23 06:48:49 [info     ] google_generate                input_tokens=348 latency_ms=1642.5 model=gemini-2.0-flash output_tokens=307
+2026-03-23 06:48:49 [info     ] query_analyzed                 channels=['dense', 'bm25', 'structured'] complexity=simple entity_count=3 intent=simple_lookup
+2026-03-23 06:48:49 [info     ] query_understood               complexity=simple entities={'companies': [{'name': 'NVIDIA', 'ticker': 'NVDA'}], 'people': [], 'dates': [{'original': 'fiscal year 2024', 'resolved': 'FY2024'}], 'metrics': ['total revenue'], 'themes': []} intent=simple_lookup latency_ms=1643.1 trace_id=d5aebd10-75f7-4ae6-9ca3-226ed79288d0
+2026-03-23 06:48:51 [info     ] request                        latency_ms=1.2 method=GET path=/metrics status=200 trace_id=a180c52b-4133-45d9-b3f5-401db3f2fc65
+2026-03-23 06:49:07 [info     ] request                        latency_ms=1.9 method=GET path=/metrics status=200 trace_id=ea319b2a-9301-4b2e-8ec2-c12936cbf7ed
+2026-03-23 06:49:23 [info     ] request                        latency_ms=1.3 method=GET path=/metrics status=200 trace_id=f10efa8e-c3ac-42c5-bbcc-14f61f96cee2
+2026-03-23 06:49:39 [info     ] request                        latency_ms=2.0 method=GET path=/metrics status=200 trace_id=06f3ab5e-efbc-48ae-9728-0124f89971f6
+2026-03-23 06:49:55 [info     ] request                        latency_ms=4.1 method=GET path=/metrics status=200 trace_id=d4361341-bb29-4740-bc13-3ba4be30d45d
+2026-03-23 06:50:11 [info     ] request                        latency_ms=2.2 method=GET path=/metrics status=200 trace_id=fc738224-73c0-4e5a-aee6-07191ce90ebc
+2026-03-23 06:50:26 [warning  ] cache_get_error                error='[WinError 1114] Une routine d’initialisation d’une bibliothèque de liens dynamiques (DLL) a échoué. Error loading "D:\\Ai\\antiravity -zitoun ai\\gravity-search-starter\\antigravity\\services\\gravity-api\\.venv\\Lib\\site-packages\\torch\\lib\\c10.dll" or one of its dependencies.'
+2026-03-23 06:50:27 [info     ] google_generate                input_tokens=232 latency_ms=1156.2 model=gemini-2.0-flash output_tokens=107
+2026-03-23 06:50:27 [warning  ] structured_search_failed       error="'NoneType' object is not callable"
+2026-03-23 06:50:27 [debug    ] channel_search                 channel=structured ms=1162.3 results=0
+2026-03-23 06:50:28 [info     ] request                        latency_ms=25.2 method=GET path=/metrics status=200 trace_id=99288963-9afd-42f0-8563-61cc2371159a
+2026-03-23 06:50:33 [warning  ] sparse_search_unavailable      error='Connection timed out'
+2026-03-23 06:50:33 [debug    ] channel_search                 channel=bm25 ms=6605.2 results=0
+2026-03-23 06:50:33 [warning  ] dense_search_unavailable       error='[WinError 1114] Une routine d’initialisation d’une bibliothèque de liens dynamiques (DLL) a échoué. Error loading "D:\\Ai\\antiravity -zitoun ai\\gravity-search-starter\\antigravity\\services\\gravity-api\\.venv\\Lib\\site-packages\\torch\\lib\\c10.dll" or one of its dependencies.'
+2026-03-23 06:50:33 [debug    ] channel_search                 channel=dense ms=6608.1 results=0
+2026-03-23 06:50:33 [info     ] retrieval_complete             channels_queried=['dense', 'bm25', 'structured'] latency_ms=6612.0 total_results={'dense': 0, 'bm25': 0, 'structured': 0}
+2026-03-23 06:50:33 [info     ] rrf_fusion                     input_channels=3 multi_channel_docs=0 output_docs=0 top_score=0 total_unique_docs=0
+2026-03-23 06:50:33 [info     ] retrieval_complete             after_fusion=0 after_rerank=0 channels=['dense', 'bm25', 'structured'] rerank_ms=0.5 retrieval_ms=6612.4 total_retrieved=0 trace_id=d5aebd10-75f7-4ae6-9ca3-226ed79288d0
+D:\Ai\antiravity -zitoun ai\gravity-search-starter\antigravity\services\gravity-api\.venv\Lib\site-packages\fastapi\routing.py:116: FastAPIDeprecationWarning: ORJSONResponse is deprecated, FastAPI now serializes data directly to JSON bytes via Pydantic when a return type or response model is set, which is faster and doesn't need a custom response class. Read more in the FastAPI docs: https://fastapi.tiangolo.com/advanced/custom-response/#orjson-or-response-model and https://fastapi.tiangolo.com/tutorial/response-model/
+  response = await f(request)
+2026-03-23 06:50:33 [info     ] request                        latency_ms=105457.9 method=POST path=/v1/search status=200 trace_id=95512986-8d30-4f8f-b73d-d77c669977c3
+2026-03-23 06:50:44 [info     ] request                        latency_ms=3.9 method=GET path=/metrics status=200 trace_id=f92eef8c-bce2-4891-9586-d59046fd1b7c
+2026-03-23 06:51:00 [info     ] request                        latency_ms=2.4 method=GET path=/metrics status=200 trace_id=2c5891e1-27f8-4fd8-8cc2-b8233cda806f
+2026-03-23 06:51:16 [info     ] request                        latency_ms=3.4 method=GET path=/metrics status=200 trace_id=f4b95fe2-44e9-4513-8112-a9d4df6d120b
+2026-03-23 06:51:32 [info     ] request                        latency_ms=1.8 method=GET path=/metrics status=200 trace_id=4e9a4202-cc63-4f40-8f98-c88e9fa9473c
+2026-03-23 06:51:48 [info     ] request                        latency_ms=3.1 method=GET path=/metrics status=200 trace_id=38216c9e-4aea-42d2-b948-682bdcafac42
+2026-03-23 06:52:04 [info     ] request                        latency_ms=2.3 method=GET path=/metrics status=200 trace_id=10e59f5a-d6b4-488e-9f76-24b58354a3c8
+2026-03-23 06:52:21 [info     ] request                        latency_ms=1.1 method=GET path=/metrics status=200 trace_id=861a8dce-6ec1-4e46-a674-d8ac1512cc16
+2026-03-23 06:52:37 [info     ] request                        latency_ms=1.1 method=GET path=/metrics status=200 trace_id=b0744e6e-bef4-432e-9b02-14b6a6661175
+2026-03-23 06:52:53 [info     ] request                        latency_ms=4.5 method=GET path=/metrics status=200 trace_id=91c3a71e-e7fa-460a-a0aa-de4ee0ca4f63
+2026-03-23 06:53:09 [info     ] request                        latency_ms=1.9 method=GET path=/metrics status=200 trace_id=86f6a0d2-450b-45f4-baed-ca38505a1458
+2026-03-23 06:53:25 [info     ] request                        latency_ms=1.5 method=GET path=/metrics status=200 trace_id=02ed2374-969c-49b0-8531-71208a67f9ca
+2026-03-23 06:53:42 [info     ] request                        latency_ms=1.6 method=GET path=/metrics status=200 trace_id=571d90a6-06c3-44ac-8f8c-7fa7450ef2ad
+2026-03-23 06:53:58 [info     ] request                        latency_ms=1.3 method=GET path=/metrics status=200 trace_id=7fdce828-4672-42f2-894e-9f1957253ac5
+2026-03-23 06:54:14 [info     ] request                        latency_ms=1.4 method=GET path=/metrics status=200 trace_id=1f6935e3-1eb6-4816-a9bd-122add13305e
+2026-03-23 06:54:30 [info     ] request                        latency_ms=193.4 method=GET path=/metrics status=200 trace_id=2c99bc6f-a135-4d88-a817-09114e27c2e6
+2026-03-23 06:54:46 [info     ] request                        latency_ms=1.4 method=GET path=/metrics status=200 trace_id=b0426e00-c33f-4139-b7b6-727ab309a1a0
+2026-03-23 06:55:02 [info     ] request                        latency_ms=1.4 method=GET path=/metrics status=200 trace_id=55bd3ab2-6e35-4a0d-8121-84099569d92f
+2026-03-23 06:55:19 [info     ] request                        latency_ms=1.6 method=GET path=/metrics status=200 trace_id=b6f1fb05-1103-4706-916d-e835a7cef3c0
+2026-03-23 06:55:35 [info     ] request                        latency_ms=1.0 method=GET path=/metrics status=200 trace_id=efc243d6-a636-43a6-9c44-17d3ee3d637d
+2026-03-23 06:55:51 [info     ] request                        latency_ms=2.3 method=GET path=/metrics status=200 trace_id=fbfc9e31-0433-41ad-9a6b-1873e12d2755
+2026-03-23 06:56:07 [info     ] request                        latency_ms=1.9 method=GET path=/metrics status=200 trace_id=7c786ef1-5250-4a41-8cfd-ddb52364d688
+2026-03-23 06:56:23 [info     ] request                        latency_ms=1.8 method=GET path=/metrics status=200 trace_id=50b4d722-03bf-48f6-bf52-81a2ba7e04ae
+2026-03-23 06:56:39 [info     ] request                        latency_ms=3.6 method=GET path=/metrics status=200 trace_id=18301196-71ee-473b-b627-3d97be014074
+2026-03-23 06:56:56 [info     ] request                        latency_ms=1.7 method=GET path=/metrics status=200 trace_id=4534513e-4b6f-4455-864f-c5bdec9a5c62
+2026-03-23 06:57:12 [info     ] request                        latency_ms=1.2 method=GET path=/metrics status=200 trace_id=5f991acd-4acf-49a0-825d-1f7b17bfc6ae
+2026-03-23 06:57:28 [info     ] request                        latency_ms=1.2 method=GET path=/metrics status=200 trace_id=69e54f32-54fb-4a4b-b87b-73e9fe69c5df
+2026-03-23 06:57:44 [info     ] request                        latency_ms=5.1 method=GET path=/metrics status=200 trace_id=c8759320-d264-4f01-bb5f-f9848f9b34e8
+2026-03-23 06:58:00 [info     ] request                        latency_ms=1.8 method=GET path=/metrics status=200 trace_id=9b42b194-3f88-4a1f-96e6-634d8eb409fc
+2026-03-23 06:58:16 [info     ] request                        latency_ms=3.3 method=GET path=/metrics status=200 trace_id=d7b2d855-5a28-44d2-8fa6-dc55da97a8bc
+2026-03-23 06:58:33 [info     ] request                        latency_ms=1.6 method=GET path=/metrics status=200 trace_id=7991c7f1-30bf-45b2-8af5-93385875979e
+2026-03-23 06:58:49 [info     ] request                        latency_ms=1.2 method=GET path=/metrics status=200 trace_id=58540da9-a880-4f08-b9e7-21d3d78e070c
+2026-03-23 06:59:05 [info     ] request                        latency_ms=2.3 method=GET path=/metrics status=200 trace_id=5c5fd9d8-4277-4a63-af45-e01dc0de6e77
+2026-03-23 06:59:21 [info     ] request                        latency_ms=3.7 method=GET path=/metrics status=200 trace_id=75305cc6-dffe-4a64-9edc-fd61f70c098a
+2026-03-23 06:59:37 [info     ] request                        latency_ms=1.5 method=GET path=/metrics status=200 trace_id=e56381fd-dc84-48ca-bfa1-efccf16db9d1
+2026-03-23 06:59:54 [info     ] request                        latency_ms=1.3 method=GET path=/metrics status=200 trace_id=2b72ade6-17a0-4ee9-afd3-69bfec4c69e1
+2026-03-23 07:00:10 [info     ] request                        latency_ms=0.9 method=GET path=/metrics status=200 trace_id=56f84494-7efd-4ac1-b862-90b95e4255f7
+2026-03-23 07:00:26 [info     ] request                        latency_ms=1.9 method=GET path=/metrics status=200 trace_id=abd2ee7c-ceb0-490d-9c55-c19642c700ac
+2026-03-23 07:00:42 [info     ] request                        latency_ms=8.5 method=GET path=/metrics status=200 trace_id=914508fc-b726-48ae-8973-041c807be886

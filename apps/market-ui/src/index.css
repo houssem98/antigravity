@@ -1,0 +1,224 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 4%;
+    --foreground: 230 60% 97%;
+    --card: 222 40% 6%;
+    --card-foreground: 230 60% 97%;
+    --popover: 222 40% 6%;
+    --popover-foreground: 230 60% 97%;
+    --primary: 183 100% 50%;
+    --primary-foreground: 222 47% 4%;
+    --secondary: 222 30% 12%;
+    --secondary-foreground: 230 60% 97%;
+    --muted: 222 30% 12%;
+    --muted-foreground: 224 20% 70%;
+    --accent: 183 100% 50%;
+    --accent-foreground: 222 47% 4%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 183 100% 50% / 0.14;
+    --input: 222 30% 15%;
+    --ring: 183 100% 50%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  body {
+    @apply bg-[#070A12] text-[#F4F6FF] antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: 'Sora', sans-serif;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+
+  .font-mono {
+    font-family: 'IBM Plex Mono', monospace;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-[#00F0FF] to-[#00F0FF]/70 bg-clip-text text-transparent;
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 40px rgba(0, 240, 255, 0.22);
+  }
+
+  .glow-accent-soft {
+    box-shadow: 0 0 30px rgba(0, 240, 255, 0.18);
+  }
+
+  .panel-border {
+    border: 1px solid rgba(0, 240, 255, 0.14);
+  }
+
+  .panel-bg {
+    background: rgba(11, 16, 34, 0.72);
+    backdrop-filter: blur(14px) saturate(115%);
+  }
+
+  .vignette {
+    background: radial-gradient(ellipse at center, rgba(7, 10, 18, 0.35) 0%, rgba(7, 10, 18, 0.85) 100%);
+  }
+
+  .noise-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    z-index: 9999;
+  }
+
+  .animate-breathe {
+    animation: breathe 4s ease-in-out infinite alternate;
+  }
+
+  @keyframes breathe {
+    from {
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.18);
+    }
+
+    to {
+      box-shadow: 0 0 60px rgba(0, 240, 255, 0.28);
+    }
+  }
+
+  .sparkline {
+    stroke-dasharray: 200;
+    stroke-dashoffset: 200;
+    animation: drawLine 1.5s ease-out forwards;
+  }
+
+  @keyframes drawLine {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  .progress-ring {
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+  }
+
+  .progress-ring-circle {
+    transition: stroke-dashoffset 1s ease-out;
+  }
+}
+
+/* Gemini-style Report */
+.gemini-report {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #C8CDE0;
+}
+
+.gemini-report>*:first-child {
+  margin-top: 0;
+}
+
+/* Fade-in animation for thinking messages */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* Border-left-3 utility */
+.border-l-3 {
+  border-left-width: 3px;
+}
+
+/* line-clamp utilities */
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070A12;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 240, 255, 0.5);
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 240, 255, 0.3);
+  color: #F4F6FF;
+}
+
+/* Print styles */
+@media print {
+  .panel-bg {
+    background: white;
+    color: black;
+  }
+
+  .research-report {
+    color: black;
+  }
+
+  .research-report h1,
+  .research-report h2,
+  .research-report h3,
+  .research-report p,
+  .research-report li {
+    color: black;
+  }
+}
