@@ -12,13 +12,14 @@ import {
 } from '../services/apiKeys';
 
 export default function SettingsPage() {
-    const [keys, setKeys] = useState<ApiKeys>({ gemini: '', tavily: '', alphaVantage: '', anthropic: '', deepseek: '' });
+    const [keys, setKeys] = useState<ApiKeys>({ gemini: '', tavily: '', alphaVantage: '', anthropic: '', deepseek: '', groq: '' });
     const [validation, setValidation] = useState<Record<string, 'idle' | 'validating' | 'valid' | 'invalid'>>({
         gemini: 'idle',
         tavily: 'idle',
         alphaVantage: 'idle',
         anthropic: 'idle',
         deepseek: 'idle',
+        groq: 'idle',
     });
     const [saved, setSaved] = useState(false);
 
@@ -224,6 +225,34 @@ export default function SettingsPage() {
                     </div>
                     <p className="text-xs text-[#A7B0C8] mt-1">
                         If set: DeepSeek R1 chain-of-thought reasoning powers adversarial bull/bear analysis (best for stress-testing theses)
+                    </p>
+                </div>
+
+                {/* Groq API Key */}
+                <div>
+                    <label className="block text-sm font-medium mb-2">
+                        Groq API Key
+                        <a
+                            href="https://console.groq.com/keys"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-2 text-xs text-[#00F0FF] hover:underline"
+                        >
+                            Get free key →
+                        </a>
+                        <span className="ml-2 text-xs text-[#7B8FC0]">Free tier — Llama 3.3 70B, GPT-OSS 120B, DeepSeek R1 Distill</span>
+                    </label>
+                    <div className="flex gap-2">
+                        <input
+                            type="password"
+                            value={keys.groq}
+                            onChange={(e) => setKeys({ ...keys, groq: e.target.value })}
+                            placeholder="gsk_..."
+                            className="flex-1 bg-[#070A12]/60 border border-[rgba(0,240,255,0.15)] rounded-xl px-4 py-3 text-sm text-[#F4F6FF] placeholder:text-[#A7B0C8]/40 outline-none focus:border-[#00F0FF]/40 transition-colors"
+                        />
+                    </div>
+                    <p className="text-xs text-[#A7B0C8] mt-1">
+                        If set: Groq-hosted open models drive the pipeline on generous free tier — fastest fallback when paid providers are out of credit
                     </p>
                 </div>
 

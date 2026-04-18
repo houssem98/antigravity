@@ -9,6 +9,7 @@ import { marketRouter } from './routes/market.js';
 import { tradingRouter } from './routes/trading.js';
 import { socialRouter } from './routes/social.js';
 import { predictionsRouter } from './routes/predictions.js';
+import { llmRouter } from './routes/llm.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -113,12 +114,18 @@ app.use('/api/market', marketRouter);
 app.use('/api/social', socialRouter);
 app.use('/api/predictions', predictionsRouter);
 app.use('/api', tradingRouter);
+app.use('/api/llm', llmRouter);
 
 // Start server
 server.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`   Gemini API: ${process.env.GEMINI_API_KEY ? '✓ configured' : '✗ missing'}`);
-    console.log(`   Tavily API: ${process.env.TAVILY_API_KEY ? '✓ configured' : '✗ missing'}`);
-    console.log(`   Alpha Vantage: ${process.env.ALPHA_VANTAGE_API_KEY ? '✓ configured' : '✗ missing'}`);
-    console.log(`   Supabase: ${process.env.SUPABASE_URL ? '✓ configured' : '✗ missing'}`);
+    console.log(`   LLM Providers:`);
+    console.log(`     Anthropic: ${process.env.ANTHROPIC_API_KEY ? '✓' : '✗'}`);
+    console.log(`     Gemini:    ${process.env.GEMINI_API_KEY ? '✓' : '✗'}`);
+    console.log(`     DeepSeek:  ${process.env.DEEPSEEK_API_KEY ? '✓' : '✗'}`);
+    console.log(`     Groq:      ${process.env.GROQ_API_KEY ? '✓' : '✗'}`);
+    console.log(`   Data APIs:`);
+    console.log(`     Tavily:    ${process.env.TAVILY_API_KEY ? '✓' : '✗'}`);
+    console.log(`     AlphaVant: ${process.env.ALPHA_VANTAGE_API_KEY ? '✓' : '✗'}`);
+    console.log(`     Supabase:  ${process.env.SUPABASE_URL ? '✓' : '✗'}`);
 });

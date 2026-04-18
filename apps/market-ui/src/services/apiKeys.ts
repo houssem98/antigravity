@@ -7,6 +7,7 @@ export interface ApiKeys {
     alphaVantage: string;
     anthropic: string;
     deepseek: string;
+    groq: string;
 }
 
 const STORAGE_KEY = 'market_intelligence_api_keys';
@@ -18,6 +19,7 @@ const ENV_KEYS: ApiKeys = {
     alphaVantage: import.meta.env.VITE_ALPHA_VANTAGE_API_KEY || '',
     anthropic: import.meta.env.VITE_ANTHROPIC_API_KEY || '',
     deepseek: import.meta.env.VITE_DEEPSEEK_API_KEY || '',
+    groq: import.meta.env.VITE_GROQ_API_KEY || '',
 };
 
 export const getApiKeys = (): ApiKeys => {
@@ -33,6 +35,7 @@ export const getApiKeys = (): ApiKeys => {
                 alphaVantage: parsed.alphaVantage || ENV_KEYS.alphaVantage,
                 anthropic: parsed.anthropic || ENV_KEYS.anthropic,
                 deepseek: parsed.deepseek || ENV_KEYS.deepseek,
+                groq: parsed.groq || ENV_KEYS.groq,
             };
         } catch {
             return { ...ENV_KEYS };
@@ -47,7 +50,10 @@ export const saveApiKeys = (keys: ApiKeys): void => {
 
 export const hasRequiredKeys = (): boolean => {
     const keys = getApiKeys();
-    return !!(keys.gemini && keys.tavily && keys.alphaVantage);
+    // Deep Research needs: (1) at least ONE LLM driver, (2) Tavily for web search.
+    // Alpha Vantage is optional — the pipeline degrades gracefully without it.
+    const hasAnyLLM = !!(keys.gemini || keys.anthropic || keys.deepseek || keys.groq);
+    return hasAnyLLM && !!keys.tavily;
 };
 
 export const validateGeminiKey = async (apiKey: string): Promise<boolean> => {

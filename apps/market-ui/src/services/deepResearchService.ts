@@ -9,8 +9,6 @@
 //   5. Report      — Gemini 2.5 Pro: Goldman Sachs-style 3000+ word institutional report
 //   6. Output      — Structured ResearchReport with citations
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { getApiKeys } from './apiKeys';
 import { searchMultipleQueriesParallel, type TavilySearchResult } from './tavilyService';
 import { queryGravityRAG, formatRAGSourcesForPrompt, formatRAGStructuredData, type GravityRAGResult } from './gravitySearchService';
 import { searchFilings, type SECFiling } from './secEdgarService';
@@ -32,6 +30,12 @@ export const RESEARCH_MODELS = [
     // ── DeepSeek ────────────────────────────────────────────────────────────
     { id: 'deepseek-chat',        name: 'DeepSeek V3',          provider: 'deepseek',  desc: 'Strong reasoning — cost-efficient at scale',         tier: 'standard' },
     { id: 'deepseek-reasoner',    name: 'DeepSeek R1',          provider: 'deepseek',  desc: 'Chain-of-thought reasoning — best for bull/bear',    tier: 'premium'  },
+    // ── Groq (fast inference, free tier) ────────────────────────────────────
+    { id: 'openai/gpt-oss-120b',                       name: 'GPT-OSS 120B (Groq)',      provider: 'groq', desc: 'Open-weights 120B — deep synthesis, free tier',     tier: 'premium'  },
+    { id: 'qwen/qwen3-32b',                            name: 'Qwen3 32B (Groq)',         provider: 'groq', desc: 'Chain-of-thought reasoning — free tier bull/bear',  tier: 'premium'  },
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B (Groq)', provider: 'groq', desc: 'Llama 4 — fast analysis, long context',             tier: 'standard' },
+    { id: 'llama-3.3-70b-versatile',                   name: 'Llama 3.3 70B (Groq)',     provider: 'groq', desc: 'Fast 70B synthesis — free tier',                    tier: 'standard' },
+    { id: 'llama-3.1-8b-instant',                      name: 'Llama 3.1 8B Instant (Groq)', provider: 'groq', desc: 'Lightning-fast — lite summarization',           tier: 'lite'     },
 ] as const;
 
 export type ResearchModelId = typeof RESEARCH_MODELS[number]['id'];
@@ -97,184 +101,138 @@ interface ResearchBlueprint {
     researchAngles: string[];
 }
 
-// ─── LLM Layer ────────────────────────────────────────────────────────────────
+// ─── LLM Layer — Server Proxy ────────────────────────────────────────────────
+// All LLM calls route through market-server (/api/llm/chat).
+// API keys stay server-side. Browser never touches them.
 
-async function callGemini(
-    apiKey: string,
+const LLM_PROXY_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/llm/chat`;
+
+async function callLLMProxy(
+    provider: string,
+    model: string,
     prompt: string,
-    opts: { preferredModel?: GeminiModelId; maxRetries?: number } = {}
 ): Promise<string> {
-    const { preferredModel, maxRetries = 3 } = opts;
-    const genAI = new GoogleGenerativeAI(apiKey);
-
-    const modelsToTry: GeminiModelId[] = preferredModel
-        ? [preferredModel, ...MODEL_IDS.filter(m => m !== preferredModel) as GeminiModelId[]]
-        : [...MODEL_IDS as unknown as GeminiModelId[]];
-
-    for (const modelName of modelsToTry) {
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-                const model = genAI.getGenerativeModel({ model: modelName });
-                const result = await model.generateContent(prompt);
-                return result.response.text();
-            } catch (error: any) {
-                const is429 = error?.message?.includes('429') || error?.message?.includes('Resource exhausted');
-                const is404 = error?.message?.includes('404') || error?.message?.includes('not found');
-
-                if (is404) break;
-                if (is429 && attempt < maxRetries - 1) {
-                    const wait = Math.pow(2, attempt + 1) * 1000;
-                    console.warn(`Rate limited on ${modelName}, retrying in ${wait / 1000}s…`);
-                    await new Promise(r => setTimeout(r, wait));
-                    continue;
-                }
-                if (!is429) throw error;
-            }
-        }
+    const res = await fetch(LLM_PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, model, prompt, max_tokens: 8192 }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `${provider}/${model} failed (${res.status})`);
     }
-    throw new Error('All Gemini models exhausted');
+    const data = await res.json();
+    return data.text ?? '';
 }
 
-// ─── Claude (Anthropic) ───────────────────────────────────────────────────────
+// ─── Unified LLM Router (Server-Proxied) ─────────────────────────────────────
+// All LLM calls go through market-server. The server handles API keys and
+// provider availability. The browser only needs to know which model to request.
+// Fallback chain: if the requested model's provider fails, try next available.
 
-async function callClaude(
-    apiKey: string,
-    prompt: string,
-    modelId: string = 'claude-sonnet-4-6',
-    maxRetries = 3,
-): Promise<string> {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-            const res = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: {
-                    'x-api-key': apiKey,
-                    'anthropic-version': '2023-06-01',
-                    'content-type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: modelId,
-                    max_tokens: 8192,
-                    messages: [{ role: 'user', content: prompt }],
-                }),
-            });
-            if (!res.ok) {
-                const err = await res.text();
-                if (res.status === 529 && attempt < maxRetries - 1) {
-                    await new Promise(r => setTimeout(r, Math.pow(2, attempt + 1) * 1000));
-                    continue;
-                }
-                throw new Error(`Claude API error ${res.status}: ${err}`);
-            }
+type Provider = 'anthropic' | 'gemini' | 'deepseek' | 'groq';
+
+// Cache of available providers — fetched once from server on first call.
+let _serverProviders: Provider[] | null = null;
+
+async function getServerProviders(): Promise<Provider[]> {
+    if (_serverProviders) return _serverProviders;
+    try {
+        const url = `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/llm/providers`;
+        const res = await fetch(url);
+        if (res.ok) {
             const data = await res.json();
-            return data.content?.[0]?.text ?? '';
-        } catch (e) {
-            if (attempt === maxRetries - 1) throw e;
-            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            _serverProviders = (data.providers || [])
+                .filter((p: any) => p.available)
+                .map((p: any) => p.id as Provider);
         }
+    } catch {
+        // Server unreachable — empty list
     }
-    throw new Error('Claude: all retries exhausted');
+    return _serverProviders || [];
 }
 
-// ─── DeepSeek (OpenAI-compatible) ────────────────────────────────────────────
+function defaultModelFor(provider: Provider, tier: 'premium' | 'standard'): ResearchModelId {
+    if (provider === 'anthropic') return tier === 'premium' ? 'claude-opus-4-6' : 'claude-sonnet-4-6';
+    if (provider === 'gemini')    return tier === 'premium' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    if (provider === 'deepseek')  return tier === 'premium' ? 'deepseek-reasoner' : 'deepseek-chat';
+    return tier === 'premium' ? 'openai/gpt-oss-120b' : 'llama-3.3-70b-versatile';
+}
 
-async function callDeepSeek(
-    apiKey: string,
+async function pickDriver(tier: 'premium' | 'standard', preferred?: ResearchModelId): Promise<ResearchModelId> {
+    const available = await getServerProviders();
+    if (available.length === 0) {
+        throw new Error('No LLM providers configured on server — check market-server .env');
+    }
+    if (preferred) {
+        const model = RESEARCH_MODELS.find(m => m.id === preferred);
+        if (model && available.includes(model.provider as Provider)) return preferred;
+    }
+    return defaultModelFor(available[0], tier);
+}
+
+async function callDriver(
     prompt: string,
-    modelId: string = 'deepseek-chat',
-    maxRetries = 3,
+    tier: 'premium' | 'standard' = 'standard',
+    preferredModel?: ResearchModelId,
 ): Promise<string> {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-            const res = await fetch('https://api.deepseek.com/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: modelId,
-                    messages: [{ role: 'user', content: prompt }],
-                    max_tokens: 8192,
-                    temperature: 0.7,
-                }),
-            });
-            if (!res.ok) {
-                const err = await res.text();
-                if (res.status === 429 && attempt < maxRetries - 1) {
-                    await new Promise(r => setTimeout(r, Math.pow(2, attempt + 1) * 1000));
-                    continue;
-                }
-                throw new Error(`DeepSeek API error ${res.status}: ${err}`);
-            }
-            const data = await res.json();
-            return data.choices?.[0]?.message?.content ?? '';
-        } catch (e) {
-            if (attempt === maxRetries - 1) throw e;
-            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-        }
-    }
-    throw new Error('DeepSeek: all retries exhausted');
+    const modelId = await pickDriver(tier, preferredModel);
+    return callLLM(prompt, modelId);
 }
-
-// ─── Unified LLM Router ───────────────────────────────────────────────────────
-// Routes to the right provider based on the selected model ID.
-// Falls back gracefully: Claude → Gemini, DeepSeek → Gemini.
 
 async function callLLM(
     prompt: string,
     modelId: ResearchModelId | undefined,
-    apiKeys: { gemini: string; anthropic?: string; deepseek?: string },
-    opts: { preferredGemini?: GeminiModelId } = {},
 ): Promise<string> {
-    const model = RESEARCH_MODELS.find(m => m.id === modelId);
-    const provider = model?.provider ?? 'gemini';
+    const requested = RESEARCH_MODELS.find(m => m.id === modelId);
+    const requestedProvider = (requested?.provider ?? 'groq') as Provider;
 
-    if (provider === 'anthropic') {
-        if (apiKeys.anthropic) {
-            try {
-                return await callClaude(apiKeys.anthropic, prompt, modelId!);
-            } catch (e) {
-                console.warn('Claude failed, falling back to Gemini:', e);
-            }
-        }
-        // Fallback to best available Gemini
-        return callGemini(apiKeys.gemini, prompt, { preferredModel: 'gemini-2.5-pro' });
+    // Build fallback chain: requested provider first, then remaining available
+    const available = await getServerProviders();
+    const providerChain: Provider[] = available.includes(requestedProvider)
+        ? [requestedProvider, ...available.filter(p => p !== requestedProvider)]
+        : available;
+
+    if (providerChain.length === 0) {
+        throw new Error('No LLM providers configured on server — check market-server .env');
     }
 
-    if (provider === 'deepseek') {
-        if (apiKeys.deepseek) {
-            try {
-                return await callDeepSeek(apiKeys.deepseek, prompt, modelId!);
-            } catch (e) {
-                console.warn('DeepSeek failed, falling back to Gemini:', e);
-            }
+    // Build a full model-level fallback chain.
+    // For each provider: try the requested/default model first, then all other models for that provider.
+    const modelChain: Array<{ provider: Provider; model: string }> = [];
+    for (const provider of providerChain) {
+        const primaryModel = (requestedProvider === provider && modelId)
+            ? modelId
+            : defaultModelFor(provider, 'standard');
+        modelChain.push({ provider, model: primaryModel as string });
+
+        // Add remaining models for this provider as fallbacks
+        const otherModels = RESEARCH_MODELS
+            .filter(m => m.provider === provider && m.id !== primaryModel)
+            .map(m => m.id);
+        for (const alt of otherModels) {
+            modelChain.push({ provider, model: alt as string });
         }
-        return callGemini(apiKeys.gemini, prompt, { preferredModel: 'gemini-2.5-flash' });
     }
 
-    // Gemini provider
-    return callGemini(apiKeys.gemini, prompt, {
-        preferredModel: (modelId as GeminiModelId) ?? opts.preferredGemini ?? 'gemini-2.5-flash',
-    });
-}
-
-// Kept for backward compatibility (used by generateResearchPlan / generateReport below)
-async function callGeminiWithRetry(
-    apiKey: string,
-    prompt: string,
-    maxRetries = 3,
-    preferredModel?: GeminiModelId
-): Promise<string> {
-    return callGemini(apiKey, prompt, { preferredModel, maxRetries });
+    const failures: string[] = [];
+    for (const { provider, model } of modelChain) {
+        try {
+            return await callLLMProxy(provider, model, prompt);
+        } catch (e: any) {
+            const msg = e?.message ?? String(e);
+            failures.push(`${provider}/${model}: ${msg.substring(0, 100)}`);
+            console.warn(`LLM ${provider}/${model} failed, trying next…`, e);
+        }
+    }
+    throw new Error(`All LLM providers failed — ${failures.join(' | ')}`);
 }
 
 // ─── Stage 1: Research Blueprint ─────────────────────────────────────────────
 
 async function buildResearchBlueprint(
     query: string,
-    apiKey: string,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<ResearchBlueprint> {
     const prompt = `You are the Chief Research Strategist at a top-tier institutional asset manager (Goldman Sachs Asset Management, Bridgewater, Two Sigma).
 
@@ -314,7 +272,7 @@ Return ONLY valid JSON (no markdown, no explanation):
   "researchAngles": ["angle 1", "angle 2", "angle 3", "angle 4", "angle 5"]
 }`;
 
-    const text = await callGemini(apiKey, prompt, { preferredModel: model || 'gemini-2.5-pro' });
+    const text = await callDriver(prompt, 'premium', model);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('Failed to parse research blueprint');
 
@@ -356,8 +314,7 @@ async function generateAdaptiveQueries(
     blueprint: ResearchBlueprint,
     knowledgeBase: string,
     round: number,
-    apiKey: string,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<string[]> {
     const prompt = `You are a research director at a top-tier asset management firm conducting iterative deep research.
 
@@ -381,7 +338,7 @@ Focus on:
 Return ONLY a JSON array of 6 search query strings, no explanation:
 ["query 1", "query 2", "query 3", "query 4", "query 5", "query 6"]`;
 
-    const text = await callGemini(apiKey, prompt, { preferredModel: model || 'gemini-2.5-flash' });
+    const text = await callDriver(prompt, 'standard', model);
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) return [];
     try {
@@ -397,8 +354,7 @@ Return ONLY a JSON array of 6 search query strings, no explanation:
 async function evaluateCoverage(
     knowledgeBase: string,
     blueprint: ResearchBlueprint,
-    apiKey: string,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<{ sufficient: boolean; gaps: string[] }> {
     const prompt = `You are a research quality reviewer at an institutional asset manager.
 
@@ -420,7 +376,7 @@ Return ONLY valid JSON:
 
 Mark sufficient=true only if coverage_score >= 0.75 AND all major research angles have data.`;
 
-    const text = await callGemini(apiKey, prompt, { preferredModel: model || 'gemini-2.5-flash' });
+    const text = await callDriver(prompt, 'standard', model);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return { sufficient: false, gaps: [] };
     try {
@@ -438,8 +394,7 @@ Mark sufficient=true only if coverage_score >= 0.75 AND all major research angle
 
 async function iterativeSearch(
     blueprint: ResearchBlueprint,
-    apiKey: string,
-    model: GeminiModelId | undefined,
+    model: ResearchModelId | undefined,
     onProgress: (p: ResearchProgress) => void,
     maxRounds = 4,
 ): Promise<{ sources: TavilySearchResult[]; knowledgeBase: string }> {
@@ -453,7 +408,7 @@ async function iterativeSearch(
         // Generate queries: use blueprint on round 0, adaptive on subsequent rounds
         const queries = isFirstRound
             ? blueprint.searchQueries
-            : await generateAdaptiveQueries(blueprint, knowledgeBase, round, apiKey, model);
+            : await generateAdaptiveQueries(blueprint, knowledgeBase, round, model);
 
         if (queries.length === 0) break;
 
@@ -485,14 +440,15 @@ async function iterativeSearch(
         });
 
         // Extract intelligence from this round's sources
-        const roundIntelligence = await callGemini(apiKey,
+        const roundIntelligence = await callDriver(
             `You are a senior analyst. Extract ALL specific facts, figures, quotes, and data points from these sources relevant to: ${blueprint.targetEntities.join(', ')} — ${blueprint.researchAngles.slice(0, 3).join(' | ')}
 
 Sources:
 ${fresh.slice(0, 12).map((s, i) => `[${i + 1}] ${s.title}\n${s.content.substring(0, 700)}`).join('\n\n---\n\n')}
 
 Extract as bullet points. Be specific with numbers, dates, and source attribution. Skip marketing language.`,
-            { preferredModel: model || 'gemini-2.5-flash' }
+            'standard',
+            model,
         );
 
         knowledgeBase += `\n\n=== ROUND ${round + 1} INTELLIGENCE ===\n${roundIntelligence}`;
@@ -506,7 +462,7 @@ Extract as bullet points. Be specific with numbers, dates, and source attributio
                 sourcesFound: allSources.length,
             });
 
-            const { sufficient } = await evaluateCoverage(knowledgeBase, blueprint, apiKey, model);
+            const { sufficient } = await evaluateCoverage(knowledgeBase, blueprint, model);
             if (sufficient) {
                 onProgress({
                     stage: 'searching',
@@ -527,12 +483,9 @@ Extract as bullet points. Be specific with numbers, dates, and source attributio
 
 // ─── Stage 3: Source Intelligence Extraction ──────────────────────────────────
 
-type ApiKeysSubset = { gemini: string; anthropic?: string; deepseek?: string };
-
 async function analyzeSources(
     sources: TavilySearchResult[],
     blueprint: ResearchBlueprint,
-    apiKeys: ApiKeysSubset,
     model?: ResearchModelId,
     ragResult?: GravityRAGResult,
     knowledgeBase?: string,
@@ -565,11 +518,9 @@ Synthesize into a final structured analyst brief:
 
 Be specific with numbers. Never invent data. Cross-reference conflicting figures.`;
 
-        // Use Claude Sonnet for synthesis if available (superior extraction), else Gemini Flash
-        const synthModel: ResearchModelId = apiKeys.anthropic
-            ? 'claude-sonnet-4-6'
-            : (model ?? 'gemini-2.5-flash');
-        return callLLM(prompt, synthModel, apiKeys, { preferredGemini: 'gemini-2.5-flash' });
+        // Use Claude Sonnet for synthesis if available (superior extraction), else whatever driver is configured
+        const synthModel = await pickDriver('standard', model);
+        return callLLM(prompt, synthModel);
     }
 
     // Fallback: extract fresh from raw sources (used if iterative search wasn't run)
@@ -600,10 +551,8 @@ Your tasks:
 
 Format as structured analyst notes. Be SPECIFIC with numbers and dates. Never invent data absent from sources.`;
 
-    const synthModel: ResearchModelId = apiKeys.anthropic
-        ? 'claude-sonnet-4-6'
-        : (model ?? 'gemini-2.5-flash');
-    return callLLM(prompt, synthModel, apiKeys, { preferredGemini: 'gemini-2.5-flash' });
+    const synthModel = await pickDriver('standard', model);
+    return callLLM(prompt, synthModel);
 }
 
 // ─── RAG Verified Facts Formatter ─────────────────────────────────────────────
@@ -637,7 +586,6 @@ ${passages}`.trim();
 async function generateAdversarialAnalysis(
     blueprint: ResearchBlueprint,
     sourceAnalysis: string,
-    apiKeys: ApiKeysSubset,
     model?: ResearchModelId,
     ragResult?: GravityRAGResult,
 ): Promise<{ bullCase: string; bearCase: string }> {
@@ -650,13 +598,9 @@ Timeframe: ${blueprint.timeframe}
 ${verifiedFacts ? `${verifiedFacts}\n\n` : ''}WEB + MARKET INTELLIGENCE SYNTHESIS:
 ${sourceAnalysis.substring(0, 2800)}`.trim();
 
-    // DeepSeek R1 chain-of-thought is ideal for adversarial reasoning.
-    // If not available, Claude Sonnet; fall back to Gemini Pro.
-    const adversarialModel: ResearchModelId = apiKeys.deepseek
-        ? 'deepseek-reasoner'
-        : apiKeys.anthropic
-            ? 'claude-sonnet-4-6'
-            : (model ?? 'gemini-2.5-pro');
+    // pickDriver automatically selects the best provider for premium tier.
+    // Priority order configured on server: anthropic > gemini > deepseek > groq.
+    const adversarialModel = await pickDriver('premium', model);
 
     const [bullResult, bearResult] = await Promise.allSettled([
         callLLM(
@@ -673,8 +617,6 @@ Write a compelling BULL CASE (4–5 paragraphs) for why this investment/sector/t
 
 Anchor every claim to specific facts from the verified data above. Write as a senior PM: direct, non-consensus, data-driven.`,
             adversarialModel,
-            apiKeys,
-            { preferredGemini: 'gemini-2.5-pro' },
         ),
         callLLM(
             `You are a BEAR-CASE analyst / short-seller at a top hedge fund presenting the downside thesis to your short book committee.
@@ -690,8 +632,6 @@ Write a rigorous BEAR CASE (4–5 paragraphs) for why this investment/sector/the
 
 Anchor every claim to specific facts from the verified data above. Write as a top short-seller: incisive, skeptical, forensically precise.`,
             adversarialModel,
-            apiKeys,
-            { preferredGemini: 'gemini-2.5-flash' },
         ),
     ]);
 
@@ -711,7 +651,6 @@ async function synthesizeInstitutionalReport(
     sourceAnalysis: string,
     bullCase: string,
     bearCase: string,
-    apiKeys: ApiKeysSubset,
     model?: ResearchModelId,
     ragResult?: GravityRAGResult,
     macroText?: string,
@@ -746,10 +685,8 @@ async function synthesizeInstitutionalReport(
         : '';
 
     // Claude Opus is the best long-form synthesis model. If not available, use user's model,
-    // fall back to Gemini 2.5 Pro.
-    const synthesisModel: ResearchModelId = apiKeys.anthropic
-        ? 'claude-opus-4-6'
-        : (model ?? 'gemini-2.5-pro');
+    // fall back to whichever premium-tier driver is configured.
+    const synthesisModel = await pickDriver('premium', model);
 
     const prompt = `You are a Managing Director of Equity Research at Goldman Sachs / Morgan Stanley. You are producing a flagship institutional research note for the world's most sophisticated investors — sovereign wealth funds, top-tier hedge funds, and CIOs of major family offices. This report will be cited in Bloomberg terminal conversations and investment committee memos.
 
@@ -890,7 +827,7 @@ CRITICAL WRITING STANDARDS
 ✓ Every table must be populated — no placeholder rows
 ✓ Report target: 3,500–4,500 words`;
 
-    return callLLM(prompt, synthesisModel, apiKeys, { preferredGemini: 'gemini-2.5-pro' });
+    return callLLM(prompt, synthesisModel);
 }
 
 // ─── Main Export: performDeepResearch ────────────────────────────────────────
@@ -898,21 +835,20 @@ CRITICAL WRITING STANDARDS
 export const performDeepResearch = async (
     query: string,
     onProgress: (progress: ResearchProgress) => void,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<ResearchReport> => {
-    const rawKeys = getApiKeys();
-    const { gemini } = rawKeys;
-    if (!gemini) throw new Error('Gemini API key not configured');
-    const apiKeys: ApiKeysSubset = {
-        gemini,
-        anthropic: rawKeys.anthropic || undefined,
-        deepseek: rawKeys.deepseek || undefined,
-    };
+    // Pre-fetch server providers to validate availability and resolve driver model.
+    const providers = await getServerProviders();
+    if (providers.length === 0) {
+        throw new Error('No LLM providers configured on server — check market-server .env');
+    }
+
+    const driverModel = await pickDriver('premium', model);
 
     // ── Stage 1: Blueprint (0–10%) ─────────────────────────────────────────
     onProgress({ stage: 'planning', message: 'Chief Analyst building research blueprint…', progress: 3 });
 
-    const blueprint = await buildResearchBlueprint(query, gemini, model);
+    const blueprint = await buildResearchBlueprint(query, driverModel);
 
     onProgress({
         stage: 'planning',
@@ -929,7 +865,7 @@ export const performDeepResearch = async (
         ...secAndCompanyArrays
     ] = await Promise.all([
         // Iterative adaptive web search (up to 4 rounds)
-        iterativeSearch(blueprint, gemini, model, onProgress, 4),
+        iterativeSearch(blueprint, driverModel, onProgress, 4),
 
         // Gravity RAG: agentic retrieval from local databases
         queryGravityRAG(query),
@@ -977,7 +913,7 @@ export const performDeepResearch = async (
         sourcesFound: totalSources,
     });
 
-    const sourceAnalysis = await analyzeSources(webSources, blueprint, apiKeys, model, ragResult, knowledgeBase);
+    const sourceAnalysis = await analyzeSources(webSources, blueprint, driverModel, ragResult, knowledgeBase);
 
     onProgress({
         stage: 'analyzing',
@@ -988,7 +924,7 @@ export const performDeepResearch = async (
 
     // ── Stage 4: Adversarial Analysis (65–75%) ────────────────────────────
     const { bullCase, bearCase } = await generateAdversarialAnalysis(
-        blueprint, sourceAnalysis, apiKeys, model, ragResult
+        blueprint, sourceAnalysis, driverModel, ragResult
     );
 
     onProgress({
@@ -1007,8 +943,7 @@ export const performDeepResearch = async (
         sourceAnalysis,
         bullCase,
         bearCase,
-        apiKeys,
-        model,
+        driverModel,
         ragResult,
         macroText,
     );
@@ -1064,7 +999,7 @@ export const performDeepResearch = async (
             sourcesAnalyzed: totalSources,
             generatedAt: new Date().toISOString(),
             estimatedReadTime: Math.ceil(wordCount / 200),
-            modelUsed: model || 'gemini-2.5-pro',
+            modelUsed: driverModel,
             intent: blueprint.intent,
         },
     };
@@ -1074,11 +1009,8 @@ export const performDeepResearch = async (
 
 export const generateResearchPlan = async (
     query: string,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<ResearchPlan> => {
-    const { gemini } = getApiKeys();
-    if (!gemini) throw new Error('Gemini API key not configured');
-
     const prompt = `You are a research planning assistant. Given a user's research query, generate a comprehensive research plan.
 
 User Query: "${query}"
@@ -1089,7 +1021,7 @@ Return ONLY valid JSON:
   "searchQueries": ["query 1", "query 2", "query 3", "query 4", "query 5", "query 6", "query 7", "query 8"]
 }`;
 
-    const text = await callGeminiWithRetry(gemini, prompt, 3, model);
+    const text = await callDriver(prompt, 'standard', model);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('Failed to parse research plan');
     const parsed = JSON.parse(match[0]);
@@ -1106,7 +1038,7 @@ export const generateReport = async (
     plan: ResearchPlan,
     _sources: { webSources: TavilySearchResult[]; secFilings: SECFiling[]; companyData: CompanyOverview[] },
     onProgress: (progress: ResearchProgress) => void,
-    model?: GeminiModelId
+    model?: ResearchModelId
 ): Promise<ResearchReport> => {
     // Delegate to the full orchestrated pipeline via a fresh performDeepResearch call
     return performDeepResearch(plan.query, onProgress, model);
