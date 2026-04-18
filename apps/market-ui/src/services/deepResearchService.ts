@@ -163,7 +163,7 @@ export const REPORT_TEMPLATES: Record<TemplateKey, ReportTemplate> = {
     },
 };
 
-function selectTemplate(intent: ResearchBlueprint['intent'], query: string): TemplateKey {
+export function selectTemplate(intent: ResearchBlueprint['intent'], query: string): TemplateKey {
     const q = query.toLowerCase();
     if (/earnings preview|expectations for.*q[1-4]|before earnings/.test(q)) return 'earnings_preview';
     if (/earnings recap|results|q[1-4] results|earnings reaction/.test(q)) return 'earnings_recap';
@@ -244,13 +244,13 @@ interface ResearchBudget {
     maxSearchRounds: number;
 }
 
-const DEFAULT_BUDGET: ResearchBudget = {
+export const DEFAULT_BUDGET: ResearchBudget = {
     maxLLMCalls: 30,
     maxEstimatedTokens: 800_000,
     maxSearchRounds: 4,
 };
 
-class BudgetTracker {
+export class BudgetTracker {
     llmCalls = 0;
     estimatedTokens = 0;
     budget: ResearchBudget;
@@ -281,6 +281,24 @@ class BudgetTracker {
 // Module-level active tracker. performDeepResearch sets this per-query.
 let _activeBudget: BudgetTracker | null = null;
 
+// ─── Cancellation ────────────────────────────────────────────────────────────
+// AbortSignal plumbed through stage boundaries AND fetch calls so the user can
+// stop a running query mid-flight without orphaning pending LLM work.
+
+export class ResearchCancelledError extends Error {
+    constructor(message = 'Research cancelled by user') {
+        super(message);
+        this.name = 'ResearchCancelledError';
+    }
+}
+
+let _activeSignal: AbortSignal | null = null;
+
+export function throwIfAborted(signal?: AbortSignal | null) {
+    const s = signal ?? _activeSignal;
+    if (s?.aborted) throw new ResearchCancelledError();
+}
+
 // ─── LLM Layer — Server Proxy ────────────────────────────────────────────────
 // All LLM calls route through market-server (/api/llm/chat).
 // API keys stay server-side. Browser never touches them.
@@ -292,11 +310,13 @@ async function callLLMProxy(
     model: string,
     prompt: string,
 ): Promise<string> {
+    throwIfAborted();
     _activeBudget?.checkBeforeCall();
     const res = await fetch(LLM_PROXY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model, prompt, max_tokens: 8192 }),
+        signal: _activeSignal ?? undefined,
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -337,7 +357,7 @@ async function getServerProviders(): Promise<Provider[]> {
 
 type Tier = 'premium' | 'standard' | 'lite';
 
-function defaultModelFor(provider: Provider, tier: Tier): ResearchModelId {
+export function defaultModelFor(provider: Provider, tier: Tier): ResearchModelId {
     if (provider === 'anthropic') {
         if (tier === 'premium') return 'claude-opus-4-6';
         if (tier === 'standard') return 'claude-sonnet-4-6';
@@ -1009,7 +1029,7 @@ const NUMERIC_PATTERNS: RegExp[] = [
     /\d{1,3}(?:,\d{3})+(?:\.\d+)?\b/g,  // large numbers with commas
 ];
 
-function extractClaims(markdown: string): string[] {
+export function extractClaims(markdown: string): string[] {
     const claims = new Set<string>();
     for (const pattern of NUMERIC_PATTERNS) {
         const matches = markdown.match(pattern) || [];
@@ -1025,7 +1045,7 @@ function normalizeNumber(s: string): string {
     return s.toLowerCase().replace(/[\s,$]/g, '').replace(/basis\s?points/g, 'bps');
 }
 
-function verifyNumericConsistency(
+export function verifyNumericConsistency(
     markdown: string,
     inputs: VerificationInputs,
 ): VerificationResult {
@@ -1075,6 +1095,7 @@ export const performDeepResearch = async (
     onProgress: (progress: ResearchProgress) => void,
     model?: ResearchModelId,
     budget: ResearchBudget = DEFAULT_BUDGET,
+    signal?: AbortSignal,
 ): Promise<ResearchReport> => {
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
@@ -1085,6 +1106,8 @@ export const performDeepResearch = async (
     // Per-query budget: resets on every call so the module-level ref is safe.
     const tracker = new BudgetTracker(budget);
     _activeBudget = tracker;
+    _activeSignal = signal ?? null;
+    throwIfAborted(signal);
 
     const driverModel = await pickDriver('premium', model);
 
@@ -1098,6 +1121,8 @@ export const performDeepResearch = async (
         message: `Blueprint: ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`,
         progress: 10,
     });
+
+    throwIfAborted(signal);
 
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
     // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro
@@ -1156,6 +1181,7 @@ export const performDeepResearch = async (
         sourcesFound: totalSources,
     });
 
+    throwIfAborted(signal);
     const sourceAnalysis = await analyzeSources(webSources, blueprint, driverModel, ragResult, knowledgeBase);
 
     onProgress({
@@ -1164,6 +1190,8 @@ export const performDeepResearch = async (
         progress: 63,
         sourcesFound: totalSources,
     });
+
+    throwIfAborted(signal);
 
     // ── Stage 4: Adversarial Analysis (65–75%) ────────────────────────────
     const { bullCase, bearCase } = await generateAdversarialAnalysis(
@@ -1176,6 +1204,8 @@ export const performDeepResearch = async (
         progress: 75,
         sourcesFound: totalSources,
     });
+
+    throwIfAborted(signal);
 
     // ── Stage 5: Report Synthesis (75–96%) ────────────────────────────────
     // Outline-first: select a fixed template from the query/intent, then
@@ -1273,6 +1303,7 @@ export const performDeepResearch = async (
     };
 
     _activeBudget = null;
+    _activeSignal = null;
     return report;
 };
 
