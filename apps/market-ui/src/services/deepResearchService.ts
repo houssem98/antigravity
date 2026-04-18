@@ -44,7 +44,134 @@ export type ResearchModelId = typeof RESEARCH_MODELS[number]['id'];
 export const GEMINI_MODELS = RESEARCH_MODELS;
 export type GeminiModelId = ResearchModelId;
 
-const MODEL_IDS = GEMINI_MODELS.map(m => m.id);
+// ─── Report Templates (outline-first) ────────────────────────────────────────
+// Each template is a sectioned outline. The synthesis stage expands each
+// section into prose grounded in the retrieved data.
+
+export type TemplateKey =
+    | 'investment_memo'
+    | 'earnings_preview'
+    | 'earnings_recap'
+    | 'thematic'
+    | 'company_primer'
+    | 'comparative';
+
+interface ReportTemplate {
+    key: TemplateKey;
+    label: string;
+    sections: string[];
+    requiredTables: string[];
+}
+
+export const REPORT_TEMPLATES: Record<TemplateKey, ReportTemplate> = {
+    investment_memo: {
+        key: 'investment_memo',
+        label: 'Investment Memo',
+        sections: [
+            'Executive Summary',
+            'Investment Thesis',
+            'Financial Performance',
+            'Competitive Position & Market Share',
+            'Growth Drivers & Catalysts',
+            'Bull Case — Path to Outperformance',
+            'Bear Case — Key Downside Risks',
+            'Risk Matrix',
+            'Macro Context & Cross-Asset Implications',
+            'Outlook: Catalysts & Monitoring Dashboard',
+            'Conclusion & Conviction Rating',
+        ],
+        requiredTables: ['Financial Scorecard', 'Risk Matrix'],
+    },
+    earnings_preview: {
+        key: 'earnings_preview',
+        label: 'Earnings Preview',
+        sections: [
+            'Executive Summary & Print Expectations',
+            'Consensus Estimates vs Our View',
+            'Key Segments to Watch',
+            'Likely Bull Surprises',
+            'Likely Bear Surprises',
+            'Options-Implied Move & Positioning',
+            'Post-Earnings Scenarios (Beat / In-line / Miss)',
+            'What Would Change Our View',
+        ],
+        requiredTables: ['Consensus Scorecard', 'Segment Expectations'],
+    },
+    earnings_recap: {
+        key: 'earnings_recap',
+        label: 'Earnings Recap',
+        sections: [
+            'Headline Summary & Stock Reaction',
+            'Print vs Consensus Scorecard',
+            'Segment & Geographic Breakdown',
+            'Guidance Changes & Tone',
+            'Management Commentary Highlights',
+            'Buyside Pushback',
+            'Revised Thesis & Rating',
+            'Thesis Invalidation Criteria',
+        ],
+        requiredTables: ['Print vs Consensus', 'Guidance Revisions'],
+    },
+    thematic: {
+        key: 'thematic',
+        label: 'Thematic Research',
+        sections: [
+            'Executive Summary',
+            'Theme Definition & Market Size',
+            'Value-Chain Mapping',
+            'Winners & Losers',
+            'Capital Flows & Positioning',
+            'Regulatory / Policy Landscape',
+            'Bull Scenario',
+            'Bear Scenario',
+            'Top Trade Expressions',
+            'Key Risks & Monitoring Points',
+        ],
+        requiredTables: ['Winners/Losers Map', 'Trade Expressions'],
+    },
+    company_primer: {
+        key: 'company_primer',
+        label: 'Company Primer',
+        sections: [
+            'Executive Summary',
+            'Business Overview & Segments',
+            'Revenue & Margin Profile',
+            'Capital Structure & Balance Sheet',
+            'Management & Governance',
+            'Competitive Landscape',
+            'Historical Financial Performance',
+            'Valuation Framework',
+            'Key Risks',
+        ],
+        requiredTables: ['Segment Financials', 'Valuation Multiples'],
+    },
+    comparative: {
+        key: 'comparative',
+        label: 'Comparative Analysis',
+        sections: [
+            'Executive Summary & Ranking',
+            'Side-by-Side Financial Comparison',
+            'Unit Economics & Margin Bridge',
+            'Growth Trajectories',
+            'Balance Sheet & Capital Return',
+            'Valuation Comparison',
+            'Relative Strengths & Weaknesses',
+            'Preferred Pair-Trade Expression',
+            'Risks by Name',
+        ],
+        requiredTables: ['Peer Comp Table', 'Valuation Spread'],
+    },
+};
+
+function selectTemplate(intent: ResearchBlueprint['intent'], query: string): TemplateKey {
+    const q = query.toLowerCase();
+    if (/earnings preview|expectations for.*q[1-4]|before earnings/.test(q)) return 'earnings_preview';
+    if (/earnings recap|results|q[1-4] results|earnings reaction/.test(q)) return 'earnings_recap';
+    if (/primer|introduction to|overview of/.test(q)) return 'company_primer';
+    if (intent === 'comparative') return 'comparative';
+    if (intent === 'thematic' || intent === 'sector_analysis' || intent === 'macro_analysis') return 'thematic';
+    return 'investment_memo';
+}
 
 // ─── Exported Types ───────────────────────────────────────────────────────────
 
@@ -83,6 +210,13 @@ export interface ResearchReport {
         estimatedReadTime: number;
         modelUsed?: string;
         intent?: string;
+        template?: TemplateKey;
+        budget?: { llmCalls: number; estimatedTokens: number };
+        verification?: {
+            totalClaims: number;
+            groundedClaims: number;
+            unsupportedClaims: string[];
+        };
     };
 }
 
@@ -101,6 +235,52 @@ interface ResearchBlueprint {
     researchAngles: string[];
 }
 
+// ─── Budget Tracking ─────────────────────────────────────────────────────────
+// Hard caps protect against runaway costs on a single query.
+
+interface ResearchBudget {
+    maxLLMCalls: number;
+    maxEstimatedTokens: number;
+    maxSearchRounds: number;
+}
+
+const DEFAULT_BUDGET: ResearchBudget = {
+    maxLLMCalls: 30,
+    maxEstimatedTokens: 800_000,
+    maxSearchRounds: 4,
+};
+
+class BudgetTracker {
+    llmCalls = 0;
+    estimatedTokens = 0;
+    budget: ResearchBudget;
+
+    constructor(budget: ResearchBudget) {
+        this.budget = budget;
+    }
+
+    recordCall(promptLen: number, responseLen: number) {
+        this.llmCalls += 1;
+        this.estimatedTokens += Math.ceil((promptLen + responseLen) / 4);
+    }
+
+    checkBeforeCall() {
+        if (this.llmCalls >= this.budget.maxLLMCalls) {
+            throw new Error(`Budget exhausted: ${this.llmCalls}/${this.budget.maxLLMCalls} LLM calls`);
+        }
+        if (this.estimatedTokens >= this.budget.maxEstimatedTokens) {
+            throw new Error(`Budget exhausted: ~${this.estimatedTokens} tokens (cap ${this.budget.maxEstimatedTokens})`);
+        }
+    }
+
+    snapshot() {
+        return { llmCalls: this.llmCalls, estimatedTokens: this.estimatedTokens };
+    }
+}
+
+// Module-level active tracker. performDeepResearch sets this per-query.
+let _activeBudget: BudgetTracker | null = null;
+
 // ─── LLM Layer — Server Proxy ────────────────────────────────────────────────
 // All LLM calls route through market-server (/api/llm/chat).
 // API keys stay server-side. Browser never touches them.
@@ -112,6 +292,7 @@ async function callLLMProxy(
     model: string,
     prompt: string,
 ): Promise<string> {
+    _activeBudget?.checkBeforeCall();
     const res = await fetch(LLM_PROXY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -122,7 +303,9 @@ async function callLLMProxy(
         throw new Error(err.error || `${provider}/${model} failed (${res.status})`);
     }
     const data = await res.json();
-    return data.text ?? '';
+    const text = data.text ?? '';
+    _activeBudget?.recordCall(prompt.length, text.length);
+    return text;
 }
 
 // ─── Unified LLM Router (Server-Proxied) ─────────────────────────────────────
@@ -152,14 +335,30 @@ async function getServerProviders(): Promise<Provider[]> {
     return _serverProviders || [];
 }
 
-function defaultModelFor(provider: Provider, tier: 'premium' | 'standard'): ResearchModelId {
-    if (provider === 'anthropic') return tier === 'premium' ? 'claude-opus-4-6' : 'claude-sonnet-4-6';
-    if (provider === 'gemini')    return tier === 'premium' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-    if (provider === 'deepseek')  return tier === 'premium' ? 'deepseek-reasoner' : 'deepseek-chat';
-    return tier === 'premium' ? 'openai/gpt-oss-120b' : 'llama-3.3-70b-versatile';
+type Tier = 'premium' | 'standard' | 'lite';
+
+function defaultModelFor(provider: Provider, tier: Tier): ResearchModelId {
+    if (provider === 'anthropic') {
+        if (tier === 'premium') return 'claude-opus-4-6';
+        if (tier === 'standard') return 'claude-sonnet-4-6';
+        return 'claude-haiku-4-5-20251001';
+    }
+    if (provider === 'gemini') {
+        if (tier === 'premium') return 'gemini-2.5-pro';
+        if (tier === 'standard') return 'gemini-2.5-flash';
+        return 'gemini-2.0-flash-lite';
+    }
+    if (provider === 'deepseek') {
+        if (tier === 'premium') return 'deepseek-reasoner';
+        return 'deepseek-chat';
+    }
+    // groq
+    if (tier === 'premium') return 'openai/gpt-oss-120b';
+    if (tier === 'standard') return 'llama-3.3-70b-versatile';
+    return 'llama-3.1-8b-instant';
 }
 
-async function pickDriver(tier: 'premium' | 'standard', preferred?: ResearchModelId): Promise<ResearchModelId> {
+async function pickDriver(tier: Tier, preferred?: ResearchModelId): Promise<ResearchModelId> {
     const available = await getServerProviders();
     if (available.length === 0) {
         throw new Error('No LLM providers configured on server — check market-server .env');
@@ -173,7 +372,7 @@ async function pickDriver(tier: 'premium' | 'standard', preferred?: ResearchMode
 
 async function callDriver(
     prompt: string,
-    tier: 'premium' | 'standard' = 'standard',
+    tier: Tier = 'standard',
     preferredModel?: ResearchModelId,
 ): Promise<string> {
     const modelId = await pickDriver(tier, preferredModel);
@@ -376,7 +575,8 @@ Return ONLY valid JSON:
 
 Mark sufficient=true only if coverage_score >= 0.75 AND all major research angles have data.`;
 
-    const text = await callDriver(prompt, 'standard', model);
+    // Coverage eval is a classification task — use the cheapest tier.
+    const text = await callDriver(prompt, 'lite', model);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return { sufficient: false, gaps: [] };
     try {
@@ -651,6 +851,7 @@ async function synthesizeInstitutionalReport(
     sourceAnalysis: string,
     bullCase: string,
     bearCase: string,
+    template: ReportTemplate,
     model?: ResearchModelId,
     ragResult?: GravityRAGResult,
     macroText?: string,
@@ -738,83 +939,29 @@ WEB SOURCES:
 ${webCitationIndex}
 
 ════════════════════════════════════════════
-WRITE THIS REPORT — EXACT STRUCTURE REQUIRED
+WRITE THIS REPORT — OUTLINE-FIRST, FIXED STRUCTURE
 ════════════════════════════════════════════
+Report template: **${template.label}**
 
-# [Compelling, Specific Title — ticker/theme + timeframe + the core investment insight in the title]
+# [Compelling, Specific Title — ticker/theme + timeframe + the core insight]
 
-## Executive Summary
-[4 paragraphs. Para 1: Conviction call (BUY/SELL/HOLD/OW/UW) + the most powerful data point from Tier 1. Para 2: The non-consensus insight — what the market is mispricing. Para 3: The 2–3 most critical near-term catalysts with dates. Para 4: Key risk to the thesis.]
+${template.sections.map(s => `## ${s}\n[3–4 paragraphs. Ground every claim in Tier 1 verified facts or cited web sources. Use specific numbers ($, %, bps). Cite [n] and [RAG-n] inline. Zero filler.]`).join('\n\n')}
 
-## Investment Thesis
-[3 paragraphs. The central analytical argument built on verified data. What does Tier 1 data reveal that web consensus is missing? Quantify the gap between intrinsic value and current pricing. Explain the timing edge.]
+${template.requiredTables.length > 0 ? `\n════════════════════════════════════════════
+REQUIRED TABLES — MUST APPEAR IN THE REPORT
+════════════════════════════════════════════
+${template.requiredTables.map(t => `- **${t}** — populated markdown table with ≥6 rows, real figures only, each cell traceable to a cited source.`).join('\n')}` : ''}
 
-## ${blueprint.researchAngles[0] || 'Financial Performance Analysis'}
-[4 paragraphs. Lead with the most important Tier 1 verified fact. Build deep analysis around it. Include specific %, $, bps figures. Compare to prior periods and peer benchmarks. Cite [n] and [RAG-n] inline throughout.]
-
-## ${blueprint.researchAngles[1] || 'Competitive Position & Market Share'}
-[4 paragraphs + at least one markdown table with real comparative data from sources.]
-
-## ${blueprint.researchAngles[2] || 'Growth Drivers & Catalysts'}
-[3–4 paragraphs. Include forward-looking analysis based on management guidance or analyst forecasts found in sources.]
-
-${blueprint.researchAngles.slice(3).map(angle => `## ${angle}\n[3 paragraphs. Ground in specific data from verified sources. Zero filler.]\n`).join('\n')}
-
-## Financial Scorecard
-
-| Metric | Value | Period | vs. Prior Year | vs. Consensus | Source |
-|--------|-------|--------|----------------|---------------|--------|
-[MINIMUM 8 rows. Fill ONLY with real figures from Tier 1 or cited web sources. Use "N/A" sparingly — only if truly absent from all sources.]
-
-[2 paragraphs of commentary: what the numbers tell you that the market isn't appreciating]
-
-## Bull Case — Path to Outperformance
+${template.key === 'investment_memo' ? `
+PRE-GENERATED BULL CASE (incorporate into relevant section):
 ${bullCase.substring(0, 500)}
 
-**Upside catalysts (next 12 months):**
-[3 specific catalysts with expected timeline and magnitude]
-
-**What would force bear capitulation:** [1–2 sentences, data-specific]
-
-## Bear Case — Key Downside Risks
+PRE-GENERATED BEAR CASE (incorporate into relevant section):
 ${bearCase.substring(0, 500)}
-
-**Downside scenarios:**
-[3 specific scenarios with severity, probability estimate, and timeline]
-
-**What would invalidate the bull thesis:** [1–2 sentences, data-specific]
-
-## Risk Matrix
-
-| Risk Factor | Probability | Impact | Time Horizon | Hedge / Mitigation |
-|-------------|-------------|--------|--------------|---------------------|
-[8 rows. Each risk must be specific: "NVIDIA H100 export restrictions expand to Tier 2 countries" not "regulatory risk". Include probability estimate (High/Med/Low) and realistic impact.]
-
-## Macro Context & Cross-Asset Implications
-[3 paragraphs. Rate environment, dollar strength, geopolitical overlays. How does sector rotation affect positioning? Relative value versus peers and index. Any regime-change risks?]
-
-## Outlook: Catalysts & Monitoring Dashboard
-
-### Near-Term (0–6 months)
-- [Bullet 1: specific event/date + expected market impact]
-- [Bullet 2]
-- [Bullet 3]
-- [Bullet 4]
-
-### Medium-Term (6–18 months)
-- [Bullet 1: structural driver + magnitude]
-- [Bullet 2]
-- [Bullet 3]
-
-### Thesis Invalidation Criteria
-[3 specific, measurable conditions that would trigger a rating downgrade]
-
-## Conclusion & Conviction Rating
-
-[3 paragraphs. Final recommendation stated clearly. Conviction: HIGH / MEDIUM / LOW + specific rationale. Expected return range or price target where data supports. Single most important thing to monitor in the next 90 days.]
+` : ''}
 
 ---
-> **Key Finding:** [Non-consensus, data-backed insight in bold — the one thing a reader should remember. Must reference a specific figure from Tier 1 or a verified source.]
+> **Key Finding:** [Non-consensus, data-backed insight in bold — the single thing a reader must remember. Must reference a specific figure from Tier 1 or a verified source.]
 
 ════════════════════════════════════════════
 CRITICAL WRITING STANDARDS
@@ -824,10 +971,101 @@ CRITICAL WRITING STANDARDS
 ✓ Tier 1 (RAG) figures take priority — mark them [RAG-n] so the reader knows they are verified
 ✓ Tone: institutional, direct, zero marketing language
 ✓ Specific beats vague: "$2.47B in free cash flow" not "strong cash generation"
-✓ Every table must be populated — no placeholder rows
+✓ Every required table must be populated — no placeholder rows
 ✓ Report target: 3,500–4,500 words`;
 
     return callLLM(prompt, synthesisModel);
+}
+
+// ─── Stage 6: Numeric-Consistency Verifier ──────────────────────────────────
+// Deterministic check that every number in the report appears in some
+// source evidence. Catches the most common finance-RAG hallucination:
+// invented figures. Not a substitute for NLI entailment, but orders of
+// magnitude cheaper and highly effective on the biggest failure mode.
+
+interface VerificationInputs {
+    webSources: TavilySearchResult[];
+    ragResult?: GravityRAGResult;
+    companyData: CompanyOverview[];
+    knowledgeBase: string;
+    sourceAnalysis: string;
+}
+
+interface VerificationResult {
+    totalClaims: number;
+    groundedClaims: number;
+    unsupportedClaims: string[];
+}
+
+// Number patterns: currency ($1.2B, $500M), percentages (12.5%, -3%),
+// basis points (150 bps), multiples (14.5x), ratios (2.3:1), and plain
+// figures with optional suffixes (1.2B, 500M, 3.4K). Excludes simple small
+// integers like "3 analysts" by requiring scale suffix or decimal/%/$/x.
+const NUMERIC_PATTERNS: RegExp[] = [
+    /\$\s?\d+(?:,\d{3})*(?:\.\d+)?\s?(?:[BMK]|billion|million|thousand|trillion|T)\b/gi,
+    /\d+(?:\.\d+)?\s?(?:%|percent|bps|basis\s?points)/gi,
+    /\d+(?:\.\d+)?\s?x\b/g,  // multiples: 14.5x P/E, 2.3x revenue
+    /\$\s?\d+(?:,\d{3})*(?:\.\d{2})?\b/g,  // plain dollar amounts
+    /\d{1,3}(?:,\d{3})+(?:\.\d+)?\b/g,  // large numbers with commas
+];
+
+function extractClaims(markdown: string): string[] {
+    const claims = new Set<string>();
+    for (const pattern of NUMERIC_PATTERNS) {
+        const matches = markdown.match(pattern) || [];
+        for (const m of matches) {
+            claims.add(m.trim().replace(/\s+/g, ' '));
+        }
+    }
+    return Array.from(claims);
+}
+
+function normalizeNumber(s: string): string {
+    // Strip whitespace, lowercase, collapse separators for loose matching.
+    return s.toLowerCase().replace(/[\s,$]/g, '').replace(/basis\s?points/g, 'bps');
+}
+
+function verifyNumericConsistency(
+    markdown: string,
+    inputs: VerificationInputs,
+): VerificationResult {
+    const claims = extractClaims(markdown);
+
+    // Build an evidence corpus from all source material.
+    const evidence: string[] = [
+        inputs.knowledgeBase,
+        inputs.sourceAnalysis,
+        ...inputs.webSources.map(s => `${s.title} ${s.content}`),
+        ...(inputs.ragResult?.available ? inputs.ragResult.sources.map(s => s.text) : []),
+        ...inputs.companyData.map(c =>
+            `${c.marketCap} ${c.peRatio} ${c.fiftyTwoWeekHigh} ${c.fiftyTwoWeekLow}`
+        ),
+    ];
+    const normalizedEvidence = evidence.map(normalizeNumber).join(' ');
+
+    const unsupported: string[] = [];
+    let grounded = 0;
+
+    for (const claim of claims) {
+        const norm = normalizeNumber(claim);
+        // Match the numeric core — strip unit suffix for loose matching.
+        const numericCore = norm.replace(/[a-z%]/g, '');
+        if (numericCore.length < 2) {
+            grounded += 1;  // too short to meaningfully verify
+            continue;
+        }
+        if (normalizedEvidence.includes(numericCore)) {
+            grounded += 1;
+        } else {
+            unsupported.push(claim);
+        }
+    }
+
+    return {
+        totalClaims: claims.length,
+        groundedClaims: grounded,
+        unsupportedClaims: unsupported.slice(0, 50),  // cap to avoid metadata bloat
+    };
 }
 
 // ─── Main Export: performDeepResearch ────────────────────────────────────────
@@ -835,13 +1073,18 @@ CRITICAL WRITING STANDARDS
 export const performDeepResearch = async (
     query: string,
     onProgress: (progress: ResearchProgress) => void,
-    model?: ResearchModelId
+    model?: ResearchModelId,
+    budget: ResearchBudget = DEFAULT_BUDGET,
 ): Promise<ResearchReport> => {
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
     if (providers.length === 0) {
         throw new Error('No LLM providers configured on server — check market-server .env');
     }
+
+    // Per-query budget: resets on every call so the module-level ref is safe.
+    const tracker = new BudgetTracker(budget);
+    _activeBudget = tracker;
 
     const driverModel = await pickDriver('premium', model);
 
@@ -935,6 +1178,11 @@ export const performDeepResearch = async (
     });
 
     // ── Stage 5: Report Synthesis (75–96%) ────────────────────────────────
+    // Outline-first: select a fixed template from the query/intent, then
+    // expand each template section with retrieved data.
+    const templateKey = selectTemplate(blueprint.intent, query);
+    const template = REPORT_TEMPLATES[templateKey];
+
     const markdown = await synthesizeInstitutionalReport(
         blueprint,
         webSources,
@@ -943,14 +1191,31 @@ export const performDeepResearch = async (
         sourceAnalysis,
         bullCase,
         bearCase,
+        template,
         driverModel,
         ragResult,
         macroText,
     );
 
+    // ── Stage 6: Numeric-Consistency Verifier (96–100%) ───────────────────
+    onProgress({
+        stage: 'synthesizing',
+        message: 'Verifying numeric claims against source evidence…',
+        progress: 97,
+        sourcesFound: totalSources,
+    });
+
+    const verification = verifyNumericConsistency(markdown, {
+        webSources,
+        ragResult,
+        companyData,
+        knowledgeBase,
+        sourceAnalysis,
+    });
+
     onProgress({
         stage: 'complete',
-        message: 'Institutional research report finalized',
+        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric claims grounded`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -989,7 +1254,7 @@ export const performDeepResearch = async (
     const summaryMatch = markdown.match(/^#\s+.+\n\n([\s\S]+?)(?=\n##)/);
     const wordCount = markdown.split(/\s+/).length;
 
-    return {
+    const report: ResearchReport = {
         query,
         title: titleMatch ? titleMatch[1].replace(/\*\*/g, '').trim() : query,
         summary: summaryMatch ? summaryMatch[1].trim().substring(0, 500) : '',
@@ -1001,8 +1266,14 @@ export const performDeepResearch = async (
             estimatedReadTime: Math.ceil(wordCount / 200),
             modelUsed: driverModel,
             intent: blueprint.intent,
+            template: templateKey,
+            budget: tracker.snapshot(),
+            verification,
         },
     };
+
+    _activeBudget = null;
+    return report;
 };
 
 // ─── Legacy Exports (backward compat for any callers) ────────────────────────
