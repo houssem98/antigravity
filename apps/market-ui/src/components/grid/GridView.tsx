@@ -17,6 +17,7 @@ import {
     type CellRunnerDeps,
 } from '../../services/gridResearch';
 import { saveGridRun, loadLatestGridRun, listGridRuns, loadGridRun, deleteGridRun, type SavedGridRow } from '../../services/gridStore';
+import { exportGridToXLSX, downloadBlob } from '../../services/gridExcel';
 
 const LLM_PROXY_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/llm/chat`;
 
@@ -106,19 +107,19 @@ export default function GridView() {
         }
     };
 
+    const stampedName = (ext: string) =>
+        `grid-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`;
+
     const handleExportCSV = () => {
         if (!state) return;
-        const csv = toCSV(state);
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        a.href = url;
-        a.download = `grid-${stamp}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        const blob = new Blob([toCSV(state)], { type: 'text/csv;charset=utf-8' });
+        downloadBlob(blob, stampedName('csv'));
+    };
+
+    const handleExportXLSX = async () => {
+        if (!state) return;
+        const blob = await exportGridToXLSX(state);
+        downloadBlob(blob, stampedName('xlsx'));
     };
 
     const handleLoadHistory = async (id: string) => {
@@ -236,14 +237,24 @@ export default function GridView() {
                         <div className="flex-1" />
 
                         {state && !running && progress && progress.done > 0 && (
-                            <button
-                                onClick={handleExportCSV}
-                                title="Export CSV"
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs text-[color:var(--text-2)] border border-[color:var(--line)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
-                            >
-                                <Download className="w-3.5 h-3.5" />
-                                CSV
-                            </button>
+                            <>
+                                <button
+                                    onClick={handleExportCSV}
+                                    title="Export CSV"
+                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs text-[color:var(--text-2)] border border-[color:var(--line)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    CSV
+                                </button>
+                                <button
+                                    onClick={handleExportXLSX}
+                                    title="Export Excel (formatted, with Sources sheet)"
+                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs text-[color:var(--accent-ink)] bg-[color:var(--accent)] hover:opacity-90 transition-opacity"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    Excel
+                                </button>
+                            </>
                         )}
 
                         {history.length > 0 && (

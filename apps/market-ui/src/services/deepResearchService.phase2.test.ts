@@ -8,6 +8,10 @@ import {
     ResearchCancelledError,
     extractClaims,
     verifyNumericConsistency,
+    extractClaimSentences,
+    buildClaimJudgePrompt,
+    parseClaimVerdicts,
+    auditClaimsWithLLM,
 } from './deepResearchService';
 import {
     scoreReport,
@@ -30,6 +34,7 @@ import {
     type GridDef,
     type CellRunnerDeps,
 } from './gridResearch';
+import { buildGridSheetData, buildSourceRows } from './gridExcelData';
 
 let pass = 0;
 let fail = 0;
@@ -310,6 +315,61 @@ check('toCSV pending -> empty field', mixedCsv[1] === 'A,');
 check('toCSV error -> (error: …) marker', mixedCsv[2].includes('(error: boom)'));
 check('toCSV cancelled -> (cancelled) marker', mixedCsv[3].includes('(cancelled)'));
 
+// ─── 6b. Excel data shaping (buildGridSheetData + buildSourceRows) ──────────
+console.log('\n[6b] Excel data shaping');
+
+const xlsxState: any = {
+    def: {
+        id: 'x', name: 'x',
+        tickers: ['AAPL', 'NVDA'],
+        prompts: [
+            { id: 'thesis', label: 'Thesis', prompt: '' },
+            { id: 'risks',  label: 'Risks',  prompt: '' },
+        ],
+    },
+    cells: {
+        'AAPL::thesis': {
+            ticker: 'AAPL', promptId: 'thesis', status: 'done',
+            answer: 'Strong services margin',
+            citations: [
+                { id: 1, title: '10-K FY2025', url: 'https://sec.gov/aapl' },
+                { id: 2, title: 'Q4 earnings call', url: 'https://ir.apple.com' },
+            ],
+        },
+        'AAPL::risks': { ticker: 'AAPL', promptId: 'risks', status: 'error', error: 'rate limited' },
+        'NVDA::thesis': {
+            ticker: 'NVDA', promptId: 'thesis', status: 'done',
+            answer: 'Data-center moat',
+            citations: [{ id: 1, title: '10-Q FY2026', url: 'https://sec.gov/nvda' }],
+        },
+        'NVDA::risks': { ticker: 'NVDA', promptId: 'risks', status: 'pending' },
+    },
+};
+
+const sheet = buildGridSheetData(xlsxState);
+check('buildGridSheetData headers start with Ticker',
+    sheet.headers[0] === 'Ticker');
+check('buildGridSheetData headers include all prompt labels',
+    sheet.headers.slice(1).join('|') === 'Thesis|Risks');
+check('buildGridSheetData row count = tickers',
+    sheet.rows.length === 2);
+check('buildGridSheetData done cell carries answer',
+    sheet.rows[0][1] === 'Strong services margin');
+check('buildGridSheetData error cell has marker',
+    sheet.rows[0][2].startsWith('(error:') && sheet.rows[0][2].includes('rate limited'));
+check('buildGridSheetData pending cell is empty',
+    sheet.rows[1][2] === '');
+
+const srcRows = buildSourceRows(xlsxState);
+check('buildSourceRows flattens citations across cells',
+    srcRows.length === 3);
+check('buildSourceRows carries ticker + prompt label',
+    srcRows[0].ticker === 'AAPL' && srcRows[0].promptLabel === 'Thesis');
+check('buildSourceRows preserves citation id + url',
+    srcRows[0].citationId === 1 && srcRows[0].url === 'https://sec.gov/aapl');
+check('buildSourceRows skips cells without citations',
+    !srcRows.some(r => r.promptLabel === 'Risks'));
+
 // ─── 7. Phase-1 regression (sanity check that earlier helpers still work) ───
 console.log('\n[7] Phase-1 regression');
 const claims = extractClaims('Revenue $35.1B up 94%.');
@@ -322,6 +382,97 @@ const v = verifyNumericConsistency('Revenue $35.1B.', {
     sourceAnalysis: '',
 });
 check('verifyNumericConsistency still works', v.totalClaims > 0 && v.groundedClaims > 0);
+
+// ─── 8. LLM-judge claim verifier ────────────────────────────────────────────
+console.log('\n[8] LLM-judge claim verifier');
+
+const sampleReport = `
+# Apple Q4 FY2025
+
+## Financials
+Apple reported revenue of $94.9B, beating consensus of $94.5B.
+Services revenue grew 12% YoY to $24.9B, a record high.
+Management raised FY2026 guidance to mid-single-digit growth.
+
+## Narrative
+The print was solid.
+
+## Risks
+Greater China revenue fell 4% YoY amid soft iPhone demand.
+Regulatory overhang in the EU remains a concern.
+`;
+
+const claimSents = extractClaimSentences(sampleReport);
+check('extractClaimSentences finds revenue claim',
+    claimSents.some(s => s.includes('$94.9B')));
+check('extractClaimSentences finds services growth claim',
+    claimSents.some(s => s.includes('Services revenue grew 12%')));
+check('extractClaimSentences finds guidance claim',
+    claimSents.some(s => /raised.*guidance/i.test(s)));
+check('extractClaimSentences skips narrative fillers',
+    !claimSents.some(s => s === 'The print was solid.'));
+check('extractClaimSentences strips markdown headers',
+    !claimSents.some(s => s.startsWith('# ')));
+
+// buildClaimJudgePrompt
+const prompt = buildClaimJudgePrompt(
+    ['Revenue was $94.9B.', 'Services grew 12%.'],
+    'Q4 revenue: $94.9B. Services +12% YoY.',
+);
+check('buildClaimJudgePrompt numbers claims',
+    prompt.includes('[1] Revenue was $94.9B.') && prompt.includes('[2] Services grew 12%.'));
+check('buildClaimJudgePrompt embeds evidence',
+    prompt.includes('Q4 revenue: $94.9B'));
+check('buildClaimJudgePrompt asks for JSON',
+    /Return ONLY valid JSON/i.test(prompt));
+
+// parseClaimVerdicts — happy path
+const parsed = parseClaimVerdicts(
+    '{"verdicts":[{"i":1,"status":"supported","reason":"exact match"},{"i":2,"status":"partial","reason":"no pct"}]}',
+    ['Revenue $94.9B.', 'Services grew 12%.'],
+);
+check('parseClaimVerdicts returns N verdicts', parsed.length === 2);
+check('parseClaimVerdicts maps i→claim text', parsed[0].claim === 'Revenue $94.9B.');
+check('parseClaimVerdicts preserves status', parsed[0].status === 'supported' && parsed[1].status === 'partial');
+check('parseClaimVerdicts preserves reason', parsed[0].reason === 'exact match');
+
+// parseClaimVerdicts — malformed inputs
+check('parseClaimVerdicts tolerates non-JSON',
+    parseClaimVerdicts('sorry, I can\'t', ['x']).length === 0);
+check('parseClaimVerdicts drops out-of-range indices',
+    parseClaimVerdicts('{"verdicts":[{"i":99,"status":"supported"}]}', ['x']).length === 0);
+check('parseClaimVerdicts defaults bad status to unsupported',
+    parseClaimVerdicts('{"verdicts":[{"i":1,"status":"maybe"}]}', ['x'])[0].status === 'unsupported');
+check('parseClaimVerdicts accepts JSON wrapped in prose',
+    parseClaimVerdicts('Here is my verdict: {"verdicts":[{"i":1,"status":"supported"}]} done.', ['x']).length === 1);
+
+// auditClaimsWithLLM — inject a fake LLM and check it does the right thing
+const fakeAudit = await auditClaimsWithLLM(
+    sampleReport,
+    {
+        webSources: [{ title: 'Apple 10-Q', content: 'Revenue $94.9B Services $24.9B +12% YoY.', url: '', source: '' } as any],
+        ragResult: undefined,
+        companyData: [],
+        knowledgeBase: '',
+        sourceAnalysis: '',
+    },
+    {
+        maxClaims: 10,
+        callLLM: async (_p) =>
+            '{"verdicts":[{"i":1,"status":"supported","reason":"match"},{"i":2,"status":"supported","reason":"match"},{"i":3,"status":"partial","reason":"guidance not quoted"}]}',
+    },
+);
+check('auditClaimsWithLLM returns verdicts', fakeAudit.length >= 2);
+check('auditClaimsWithLLM first verdict carries claim text',
+    !!fakeAudit[0].claim && fakeAudit[0].claim.length > 5);
+
+// auditClaimsWithLLM swallows LLM errors (best-effort)
+const errorAudit = await auditClaimsWithLLM(
+    sampleReport,
+    { webSources: [], ragResult: undefined, companyData: [], knowledgeBase: '', sourceAnalysis: '' },
+    { callLLM: async () => { throw new Error('rate limited'); } },
+);
+check('auditClaimsWithLLM returns [] when LLM throws', errorAudit.length === 0);
 
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');

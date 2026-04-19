@@ -217,6 +217,13 @@ export interface ResearchReport {
             groundedClaims: number;
             unsupportedClaims: string[];
         };
+        claimAudit?: {
+            audited: number;
+            supported: number;
+            partial: number;
+            unsupported: number;
+            flags: ClaimVerdict[];
+        };
     };
 }
 
@@ -1045,6 +1052,134 @@ function normalizeNumber(s: string): string {
     return s.toLowerCase().replace(/[\s,$]/g, '').replace(/basis\s?points/g, 'bps');
 }
 
+// ─── Sentence-level claim extraction for LLM-judge ──────────────────────────
+// A "claim sentence" is one that makes a quantitative or named assertion worth
+// checking: contains a number, a dollar/percent/multiple, a named entity in
+// quotes, or a tell-tale verb of attribution. We skip pure narrative sentences
+// (headers, transitions) to keep the verifier budget tight.
+
+const CLAIM_TRIGGERS = /(\$|%|bps|basis\s?points|million|billion|trillion|\d+(?:\.\d+)?\s?x\b|guidance|reported|announced|raised|cut|beat|missed|consensus|target\b|forecast|estimate)/i;
+
+export function extractClaimSentences(markdown: string, limit = 40): string[] {
+    // Strip markdown syntax that confuses sentence splitting.
+    const stripped = markdown
+        .replace(/^#+\s.*$/gm, '')           // headers
+        .replace(/^\s*>\s?/gm, '')           // blockquotes
+        .replace(/\|[^\n]*\|/g, '')          // table rows
+        .replace(/\[\d+\]/g, '')             // citation markers
+        .replace(/\[RAG-\d+\]/g, '')
+        .replace(/\*+/g, '')                 // bold/italic marks
+        .replace(/`[^`]*`/g, '');            // inline code
+
+    // Split on sentence boundaries but keep decimals like $35.1B intact by
+    // requiring the period to be followed by whitespace and a capital/newline.
+    const sentences = stripped
+        .split(/(?<=[.!?])\s+(?=[A-Z(])|\n{2,}/)
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length >= 25 && s.length <= 400);
+
+    const seen = new Set<string>();
+    const claims: string[] = [];
+    for (const s of sentences) {
+        if (!CLAIM_TRIGGERS.test(s)) continue;
+        const key = s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        claims.push(s);
+        if (claims.length >= limit) break;
+    }
+    return claims;
+}
+
+// ─── LLM-Judge Verifier (cheap NLI proxy) ───────────────────────────────────
+// Batches claims into a single lite-tier LLM call. The judge returns a verdict
+// per claim grounded in the evidence block we provide. Cheaper than a true NLI
+// model (DeBERTa-v3-MNLI) and requires no extra infra — good enough to catch
+// the 80% of hallucinations that slip past the numeric verifier.
+
+export type ClaimStatus = 'supported' | 'partial' | 'unsupported';
+
+export interface ClaimVerdict {
+    claim: string;
+    status: ClaimStatus;
+    reason?: string;
+}
+
+export function buildClaimJudgePrompt(claims: string[], evidence: string): string {
+    const numbered = claims.map((c, i) => `[${i + 1}] ${c}`).join('\n');
+    return `You are a fact-checking auditor for an institutional research report. For each claim below, decide whether the evidence block supports it.
+
+EVIDENCE (verbatim excerpts from source material):
+${evidence.substring(0, 8000)}
+
+CLAIMS TO AUDIT:
+${numbered}
+
+For each claim, return one verdict:
+- "supported"   — the evidence clearly entails the claim (same figures / facts appear)
+- "partial"     — the evidence is related but doesn't fully confirm (e.g., covers the topic but lacks the exact number)
+- "unsupported" — the evidence does not contain the claim's key fact; treat as a hallucination risk
+
+Return ONLY valid JSON (no markdown, no prose):
+{"verdicts": [{"i": 1, "status": "supported|partial|unsupported", "reason": "<10 words"}, ...]}
+
+Rules:
+- Judge each claim independently.
+- If the claim is qualitative/narrative and the evidence broadly covers the topic, mark "supported".
+- Never invent evidence — if the claim asks about something absent from the evidence, mark "unsupported".`;
+}
+
+export function parseClaimVerdicts(
+    llmText: string,
+    claims: string[],
+): ClaimVerdict[] {
+    const match = llmText.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    let parsed: any;
+    try { parsed = JSON.parse(match[0]); } catch { return []; }
+    const raw = Array.isArray(parsed?.verdicts) ? parsed.verdicts : [];
+    const out: ClaimVerdict[] = [];
+    for (const v of raw) {
+        const idx = Number(v?.i);
+        if (!Number.isInteger(idx) || idx < 1 || idx > claims.length) continue;
+        const status = (v?.status === 'supported' || v?.status === 'partial' || v?.status === 'unsupported')
+            ? v.status as ClaimStatus
+            : 'unsupported';
+        out.push({
+            claim: claims[idx - 1],
+            status,
+            reason: typeof v?.reason === 'string' ? v.reason.slice(0, 120) : undefined,
+        });
+    }
+    return out;
+}
+
+export async function auditClaimsWithLLM(
+    markdown: string,
+    inputs: VerificationInputs,
+    options: { maxClaims?: number; callLLM?: (prompt: string) => Promise<string> } = {},
+): Promise<ClaimVerdict[]> {
+    const claims = extractClaimSentences(markdown, options.maxClaims ?? 30);
+    if (claims.length === 0) return [];
+
+    const evidence = [
+        inputs.knowledgeBase,
+        inputs.sourceAnalysis,
+        ...inputs.webSources.slice(0, 20).map(s => `${s.title}: ${s.content}`),
+        ...(inputs.ragResult?.available ? inputs.ragResult.sources.slice(0, 10).map(s => s.text) : []),
+    ].join('\n\n').slice(0, 8000);
+
+    const prompt = buildClaimJudgePrompt(claims, evidence);
+    const call = options.callLLM ?? ((p: string) => callDriver(p, 'lite'));
+
+    try {
+        const text = await call(prompt);
+        return parseClaimVerdicts(text, claims);
+    } catch {
+        return [];   // verifier is best-effort — never block the report
+    }
+}
+
 export function verifyNumericConsistency(
     markdown: string,
     inputs: VerificationInputs,
@@ -1243,9 +1378,38 @@ export const performDeepResearch = async (
         sourceAnalysis,
     });
 
+    // Second-pass LLM-judge audit on sentence-level claims. Budget-gated: skip
+    // if the tracker would blow past its cap. Failure is silent — the numeric
+    // verifier above is the primary gate.
+    let claimAudit: ResearchReport['metadata']['claimAudit'];
+    try {
+        const remaining = tracker.budget.maxLLMCalls - tracker.llmCalls;
+        if (remaining >= 1) {
+            const verdicts = await auditClaimsWithLLM(markdown, {
+                webSources,
+                ragResult,
+                companyData,
+                knowledgeBase,
+                sourceAnalysis,
+            });
+            if (verdicts.length > 0) {
+                claimAudit = {
+                    audited: verdicts.length,
+                    supported:   verdicts.filter(v => v.status === 'supported').length,
+                    partial:     verdicts.filter(v => v.status === 'partial').length,
+                    unsupported: verdicts.filter(v => v.status === 'unsupported').length,
+                    flags: verdicts.filter(v => v.status !== 'supported').slice(0, 20),
+                };
+            }
+        }
+    } catch { /* verifier is advisory — never block */ }
+
+    const auditTail = claimAudit
+        ? ` · ${claimAudit.supported}/${claimAudit.audited} claims supported`
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric claims grounded`,
+        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -1299,6 +1463,7 @@ export const performDeepResearch = async (
             template: templateKey,
             budget: tracker.snapshot(),
             verification,
+            claimAudit,
         },
     };
 

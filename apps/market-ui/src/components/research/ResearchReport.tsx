@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.template || report.metadata.verification || report.metadata.budget) && (
+                    {(report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.template && (
                                 <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
@@ -414,6 +414,22 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={v.unsupportedClaims.length > 0 ? `Unsupported: ${v.unsupportedClaims.slice(0, 5).join(', ')}` : 'All numeric claims grounded in sources'}>
                                         <Shield className="w-3 h-3" />
                                         <span>{v.groundedClaims}/{v.totalClaims} numeric claims grounded</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.claimAudit && report.metadata.claimAudit.audited > 0 && (() => {
+                                const a = report.metadata.claimAudit!;
+                                const rate = a.supported / a.audited;
+                                const bg = rate >= 0.85 ? 'rgba(34, 197, 94, 0.12)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.12)' : 'rgba(239, 68, 68, 0.12)';
+                                const border = rate >= 0.85 ? 'rgba(34, 197, 94, 0.25)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)';
+                                const color = rate >= 0.85 ? '#86EFAC' : rate >= 0.6 ? '#FDE68A' : '#FCA5A5';
+                                const flagged = a.flags.map(f => `[${f.status}] ${f.claim.slice(0, 80)}`).join('\n');
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={flagged || 'All audited claims supported'}>
+                                        <Shield className="w-3 h-3" />
+                                        <span>{a.supported}/{a.audited} claims LLM-audited</span>
                                     </div>
                                 );
                             })()}
