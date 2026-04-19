@@ -1,7 +1,9 @@
-// Tavily Web Search Service
-// Provides web research capabilities with content extraction
+// Tavily Web Search — thin client over market-server /api/tavily/search.
+// Keys never leave the server.
 
-import { getApiKeys } from './apiKeys';
+import { getAccessToken } from './supabase';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3002';
 
 export interface TavilySearchResult {
     title: string;
@@ -17,56 +19,44 @@ export interface TavilySearchResponse {
     images?: string[];
 }
 
+async function postTavily(query: string, maxResults: number): Promise<TavilySearchResponse> {
+    const token = await getAccessToken();
+    if (!token) throw new Error('Not authenticated — sign in to run web search');
+
+    const res = await fetch(`${API_BASE}/api/tavily/search`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+            query,
+            max_results: maxResults,
+            search_depth: 'advanced',
+        }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `Tavily proxy failed (${res.status})`);
+    }
+    const data = await res.json();
+    return {
+        query,
+        results: data.results || [],
+        images: data.images || [],
+    };
+}
+
 export const searchWeb = async (
     query: string,
-    maxResults: number = 10
-): Promise<TavilySearchResponse> => {
-    const { tavily } = getApiKeys();
-
-    if (!tavily) {
-        throw new Error('Tavily API key not configured');
-    }
-
-    try {
-        const response = await fetch('https://api.tavily.com/search', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                api_key: tavily,
-                query,
-                max_results: maxResults,
-                search_depth: 'advanced',
-                include_answer: false,
-                include_raw_content: false,
-                include_images: false,
-            }),
-        });
-
-        if (!response.ok) {
-            throw new Error(`Tavily API error: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-
-        return {
-            query,
-            results: data.results || [],
-            images: data.images || [],
-        };
-    } catch (error) {
-        console.error('Tavily search error:', error);
-        throw error;
-    }
-};
+    maxResults: number = 10,
+): Promise<TavilySearchResponse> => postTavily(query, maxResults);
 
 export const searchMultipleQueries = async (
     queries: string[],
-    maxResultsPerQuery: number = 5
+    maxResultsPerQuery: number = 5,
 ): Promise<TavilySearchResult[]> => {
     const allResults: TavilySearchResult[] = [];
-
     for (const query of queries) {
         try {
             const response = await searchWeb(query, maxResultsPerQuery);
@@ -75,33 +65,22 @@ export const searchMultipleQueries = async (
             console.error(`Failed to search for "${query}":`, error);
         }
     }
-
-    // Deduplicate by URL
-    const uniqueResults = Array.from(
-        new Map(allResults.map(r => [r.url, r])).values()
-    );
-
-    // Sort by relevance score
+    const uniqueResults = Array.from(new Map(allResults.map(r => [r.url, r])).values());
     return uniqueResults.sort((a, b) => b.score - a.score);
 };
 
 // Parallel version — fires all queries simultaneously for maximum speed
 export const searchMultipleQueriesParallel = async (
     queries: string[],
-    maxResultsPerQuery: number = 6
+    maxResultsPerQuery: number = 6,
 ): Promise<TavilySearchResult[]> => {
     const settled = await Promise.allSettled(
         queries.slice(0, 12).map(q => searchWeb(q, maxResultsPerQuery))
     );
-
     const allResults: TavilySearchResult[] = [];
     for (const r of settled) {
         if (r.status === 'fulfilled') allResults.push(...r.value.results);
     }
-
-    const uniqueResults = Array.from(
-        new Map(allResults.map(r => [r.url, r])).values()
-    );
-
+    const uniqueResults = Array.from(new Map(allResults.map(r => [r.url, r])).values());
     return uniqueResults.sort((a, b) => b.score - a.score);
 };

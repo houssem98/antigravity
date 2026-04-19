@@ -15,7 +15,7 @@ import {
     LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import { hasRequiredKeys } from '../services/apiKeys';
+import { fetchServerKeyStatus, hasRequiredKeysAsync } from '../services/apiKeys';
 import {
     performDeepResearch,
     GEMINI_MODELS,
@@ -594,8 +594,8 @@ export default function SearchPage() {
 
     const runResearch = async (searchQuery: string) => {
         if (!searchQuery.trim() || isResearching) return;
-        if (!hasRequiredKeys()) {
-            setResearchError('Please configure your API keys in Settings first');
+        if (!(await hasRequiredKeysAsync())) {
+            setResearchError('Server is missing required API keys (LLM provider + Tavily). Check Settings.');
             return;
         }
         setIsResearching(true);

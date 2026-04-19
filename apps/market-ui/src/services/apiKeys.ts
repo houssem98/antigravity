@@ -1,97 +1,77 @@
-// API Key Management Service
-// Reads from .env file (VITE_ prefixed), with localStorage overrides
+// Server-configured API key status.
+// Keys never live in the browser — market-server proxies LLM, Tavily, and Alpha
+// Vantage calls using keys from its own env. This module just reads server
+// availability so the UI can gate features and render status.
 
-export interface ApiKeys {
-    gemini: string;
-    tavily: string;
-    alphaVantage: string;
-    anthropic: string;
-    deepseek: string;
-    groq: string;
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3002';
+
+export interface ServerKeyStatus {
+    llm: {
+        anthropic: boolean;
+        gemini: boolean;
+        deepseek: boolean;
+        groq: boolean;
+    };
+    tavily: boolean;
+    alphaVantage: boolean;
 }
 
-const STORAGE_KEY = 'market_intelligence_api_keys';
-
-// Environment defaults from .env file
-const ENV_KEYS: ApiKeys = {
-    gemini: import.meta.env.VITE_GEMINI_API_KEY || '',
-    tavily: import.meta.env.VITE_TAVILY_API_KEY || '',
-    alphaVantage: import.meta.env.VITE_ALPHA_VANTAGE_API_KEY || '',
-    anthropic: import.meta.env.VITE_ANTHROPIC_API_KEY || '',
-    deepseek: import.meta.env.VITE_DEEPSEEK_API_KEY || '',
-    groq: import.meta.env.VITE_GROQ_API_KEY || '',
+const EMPTY_STATUS: ServerKeyStatus = {
+    llm: { anthropic: false, gemini: false, deepseek: false, groq: false },
+    tavily: false,
+    alphaVantage: false,
 };
 
-export const getApiKeys = (): ApiKeys => {
-    // Check localStorage for user overrides first
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
+let _cached: ServerKeyStatus | null = null;
+let _inflight: Promise<ServerKeyStatus> | null = null;
+
+export async function fetchServerKeyStatus(force = false): Promise<ServerKeyStatus> {
+    if (!force && _cached) return _cached;
+    if (_inflight) return _inflight;
+
+    _inflight = (async () => {
         try {
-            const parsed = JSON.parse(stored);
-            // Merge: use localStorage values if set, otherwise fall back to .env
-            return {
-                gemini: parsed.gemini || ENV_KEYS.gemini,
-                tavily: parsed.tavily || ENV_KEYS.tavily,
-                alphaVantage: parsed.alphaVantage || ENV_KEYS.alphaVantage,
-                anthropic: parsed.anthropic || ENV_KEYS.anthropic,
-                deepseek: parsed.deepseek || ENV_KEYS.deepseek,
-                groq: parsed.groq || ENV_KEYS.groq,
+            const res = await fetch(`${API_BASE}/api/llm/providers`);
+            if (!res.ok) return EMPTY_STATUS;
+            const data = await res.json();
+            const providerMap: Record<string, boolean> = {};
+            for (const p of data.providers ?? []) providerMap[p.id] = !!p.available;
+            const status: ServerKeyStatus = {
+                llm: {
+                    anthropic: !!providerMap.anthropic,
+                    gemini:    !!providerMap.gemini,
+                    deepseek:  !!providerMap.deepseek,
+                    groq:      !!providerMap.groq,
+                },
+                tavily:       !!data.dataProviders?.tavily,
+                alphaVantage: !!data.dataProviders?.alphaVantage,
             };
+            _cached = status;
+            return status;
         } catch {
-            return { ...ENV_KEYS };
+            return EMPTY_STATUS;
+        } finally {
+            _inflight = null;
         }
-    }
-    return { ...ENV_KEYS };
-};
+    })();
+    return _inflight;
+}
 
-export const saveApiKeys = (keys: ApiKeys): void => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
-};
+export function getCachedKeyStatus(): ServerKeyStatus | null {
+    return _cached;
+}
 
-export const hasRequiredKeys = (): boolean => {
-    const keys = getApiKeys();
-    // Deep Research needs: (1) at least ONE LLM driver, (2) Tavily for web search.
-    // Alpha Vantage is optional — the pipeline degrades gracefully without it.
-    const hasAnyLLM = !!(keys.gemini || keys.anthropic || keys.deepseek || keys.groq);
-    return hasAnyLLM && !!keys.tavily;
-};
+// Synchronous check using the last fetched cache. Call fetchServerKeyStatus()
+// before relying on this (e.g. at app mount).
+export function hasRequiredKeys(): boolean {
+    const s = _cached;
+    if (!s) return false;
+    const anyLLM = s.llm.anthropic || s.llm.gemini || s.llm.deepseek || s.llm.groq;
+    return anyLLM && s.tavily;
+}
 
-export const validateGeminiKey = async (apiKey: string): Promise<boolean> => {
-    try {
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
-        );
-        return response.ok;
-    } catch {
-        return false;
-    }
-};
-
-export const validateTavilyKey = async (apiKey: string): Promise<boolean> => {
-    try {
-        const response = await fetch('https://api.tavily.com/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                api_key: apiKey,
-                query: 'test',
-                max_results: 1,
-            }),
-        });
-        return response.ok;
-    } catch {
-        return false;
-    }
-};
-
-export const validateAlphaVantageKey = async (apiKey: string): Promise<boolean> => {
-    try {
-        const response = await fetch(
-            `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=IBM&apikey=${apiKey}`
-        );
-        const data = await response.json();
-        return !data['Error Message'] && !data['Note'];
-    } catch {
-        return false;
-    }
-};
+export async function hasRequiredKeysAsync(): Promise<boolean> {
+    const s = await fetchServerKeyStatus();
+    const anyLLM = s.llm.anthropic || s.llm.gemini || s.llm.deepseek || s.llm.groq;
+    return anyLLM && s.tavily;
+}

@@ -54,6 +54,10 @@ llmRouter.get('/providers', (_req, res) => {
             id, name: info.name, available: info.available,
         })),
         models: models.filter(m => m.available),
+        dataProviders: {
+            tavily:       !!process.env.TAVILY_API_KEY,
+            alphaVantage: !!process.env.ALPHA_VANTAGE_API_KEY,
+        },
     });
 });
 
