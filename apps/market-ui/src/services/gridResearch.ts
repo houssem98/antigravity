@@ -214,3 +214,31 @@ export const SEED_GRID_PROMPTS: GridPrompt[] = [
     { id: 'valuation', label: 'Valuation',    prompt: 'What is {ticker}\'s current valuation vs peers and historical average? Flag any dislocations.' },
     { id: 'preview',   label: 'Next Print',   prompt: 'What are consensus expectations for {ticker}\'s next earnings print? Where could it surprise?' },
 ];
+
+// ─── CSV Export ──────────────────────────────────────────────────────────────
+// RFC-4180: wrap fields that contain comma / quote / newline in double quotes;
+// escape embedded quotes by doubling them. Empty strings are allowed.
+
+function csvEscape(value: unknown): string {
+    const s = value == null ? '' : String(value);
+    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+}
+
+export function toCSV(state: GridState): string {
+    const header = ['ticker', ...state.def.prompts.map(p => p.label)];
+    const rows: string[][] = [header];
+    for (const ticker of state.def.tickers) {
+        const row: string[] = [ticker];
+        for (const p of state.def.prompts) {
+            const cell = state.cells[cellKey(ticker, p.id)];
+            if (!cell || cell.status === 'pending') row.push('');
+            else if (cell.status === 'running') row.push('(running)');
+            else if (cell.status === 'error') row.push(`(error: ${cell.error ?? 'unknown'})`);
+            else if (cell.status === 'cancelled') row.push('(cancelled)');
+            else row.push(cell.answer ?? '');
+        }
+        rows.push(row);
+    }
+    return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+}

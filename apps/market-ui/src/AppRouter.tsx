@@ -42,8 +42,8 @@ export default function AppRouter() {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-[#070A12] flex items-center justify-center">
-                <div className="w-8 h-8 rounded-full border-2 border-[#00F0FF] border-t-transparent animate-spin" />
+            <div className="min-h-screen bg-[color:var(--bg)] flex items-center justify-center">
+                <div className="w-6 h-6 rounded-full border-2 border-[color:var(--accent)] border-t-transparent animate-spin" />
             </div>
         );
     }
@@ -63,7 +63,7 @@ export default function AppRouter() {
                     <AppLayout />
                 </ProtectedRoute>
             }>
-                {/* Unified search: QA + Deep Research */}
+                {/* Unified search: Research Grid + QA + Deep Research */}
                 <Route path="/search" element={<SearchPage />} />
 
                 {/* Redirect old /research to unified search */}

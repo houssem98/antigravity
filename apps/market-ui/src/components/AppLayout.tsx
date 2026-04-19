@@ -31,57 +31,64 @@ export default function AppLayout() {
         navigate('/auth');
     };
 
+    const itemIdle = "text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]";
+    const itemActive = "text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]";
+
     return (
-        <div className="min-h-screen bg-[#070A12] flex">
+        <div className="min-h-screen flex bg-[color:var(--bg)] text-[color:var(--text-2)]">
             {/* Sidebar */}
-            <aside className="w-[72px] bg-[#070A12] border-r border-[rgba(255,255,255,0.05)] flex flex-col items-center py-6 fixed h-full z-50">
-                {/* Logo */}
-                <Link to="/search" className="w-10 h-10 rounded-xl bg-[#5B8DF6]/10 flex items-center justify-center mb-8">
-                    <Sparkles className="w-5 h-5 text-[#5B8DF6]" />
+            <aside className="w-14 bg-[color:var(--surface)] border-r border-[color:var(--line)] flex flex-col items-center py-3 fixed h-full z-50">
+                <Link
+                    to="/search"
+                    className="w-8 h-8 rounded-sm flex items-center justify-center mb-4 bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]"
+                    title="Antigravity"
+                >
+                    <Sparkles className="w-4 h-4 text-[color:var(--accent)]" />
                 </Link>
 
-                <nav className="flex flex-col gap-3 flex-1">
+                <nav className="flex flex-col gap-1 flex-1 stagger">
                     {NAV.map(({ to, icon: Icon, label }) => (
                         <Link
                             key={to}
                             to={to}
                             title={label}
-                            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${isActive(to) ? 'bg-white/[0.08]' : 'hover:bg-white/[0.07]'
-                                }`}
+                            className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ${isActive(to) ? itemActive : itemIdle}`}
                         >
-                            <Icon className={`w-5 h-5 ${isActive(to) ? 'text-[#5B8DF6]' : 'text-[#A7B0C8]'}`} />
+                            <Icon className="w-4 h-4" />
                         </Link>
                     ))}
                 </nav>
 
-                {/* Sign out */}
                 <button
                     onClick={handleSignOut}
                     title="Sign Out"
-                    className="w-10 h-10 rounded-xl flex items-center justify-center hover:bg-red-500/10 transition-colors group"
+                    className="w-8 h-8 rounded-sm flex items-center justify-center text-[color:var(--text-3)] hover:text-[color:var(--down)] hover:bg-[color:var(--surface-2)] transition-colors"
                 >
-                    <LogOut className="w-5 h-5 text-[#A7B0C8] group-hover:text-red-400" />
+                    <LogOut className="w-4 h-4" />
                 </button>
             </aside>
 
             {/* Main content */}
-            <div className="flex-1 ml-[72px]">
-                <header className="h-16 bg-[rgba(7,10,18,0.95)] border-b border-[rgba(255,255,255,0.05)] flex items-center justify-between px-6 fixed top-0 right-0 left-[72px] z-40">
+            <div className="flex-1 ml-14">
+                <header className="h-12 bg-[color:var(--surface)] border-b border-[color:var(--line)] flex items-center justify-between px-3 fixed top-0 right-0 left-14 z-40 fade-in">
                     <div className="flex items-center gap-2">
-                        <Sparkles className="w-6 h-6 text-[#5B8DF6]" />
-                        <span className="font-semibold text-lg tracking-tight">Antigravity</span>
-                        <span className="text-[#4A5568] text-sm ml-1">Market Intelligence</span>
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2 text-xs text-[#A7B0C8]">
-                            <Activity className="w-4 h-4 text-[#5B8DF6]" />
-                            <span className="text-[#5B8DF6]">●</span> Live
+                        <div className="w-6 h-6 rounded-sm flex items-center justify-center bg-[color:var(--accent)] glint chrome">
+                            <Sparkles className="w-3.5 h-3.5 text-[color:var(--accent-ink)]" />
                         </div>
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3D7FF6] to-[#7C3AED]" />
+                        <span className="font-display font-semibold text-h4 text-[color:var(--text)] tracking-tight">Antigravity</span>
+                        <span className="label ml-1">MARKET INTELLIGENCE</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5 label">
+                            <Activity className="w-3 h-3 text-[color:var(--accent)]" />
+                            <span className="text-[color:var(--up)] pulse-dot">●</span>
+                            <span>LIVE</span>
+                        </div>
+                        <div className="w-6 h-6 rounded-sm bg-[color:var(--surface-2)] border border-[color:var(--line)]" />
                     </div>
                 </header>
 
-                <main className="pt-16 min-h-screen">
+                <main className="pt-12 min-h-screen bg-[color:var(--bg)]">
                     <Outlet />
                 </main>
             </div>

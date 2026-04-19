@@ -25,6 +25,7 @@ import {
     resolvePrompt,
     runGridCell,
     runGrid,
+    toCSV,
     SEED_GRID_PROMPTS,
     type GridDef,
     type CellRunnerDeps,
@@ -267,6 +268,47 @@ check('runGrid sets startedAt', !!finalState.startedAt);
 check('SEED_GRID_PROMPTS has 6 entries', SEED_GRID_PROMPTS.length === 6);
 check('SEED_GRID_PROMPTS all use {ticker}',
     SEED_GRID_PROMPTS.every(p => p.prompt.includes('{ticker}')));
+
+// toCSV
+const csv = toCSV(finalState);
+const csvLines = csv.split('\r\n');
+check('toCSV has header + N rows', csvLines.length === 1 + state0.def.tickers.length);
+check('toCSV header first col is ticker', csvLines[0].startsWith('ticker,'));
+check('toCSV header includes all prompt labels',
+    state0.def.prompts.every(p => csvLines[0].includes(p.label)));
+check('toCSV ticker col matches def',
+    state0.def.tickers.every((t, i) => csvLines[i + 1].startsWith(t + ',')));
+
+// toCSV escaping — answers with commas/quotes/newlines must be quoted
+const escState: any = {
+    def: {
+        id: 'esc', name: 'esc', tickers: ['X'],
+        prompts: [{ id: 'p1', label: 'P1', prompt: '' }],
+    },
+    cells: {
+        'X::p1': { ticker: 'X', promptId: 'p1', status: 'done', answer: 'a,b "c"\nd' },
+    },
+};
+const escCsv = toCSV(escState);
+check('toCSV escapes comma/quote/newline',
+    escCsv.includes('"a,b ""c""\nd"'));
+
+// toCSV emits empty string for pending, marker for error/cancelled
+const mixedState: any = {
+    def: {
+        id: 'm', name: 'm', tickers: ['A', 'B', 'C'],
+        prompts: [{ id: 'p1', label: 'P1', prompt: '' }],
+    },
+    cells: {
+        'A::p1': { ticker: 'A', promptId: 'p1', status: 'pending' },
+        'B::p1': { ticker: 'B', promptId: 'p1', status: 'error', error: 'boom' },
+        'C::p1': { ticker: 'C', promptId: 'p1', status: 'cancelled' },
+    },
+};
+const mixedCsv = toCSV(mixedState).split('\r\n');
+check('toCSV pending -> empty field', mixedCsv[1] === 'A,');
+check('toCSV error -> (error: …) marker', mixedCsv[2].includes('(error: boom)'));
+check('toCSV cancelled -> (cancelled) marker', mixedCsv[3].includes('(cancelled)'));
 
 // ─── 7. Phase-1 regression (sanity check that earlier helpers still work) ───
 console.log('\n[7] Phase-1 regression');

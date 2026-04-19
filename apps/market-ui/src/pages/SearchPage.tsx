@@ -7,8 +7,9 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
     Search, Zap, FileText, Database, ChevronRight, CheckCircle, Clock, Cpu,
     Sparkles, ChevronDown, Check, Feather, Plus, Trash2, ArrowUp, Edit3,
-    Settings as SettingsIcon, Bookmark, BookmarkCheck, X, ExternalLink,
+    Settings as SettingsIcon, Bookmark, BookmarkCheck, X, ExternalLink, Grid3x3,
 } from 'lucide-react';
+import GridView from '../components/grid/GridView';
 import { useGravitySearch, type GravityCitation, type GravitySource, type GravityMetric, type ChartSpec, type SearchFilters } from '../hooks/useGravitySearch';
 import {
     LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -18,6 +19,7 @@ import { hasRequiredKeys } from '../services/apiKeys';
 import {
     performDeepResearch,
     GEMINI_MODELS,
+    ResearchCancelledError,
 } from '../services/deepResearchService';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
@@ -25,7 +27,7 @@ import { supabase } from '../services/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type SearchMode = 'qa' | 'research';
+type SearchMode = 'grid' | 'qa' | 'research';
 
 interface ChatTurn {
     role: 'user' | 'assistant';
@@ -77,7 +79,7 @@ function CitationBadge({ citation, onOpen }: { citation: GravityCitation; onOpen
         <button
             onClick={() => onOpen(citation)}
             title={`[${citation.citation_number}] ${citation.document_title}`}
-            className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#00F0FF]/20 text-[#00F0FF] text-[10px] font-bold hover:bg-[#00F0FF]/40 active:scale-95 transition-all align-super"
+            className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[var(--accent)]/20 text-[var(--accent)] text-[10px] font-bold hover:bg-[var(--accent)]/40 active:scale-95 transition-all align-super"
         >
             {citation.citation_number}
         </button>
@@ -94,7 +96,7 @@ function AnswerText({ text, citations, onCitationOpen }: {
     const citationMap = new Map(citations.map(c => [c.citation_number, c]));
     const parts = text.split(/(\[\d+\])/g);
     return (
-        <div className="prose prose-invert prose-sm max-w-none text-[#E8EBF0] leading-7">
+        <div className="prose prose-invert prose-sm max-w-none text-[var(--text)] leading-7">
             {parts.map((part, i) => {
                 const match = part.match(/^\[(\d+)\]$/);
                 if (match) {
@@ -102,7 +104,7 @@ function AnswerText({ text, citations, onCitationOpen }: {
                     const citation = citationMap.get(num);
                     return citation
                         ? <CitationBadge key={i} citation={citation} onOpen={onCitationOpen ?? (() => {})} />
-                        : <sup key={i} className="text-[#00F0FF] text-xs">[{num}]</sup>;
+                        : <sup key={i} className="text-[var(--accent)] text-xs">[{num}]</sup>;
                 }
                 return <span key={i}>{part}</span>;
             })}
@@ -115,35 +117,35 @@ function AnswerText({ text, citations, onCitationOpen }: {
 function SourceCard({ source, index }: { source: GravitySource; index: number }) {
     const [expanded, setExpanded] = useState(false);
     return (
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 hover:border-[#00F0FF]/20 transition-colors">
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 hover:border-[var(--accent)]/20 transition-colors">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-mono text-[#00F0FF] bg-[#00F0FF]/10 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] font-mono text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">
                             {source.ticker || '—'}
                         </span>
-                        <span className="text-[10px] text-[#A7B0C8] truncate">{source.section}</span>
-                        <span className="ml-auto text-[10px] text-[#4A5568]">
+                        <span className="text-[10px] text-[var(--text-2)] truncate">{source.section}</span>
+                        <span className="ml-auto text-[10px] text-[var(--text-3)]">
                             {Math.round(source.score * 100)}%
                         </span>
                     </div>
                     <p className="text-xs font-medium text-white truncate">{source.document_title}</p>
                     {source.filing_date && (
-                        <p className="text-[10px] text-[#4A5568] mt-0.5">{source.filing_date}</p>
+                        <p className="text-[10px] text-[var(--text-3)] mt-0.5">{source.filing_date}</p>
                     )}
                 </div>
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/5 text-[#A7B0C8] text-[10px] flex items-center justify-center">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/5 text-[var(--text-2)] text-[10px] flex items-center justify-center">
                     {index + 1}
                 </span>
             </div>
             <button
                 onClick={() => setExpanded(e => !e)}
-                className="mt-2 text-[10px] text-[#5B8DF6] hover:text-[#00F0FF] transition-colors"
+                className="mt-2 text-[10px] text-[var(--accent)] hover:text-[var(--accent)] transition-colors"
             >
                 {expanded ? 'Hide passage' : 'Show passage'}
             </button>
             {expanded && (
-                <p className="mt-2 text-[11px] text-[#A7B0C8] leading-relaxed border-l-2 border-[#00F0FF]/30 pl-2">
+                <p className="mt-2 text-[11px] text-[var(--text-2)] leading-relaxed border-l-2 border-[var(--accent)]/30 pl-2">
                     "{source.text}"
                 </p>
             )}
@@ -153,7 +155,7 @@ function SourceCard({ source, index }: { source: GravitySource; index: number })
 
 // ─── Chart renderer ───────────────────────────────────────────────────────────
 
-const CHART_COLORS = ['#00F0FF', '#5B8DF6', '#C8A2FF', '#F9AB00', '#81C995', '#F28B82'];
+const CHART_COLORS = ['var(--accent)', 'var(--accent)', 'var(--accent)', 'oklch(0.785 0.170 72)', 'var(--up)', 'var(--down)'];
 
 function DataChart({ spec, structuredData }: { spec: ChartSpec; structuredData: GravityMetric[] }) {
     // Build a lookup from row_id → metric row
@@ -197,29 +199,29 @@ function DataChart({ spec, structuredData }: { spec: ChartSpec; structuredData: 
         : ['value'];
 
     const tooltipStyle = {
-        backgroundColor: '#0D1117',
+        backgroundColor: 'var(--bg)',
         border: '1px solid rgba(255,255,255,0.1)',
         borderRadius: 8,
         fontSize: 11,
-        color: '#E8EBF0',
+        color: 'var(--text)',
     };
 
     return (
         <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <p className="text-xs font-medium text-[#A7B0C8] mb-3">{spec.title}</p>
+            <p className="text-xs font-medium text-[var(--text-2)] mb-3">{spec.title}</p>
             <ResponsiveContainer width="100%" height={220}>
                 {isTimeSeries ? (
                     <LineChart data={points} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                        <XAxis dataKey="x" tick={{ fill: '#4A5568', fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="x" tick={{ fill: 'var(--text-3)', fontSize: 10 }} axisLine={false} tickLine={false} />
                         <YAxis
-                            tick={{ fill: '#4A5568', fontSize: 10 }}
+                            tick={{ fill: 'var(--text-3)', fontSize: 10 }}
                             axisLine={false}
                             tickLine={false}
-                            label={spec.y_label ? { value: spec.y_label, angle: -90, position: 'insideLeft', fill: '#4A5568', fontSize: 10, dx: -4 } : undefined}
+                            label={spec.y_label ? { value: spec.y_label, angle: -90, position: 'insideLeft', fill: 'var(--text-3)', fontSize: 10, dx: -4 } : undefined}
                         />
                         <Tooltip contentStyle={tooltipStyle} />
-                        {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 10, color: '#A7B0C8' }} />}
+                        {seriesKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 10, color: 'var(--text-2)' }} />}
                         {seriesKeys.map((key, i) => (
                             <Line
                                 key={key}
@@ -235,12 +237,12 @@ function DataChart({ spec, structuredData }: { spec: ChartSpec; structuredData: 
                 ) : (
                     <BarChart data={points} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                        <XAxis dataKey="x" tick={{ fill: '#4A5568', fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="x" tick={{ fill: 'var(--text-3)', fontSize: 10 }} axisLine={false} tickLine={false} />
                         <YAxis
-                            tick={{ fill: '#4A5568', fontSize: 10 }}
+                            tick={{ fill: 'var(--text-3)', fontSize: 10 }}
                             axisLine={false}
                             tickLine={false}
-                            label={spec.y_label ? { value: spec.y_label, angle: -90, position: 'insideLeft', fill: '#4A5568', fontSize: 10, dx: -4 } : undefined}
+                            label={spec.y_label ? { value: spec.y_label, angle: -90, position: 'insideLeft', fill: 'var(--text-3)', fontSize: 10, dx: -4 } : undefined}
                         />
                         <Tooltip contentStyle={tooltipStyle} />
                         {seriesKeys.map((key, i) => (
@@ -255,7 +257,7 @@ function DataChart({ spec, structuredData }: { spec: ChartSpec; structuredData: 
                     </BarChart>
                 )}
             </ResponsiveContainer>
-            {spec.y_label && <p className="text-[10px] text-[#4A5568] mt-1 text-right">{spec.y_label}</p>}
+            {spec.y_label && <p className="text-[10px] text-[var(--text-3)] mt-1 text-right">{spec.y_label}</p>}
         </div>
     );
 }
@@ -283,8 +285,8 @@ function SourceFilterBar({ active, onChange }: { active: SourceFilterId; onChang
                     onClick={() => onChange(f.id)}
                     className={`px-3 py-1 rounded-full text-xs font-medium transition-all border ${
                         active === f.id
-                            ? 'bg-[#00F0FF]/15 border-[#00F0FF]/40 text-[#00F0FF]'
-                            : 'border-white/[0.08] text-[#4A5568] hover:text-[#A7B0C8] hover:border-white/[0.15]'
+                            ? 'bg-[var(--accent)]/15 border-[var(--accent)]/40 text-[var(--accent)]'
+                            : 'border-white/[0.08] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-white/[0.15]'
                     }`}
                 >
                     {f.label}
@@ -297,12 +299,12 @@ function SourceFilterBar({ active, onChange }: { active: SourceFilterId; onChang
 // ─── Agent Trace Panel — live reasoning steps ─────────────────────────────────
 
 const AGENT_COLORS: Record<string, string> = {
-    Planner:   '#C8A2FF',
-    Reader:    '#00F0FF',
-    Extractor: '#5B8DF6',
-    Critic:    '#F9AB00',
-    Verifier:  '#81C995',
-    Writer:    '#F28B82',
+    Planner:   'var(--accent)',
+    Reader:    'var(--accent)',
+    Extractor: 'var(--accent)',
+    Critic:    'oklch(0.785 0.170 72)',
+    Verifier:  'var(--up)',
+    Writer:    'var(--down)',
 };
 
 const AGENT_ICONS: Record<string, string> = {
@@ -324,32 +326,32 @@ function AgentTracePanel({ steps, complete, totalIterations, totalCostUsd }: {
 }) {
     if (steps.length === 0) return null;
     return (
-        <div className="mt-3 rounded-xl border border-[#C8A2FF]/20 bg-[#C8A2FF]/5 overflow-hidden">
+        <div className="mt-3 rounded-xl border border-[var(--accent)]/20 bg-[var(--accent)]/5 overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.06]">
-                <Cpu className="w-3.5 h-3.5 text-[#C8A2FF]" />
-                <span className="text-xs font-semibold text-[#C8A2FF]">Agentic Reasoning</span>
+                <Cpu className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <span className="text-xs font-semibold text-[var(--accent)]">Agentic Reasoning</span>
                 {complete && (
-                    <span className="ml-auto text-[10px] text-[#A7B0C8]">
+                    <span className="ml-auto text-[10px] text-[var(--text-2)]">
                         {totalIterations} iter{totalIterations !== 1 ? 's' : ''}
                         {totalCostUsd !== null ? ` · $${totalCostUsd.toFixed(4)}` : ''}
                     </span>
                 )}
                 {!complete && (
-                    <span className="ml-auto w-2 h-2 rounded-full bg-[#C8A2FF] animate-pulse" />
+                    <span className="ml-auto w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
                 )}
             </div>
             <div className="px-3 py-2 space-y-1.5">
                 {steps.map((s, i) => {
-                    const color = AGENT_COLORS[s.agent] ?? '#A7B0C8';
+                    const color = AGENT_COLORS[s.agent] ?? 'var(--text-2)';
                     const icon = AGENT_ICONS[s.agent] ?? '·';
                     return (
                         <div key={i} className="flex items-start gap-2">
                             <span className="text-base leading-none mt-0.5">{icon}</span>
                             <div className="flex-1 min-w-0">
                                 <span className="text-[11px] font-semibold" style={{ color }}>{s.agent}</span>
-                                <span className="text-[11px] text-[#A7B0C8]"> · {s.action}</span>
+                                <span className="text-[11px] text-[var(--text-2)]"> · {s.action}</span>
                                 {s.detail && (
-                                    <p className="text-[10px] text-[#4A5568] truncate">{s.detail}</p>
+                                    <p className="text-[10px] text-[var(--text-3)] truncate">{s.detail}</p>
                                 )}
                             </div>
                             {s.quality_score !== undefined && (
@@ -369,16 +371,16 @@ function AgentTracePanel({ steps, complete, totalIterations, totalCostUsd }: {
 
 function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClose: () => void }) {
     return (
-        <div className="fixed inset-y-0 right-0 w-[400px] max-w-full z-50 flex flex-col" style={{ background: '#0A0D18', borderLeft: '1px solid rgba(255,255,255,0.08)' }}>
+        <div className="fixed inset-y-0 right-0 w-[400px] max-w-full z-50 flex flex-col" style={{ background: 'var(--bg)', borderLeft: '1px solid rgba(255,255,255,0.08)' }}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
                 <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-[#00F0FF]/20 text-[#00F0FF] text-[10px] font-bold flex items-center justify-center">
+                    <span className="w-5 h-5 rounded-full bg-[var(--accent)]/20 text-[var(--accent)] text-[10px] font-bold flex items-center justify-center">
                         {citation.citation_number}
                     </span>
                     <span className="text-xs font-semibold text-white truncate max-w-[280px]">{citation.document_title}</span>
                 </div>
                 <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
-                    <X className="w-4 h-4 text-[#A7B0C8]" />
+                    <X className="w-4 h-4 text-[var(--text-2)]" />
                 </button>
             </div>
 
@@ -386,10 +388,10 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
                 {/* Source metadata */}
                 <div className="flex flex-wrap gap-2">
                     {citation.ticker && (
-                        <span className="px-2 py-0.5 rounded bg-[#00F0FF]/10 text-[#00F0FF] text-xs font-mono">{citation.ticker}</span>
+                        <span className="px-2 py-0.5 rounded bg-[var(--accent)]/10 text-[var(--accent)] text-xs font-mono">{citation.ticker}</span>
                     )}
                     {citation.section && (
-                        <span className="px-2 py-0.5 rounded bg-white/[0.04] text-[#A7B0C8] text-xs">{citation.section}</span>
+                        <span className="px-2 py-0.5 rounded bg-white/[0.04] text-[var(--text-2)] text-xs">{citation.section}</span>
                     )}
                     {citation.is_verified && (
                         <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/10 text-green-400 text-xs">
@@ -400,8 +402,8 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
 
                 {/* Passage */}
                 <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
-                    <p className="text-xs text-[#4A5568] uppercase tracking-wider mb-3">Source Passage</p>
-                    <blockquote className="text-sm text-[#E8EBF0] leading-relaxed border-l-2 border-[#00F0FF]/40 pl-4">
+                    <p className="text-xs text-[var(--text-3)] uppercase tracking-wider mb-3">Source Passage</p>
+                    <blockquote className="text-sm text-[var(--text)] leading-relaxed border-l-2 border-[var(--accent)]/40 pl-4">
                         "{citation.text}"
                     </blockquote>
                 </div>
@@ -409,7 +411,7 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
                 {/* Link to full doc */}
                 <a
                     href={`/documents?ticker=${citation.ticker}&title=${encodeURIComponent(citation.document_title)}`}
-                    className="flex items-center gap-2 text-xs text-[#5B8DF6] hover:text-[#00F0FF] transition-colors"
+                    className="flex items-center gap-2 text-xs text-[var(--accent)] hover:text-[var(--accent)] transition-colors"
                 >
                     <ExternalLink className="w-3.5 h-3.5" />
                     View full document
@@ -425,10 +427,20 @@ function ModeToggle({ mode, onChange }: { mode: SearchMode; onChange: (m: Search
     return (
         <div className="flex rounded-full p-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
             <button
+                onClick={() => onChange('grid')}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${mode === 'grid'
+                    ? 'bg-[var(--accent)]/20 text-[var(--accent)] shadow-sm'
+                    : 'text-[var(--text-2)] hover:text-white'
+                    }`}
+            >
+                <Grid3x3 className="w-3.5 h-3.5" />
+                Research Grid
+            </button>
+            <button
                 onClick={() => onChange('qa')}
                 className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${mode === 'qa'
-                    ? 'bg-[#00F0FF]/15 text-[#00F0FF] shadow-sm'
-                    : 'text-[#A7B0C8] hover:text-white'
+                    ? 'bg-[var(--accent)]/15 text-[var(--accent)] shadow-sm'
+                    : 'text-[var(--text-2)] hover:text-white'
                     }`}
             >
                 <Zap className="w-3.5 h-3.5" />
@@ -437,8 +449,8 @@ function ModeToggle({ mode, onChange }: { mode: SearchMode; onChange: (m: Search
             <button
                 onClick={() => onChange('research')}
                 className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${mode === 'research'
-                    ? 'bg-[#9B72CB]/20 text-[#C8A2FF] shadow-sm'
-                    : 'text-[#A7B0C8] hover:text-white'
+                    ? 'bg-[var(--accent)]/20 text-[var(--accent)] shadow-sm'
+                    : 'text-[var(--text-2)] hover:text-white'
                     }`}
             >
                 <FileText className="w-3.5 h-3.5" />
@@ -472,6 +484,7 @@ export default function SearchPage() {
     const [showModelPicker, setShowModelPicker] = useState(false);
     const [loadingReport, setLoadingReport] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const researchAbortRef = useRef<AbortController | null>(null);
 
     const isResearching  = useResearchStore((s) => s.isResearching);
     const progress       = useResearchStore((s) => s.progress);
@@ -592,8 +605,10 @@ export default function SearchPage() {
         setActiveId(null);
         setResearchInput('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        const controller = new AbortController();
+        researchAbortRef.current = controller;
         try {
-            const result = await performDeepResearch(searchQuery, setProgress, selectedModel);
+            const result = await performDeepResearch(searchQuery, setProgress, selectedModel, undefined, controller.signal);
             setReport(result);
             try {
                 const { data: { session } } = await supabase.auth.getSession();
@@ -615,10 +630,20 @@ export default function SearchPage() {
                 }
             } catch { /* non-blocking */ }
         } catch (err) {
-            setResearchError(err instanceof Error ? err.message : 'Research failed');
+            if (err instanceof ResearchCancelledError || controller.signal.aborted) {
+                setResearchError(null);
+                setProgress(null);
+            } else {
+                setResearchError(err instanceof Error ? err.message : 'Research failed');
+            }
         } finally {
+            researchAbortRef.current = null;
             setIsResearching(false);
         }
+    };
+
+    const cancelResearch = () => {
+        researchAbortRef.current?.abort();
     };
 
     const handleLoadReport = async (item: HistoryItem) => {
@@ -682,12 +707,28 @@ export default function SearchPage() {
     };
 
     const grouped = groupByDate(filteredHistory);
-    const tierColors: Record<string, string> = { premium: '#F9AB00', standard: '#8AB4F8', lite: '#81C995' };
+    const tierColors: Record<string, string> = { premium: 'oklch(0.785 0.170 72)', standard: 'var(--accent)', lite: 'var(--up)' };
     const tierIcons: Record<string, typeof Sparkles> = { premium: Sparkles, standard: Zap, lite: Feather };
 
     // ═════════════════════════════════════════════════════════════════════════
     // ── RENDER ─────────────────────────────────────────────────────────────
     // ═════════════════════════════════════════════════════════════════════════
+
+    // ── GRID MODE ─────────────────────────────────────────────────────────────
+    if (mode === 'grid') {
+        return (
+            <div className="flex flex-col h-full min-h-[calc(100vh-48px)] bg-[color:var(--bg)]">
+                <div className="border-b border-[color:var(--line)] px-4 py-2 bg-[color:var(--surface)]">
+                    <div className="flex gap-3 max-w-4xl mx-auto items-center">
+                        <ModeToggle mode={mode} onChange={setMode} />
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                    <GridView />
+                </div>
+            </div>
+        );
+    }
 
     // ── QA MODE ───────────────────────────────────────────────────────────────
     if (mode === 'qa') {
@@ -702,7 +743,7 @@ export default function SearchPage() {
                 )}
 
                 {/* Search bar + Mode toggle */}
-                <div className="border-b border-white/[0.05] px-6 py-3 bg-[#070A12]">
+                <div className="border-b border-white/[0.05] px-6 py-3 bg-[var(--bg)]">
                     <div className="flex gap-3 max-w-4xl mx-auto items-center">
                         <ModeToggle mode={mode} onChange={setMode} />
                         <form
@@ -710,13 +751,13 @@ export default function SearchPage() {
                             className="flex gap-3 flex-1"
                         >
                             <div className="flex-1 relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#A7B0C8]" />
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-2)]" />
                                 <input
                                     ref={qaInputRef}
                                     value={qaInput}
                                     onChange={e => setQaInput(e.target.value)}
                                     placeholder="Ask anything about any company, filing, or market trend…"
-                                    className="w-full pl-10 pr-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-xl text-sm text-white placeholder:text-[#4A5568] focus:outline-none focus:border-[#00F0FF]/40 transition-colors"
+                                    className="w-full pl-10 pr-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-xl text-sm text-white placeholder:text-[var(--text-3)] focus:outline-none focus:border-[var(--accent)]/40 transition-colors"
                                 />
                             </div>
                             {isQaSearching ? (
@@ -731,7 +772,7 @@ export default function SearchPage() {
                                 <button
                                     type="submit"
                                     disabled={!qaInput.trim()}
-                                    className="px-5 py-2.5 rounded-xl bg-[#00F0FF]/10 border border-[#00F0FF]/30 text-[#00F0FF] text-sm font-medium hover:bg-[#00F0FF]/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                                    className="px-5 py-2.5 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                                 >
                                     <Zap className="w-4 h-4" /> Search
                                 </button>
@@ -746,10 +787,10 @@ export default function SearchPage() {
                             <button
                                 onClick={() => handleSaveSearch(qaInput)}
                                 title={savedSearches.has(qaInput) ? 'Search saved' : 'Save search'}
-                                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs border border-white/[0.08] text-[#4A5568] hover:text-[#A7B0C8] hover:border-white/[0.15] transition-all"
+                                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs border border-white/[0.08] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-white/[0.15] transition-all"
                             >
                                 {savedSearches.has(qaInput)
-                                    ? <><BookmarkCheck className="w-3.5 h-3.5 text-[#00F0FF]" /> Saved</>
+                                    ? <><BookmarkCheck className="w-3.5 h-3.5 text-[var(--accent)]" /> Saved</>
                                     : <><Bookmark className="w-3.5 h-3.5" /> Save</>
                                 }
                             </button>
@@ -764,7 +805,7 @@ export default function SearchPage() {
                             {chatHistory.map((turn, i) => (
                                 <div key={i} className={turn.role === 'user' ? 'flex justify-end' : ''}>
                                     {turn.role === 'user' ? (
-                                        <div className="bg-[#00F0FF]/15 text-[#00F0FF] px-4 py-2.5 rounded-2xl max-w-[85%] text-sm">
+                                        <div className="bg-[var(--accent)]/15 text-[var(--accent)] px-4 py-2.5 rounded-2xl max-w-[85%] text-sm">
                                             {turn.content}
                                         </div>
                                     ) : (
@@ -780,15 +821,15 @@ export default function SearchPage() {
                     {/* Idle state — example queries */}
                     {qaState.status === 'idle' && chatHistory.length === 0 && (
                         <div className="space-y-6">
-                            <p className="text-sm text-[#4A5568] text-center">Try asking:</p>
+                            <p className="text-sm text-[var(--text-3)] text-center">Try asking:</p>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 {QA_EXAMPLES.map(q => (
                                     <button
                                         key={q}
                                         onClick={() => handleQaSubmit(q)}
-                                        className="text-left px-4 py-3 rounded-xl border border-white/[0.06] bg-white/[0.02] text-sm text-[#A7B0C8] hover:border-[#00F0FF]/30 hover:text-white transition-colors flex items-center gap-2 group"
+                                        className="text-left px-4 py-3 rounded-xl border border-white/[0.06] bg-white/[0.02] text-sm text-[var(--text-2)] hover:border-[var(--accent)]/30 hover:text-white transition-colors flex items-center gap-2 group"
                                     >
-                                        <ChevronRight className="w-4 h-4 text-[#4A5568] group-hover:text-[#00F0FF] flex-shrink-0" />
+                                        <ChevronRight className="w-4 h-4 text-[var(--text-3)] group-hover:text-[var(--accent)] flex-shrink-0" />
                                         {q}
                                     </button>
                                 ))}
@@ -798,8 +839,8 @@ export default function SearchPage() {
 
                     {/* Status indicator */}
                     {isQaSearching && (
-                        <div className="flex items-center gap-3 mb-6 text-sm text-[#A7B0C8]">
-                            <div className="w-4 h-4 rounded-full border-2 border-[#00F0FF] border-t-transparent animate-spin" />
+                        <div className="flex items-center gap-3 mb-6 text-sm text-[var(--text-2)]">
+                            <div className="w-4 h-4 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />
                             {STATUS_LABELS[qaState.status] ?? 'Working…'}
                         </div>
                     )}
@@ -818,8 +859,8 @@ export default function SearchPage() {
                                         key={key}
                                         onClick={() => setActiveTab(key)}
                                         className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${activeTab === key
-                                            ? 'border-[#00F0FF] text-[#00F0FF]'
-                                            : 'border-transparent text-[#A7B0C8] hover:text-white'
+                                            ? 'border-[var(--accent)] text-[var(--accent)]'
+                                            : 'border-transparent text-[var(--text-2)] hover:text-white'
                                             }`}
                                     >
                                         <Icon className="w-3.5 h-3.5" />
@@ -829,7 +870,7 @@ export default function SearchPage() {
 
                                 {/* Metadata */}
                                 {qaState.status === 'complete' && (
-                                    <div className="ml-auto flex items-center gap-3 text-[10px] text-[#4A5568] pb-1">
+                                    <div className="ml-auto flex items-center gap-3 text-[10px] text-[var(--text-3)] pb-1">
                                         {qaState.cacheHit && <span className="text-yellow-500">⚡ Cached</span>}
                                         {qaState.latencyMs && (
                                             <span className="flex items-center gap-1">
@@ -864,8 +905,8 @@ export default function SearchPage() {
                                     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5">
                                         {displayAnswer
                                             ? <AnswerText text={displayAnswer} citations={qaState.citations} onCitationOpen={setOpenCitation} />
-                                            : <div className="flex items-center gap-2 text-sm text-[#A7B0C8]">
-                                                <div className="w-3 h-3 rounded-full border-2 border-[#00F0FF] border-t-transparent animate-spin" />
+                                            : <div className="flex items-center gap-2 text-sm text-[var(--text-2)]">
+                                                <div className="w-3 h-3 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />
                                                 Generating answer…
                                             </div>
                                         }
@@ -874,15 +915,15 @@ export default function SearchPage() {
                                     {/* Follow-up queries */}
                                     {qaState.followUpQueries.length > 0 && (
                                         <div>
-                                            <p className="text-xs text-[#4A5568] mb-2 uppercase tracking-wider">Follow-up</p>
+                                            <p className="text-xs text-[var(--text-3)] mb-2 uppercase tracking-wider">Follow-up</p>
                                             <div className="flex flex-col gap-1.5">
                                                 {qaState.followUpQueries.map(q => (
                                                     <button
                                                         key={q}
                                                         onClick={() => handleQaSubmit(q)}
-                                                        className="text-left text-sm text-[#A7B0C8] hover:text-[#00F0FF] flex items-center gap-2 group transition-colors"
+                                                        className="text-left text-sm text-[var(--text-2)] hover:text-[var(--accent)] flex items-center gap-2 group transition-colors"
                                                     >
-                                                        <ChevronRight className="w-4 h-4 text-[#4A5568] group-hover:text-[#00F0FF] flex-shrink-0" />
+                                                        <ChevronRight className="w-4 h-4 text-[var(--text-3)] group-hover:text-[var(--accent)] flex-shrink-0" />
                                                         {q}
                                                     </button>
                                                 ))}
@@ -896,7 +937,7 @@ export default function SearchPage() {
                             {activeTab === 'sources' && (
                                 <div className="space-y-2">
                                     {qaState.sources.length === 0
-                                        ? <p className="text-sm text-[#4A5568] text-center py-8">No sources retrieved yet</p>
+                                        ? <p className="text-sm text-[var(--text-3)] text-center py-8">No sources retrieved yet</p>
                                         : qaState.sources.map((s, i) => <SourceCard key={s.chunk_id} source={s} index={i} />)
                                     }
                                 </div>
@@ -906,7 +947,7 @@ export default function SearchPage() {
                             {activeTab === 'data' && (
                                 <div className="space-y-4">
                                     {qaState.chartSpecs.length === 0 && qaState.structuredData.length === 0 && (
-                                        <p className="text-sm text-[#4A5568] text-center py-8">No structured financial data for this query</p>
+                                        <p className="text-sm text-[var(--text-3)] text-center py-8">No structured financial data for this query</p>
                                     )}
 
                                     {/* Charts */}
@@ -929,7 +970,7 @@ export default function SearchPage() {
                                                 <thead>
                                                     <tr className="border-b border-white/[0.06] bg-white/[0.02]">
                                                         {['Entity', 'Metric', 'Value', 'Period'].map(h => (
-                                                            <th key={h} className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-[#4A5568]">{h}</th>
+                                                            <th key={h} className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-3)]">{h}</th>
                                                         ))}
                                                     </tr>
                                                 </thead>
@@ -938,17 +979,17 @@ export default function SearchPage() {
                                                         <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                                                             <td className="px-4 py-2.5">
                                                                 {(m.entity || m.ticker) && (
-                                                                    <span className="text-xs text-[#00F0FF] bg-[#00F0FF]/10 px-1.5 py-0.5 rounded">
+                                                                    <span className="text-xs text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">
                                                                         {m.entity ?? m.ticker}
                                                                     </span>
                                                                 )}
                                                             </td>
-                                                            <td className="px-4 py-2.5 text-[#A7B0C8]">{m.metric}</td>
+                                                            <td className="px-4 py-2.5 text-[var(--text-2)]">{m.metric}</td>
                                                             <td className="px-4 py-2.5 font-mono text-white">
                                                                 {typeof m.value === 'number' ? m.value.toLocaleString() : m.value}
-                                                                {m.unit && <span className="ml-1 text-xs text-[#4A5568]">{m.unit}</span>}
+                                                                {m.unit && <span className="ml-1 text-xs text-[var(--text-3)]">{m.unit}</span>}
                                                             </td>
-                                                            <td className="px-4 py-2.5 text-[#4A5568]">{m.period ?? '—'}</td>
+                                                            <td className="px-4 py-2.5 text-[var(--text-3)]">{m.period ?? '—'}</td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -973,10 +1014,10 @@ export default function SearchPage() {
 
     // ── DEEP RESEARCH MODE ────────────────────────────────────────────────────
     return (
-        <div className="flex h-[calc(100vh-64px)]" style={{ background: '#070A12' }}>
+        <div className="flex h-[calc(100vh-64px)]" style={{ background: 'var(--bg)' }}>
 
             {/* ═══════════════ SIDEBAR ═══════════════ */}
-            <aside className="w-[280px] flex-shrink-0 flex flex-col" style={{ background: '#0A0D18', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+            <aside className="w-[280px] flex-shrink-0 flex flex-col" style={{ background: 'var(--bg)', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
                 <div className="flex items-center justify-between px-4 py-3">
                     <span className="text-[15px] font-medium text-white/80">Research</span>
                     <button
@@ -1059,7 +1100,7 @@ export default function SearchPage() {
             </aside>
 
             {/* ═══════════════ MAIN AREA ═══════════════ */}
-            <div className="flex-1 flex flex-col min-w-0" style={{ background: '#070A12' }}>
+            <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--bg)' }}>
 
                 {/* Mode toggle bar */}
                 <div className="border-b border-white/[0.05] px-6 py-3 flex items-center">
@@ -1092,7 +1133,22 @@ export default function SearchPage() {
                     )}
 
                     {isResearching && progress && (
-                        <ResearchProgress progress={progress} />
+                        <div>
+                            <ResearchProgress progress={progress} />
+                            <div className="flex justify-center mt-4">
+                                <button
+                                    onClick={cancelResearch}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white/80 hover:text-white transition-all"
+                                    style={{
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    }}
+                                >
+                                    <X className="w-4 h-4" />
+                                    Cancel research
+                                </button>
+                            </div>
+                        </div>
                     )}
 
                     {report && !isResearching && !loadingReport && (
@@ -1103,7 +1159,7 @@ export default function SearchPage() {
                     {!report && !isResearching && !researchError && !loadingReport && (
                         <div className="flex flex-col items-center justify-center h-full min-h-[420px] px-8 text-center">
                             <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6"
-                                style={{ background: 'linear-gradient(135deg, #4285F4, #9B72CB, #D96570)' }}>
+                                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent), var(--down))' }}>
                                 <Sparkles className="w-7 h-7 text-white" />
                             </div>
                             <h2 className="text-3xl font-medium text-white/90 mb-2">Deep Research</h2>
@@ -1132,7 +1188,7 @@ export default function SearchPage() {
                         <div
                             className="rounded-3xl transition-all"
                             style={{
-                                background: '#0E1120',
+                                background: 'var(--bg)',
                                 border: '1px solid rgba(255,255,255,0.07)',
                             }}
                         >
@@ -1172,7 +1228,7 @@ export default function SearchPage() {
                                                 <div className="fixed inset-0 z-40" onClick={() => setShowModelPicker(false)} />
                                                 <div
                                                     className="absolute left-0 bottom-full mb-2 w-72 rounded-2xl shadow-2xl overflow-hidden z-50"
-                                                    style={{ background: '#131728', border: '1px solid rgba(255,255,255,0.07)' }}
+                                                    style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.07)' }}
                                                 >
                                                     <div className="px-4 py-2.5 text-[11px] text-white/30 uppercase tracking-wider font-medium border-b border-white/[0.06]">
                                                         Select model
@@ -1216,7 +1272,7 @@ export default function SearchPage() {
                                     {isResearching ? (
                                         <div className="w-4 h-4 border-2 border-black/30 border-t-black/80 rounded-full animate-spin" />
                                     ) : (
-                                        <ArrowUp className="w-4 h-4" style={{ color: researchInput.trim() ? '#0f0f0f' : 'rgba(255,255,255,0.4)' }} />
+                                        <ArrowUp className="w-4 h-4" style={{ color: researchInput.trim() ? 'var(--bg)' : 'rgba(255,255,255,0.4)' }} />
                                     )}
                                 </button>
                             </div>

@@ -141,6 +141,38 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
         run: npm run build --workspace=apps/gravity-ui
 
+  # ── Market UI — typecheck + deep-research eval gate ────────────────────
+  market-ui:
+    name: Market UI — typecheck & eval gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --workspace=apps/market-ui --include-workspace-root
+
+      - name: TypeScript check
+        working-directory: apps/market-ui
+        run: npx tsc -b
+
+      - name: Deep-research + grid eval suite
+        working-directory: apps/market-ui
+        run: |
+          npx esbuild src/services/deepResearchService.phase2.test.ts \
+            --bundle \
+            --platform=node \
+            --format=esm \
+            --define:import.meta.env='{}' \
+            --outfile=/tmp/phase2.mjs
+          node /tmp/phase2.mjs
+
   # ── Evaluation gate (runs on main only) ────────────────────────────────
   eval-gate:
     name: Evaluation gate

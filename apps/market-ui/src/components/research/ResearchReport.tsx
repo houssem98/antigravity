@@ -11,7 +11,7 @@ import {
     Clock, Database, Calendar, Shield,
     Brain, HelpCircle, Headphones, FileText, X,
 } from 'lucide-react';
-import type { ResearchReport as ReportType, Citation } from '../../services/deepResearchService';
+import type { ResearchReport as ReportType, Citation, TemplateKey } from '../../services/deepResearchService';
 import PdfPreview from './PdfPreview';
 
 interface Props {
@@ -19,6 +19,15 @@ interface Props {
     instant?: boolean;
     onClose?: () => void;
 }
+
+const TEMPLATE_LABELS: Record<TemplateKey, string> = {
+    investment_memo: 'Investment Memo',
+    earnings_preview: 'Earnings Preview',
+    earnings_recap: 'Earnings Recap',
+    thematic: 'Thematic Research',
+    company_primer: 'Company Primer',
+    comparative: 'Comparative Analysis',
+};
 
 /* ─────────────────── Sentiment detector ─────────────────── */
 function detectSentiment(text: string): 'bullish' | 'bearish' | 'neutral' {
@@ -382,6 +391,42 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                             <span>AI Research Engine</span>
                         </div>
                     </div>
+
+                    {/* Phase-1/2 metadata strip: template, grounding, budget */}
+                    {(report.metadata.template || report.metadata.verification || report.metadata.budget) && (
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {report.metadata.template && (
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                    style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#A5B4FC', border: '1px solid rgba(99, 102, 241, 0.25)' }}>
+                                    <FileText className="w-3 h-3" />
+                                    <span>{TEMPLATE_LABELS[report.metadata.template] || report.metadata.template}</span>
+                                </div>
+                            )}
+                            {report.metadata.verification && report.metadata.verification.totalClaims > 0 && (() => {
+                                const v = report.metadata.verification;
+                                const rate = v.groundedClaims / v.totalClaims;
+                                const bg = rate >= 0.85 ? 'rgba(34, 197, 94, 0.12)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.12)' : 'rgba(239, 68, 68, 0.12)';
+                                const border = rate >= 0.85 ? 'rgba(34, 197, 94, 0.25)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)';
+                                const color = rate >= 0.85 ? '#86EFAC' : rate >= 0.6 ? '#FDE68A' : '#FCA5A5';
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={v.unsupportedClaims.length > 0 ? `Unsupported: ${v.unsupportedClaims.slice(0, 5).join(', ')}` : 'All numeric claims grounded in sources'}>
+                                        <Shield className="w-3 h-3" />
+                                        <span>{v.groundedClaims}/{v.totalClaims} numeric claims grounded</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.budget && (
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                    style={{ background: 'rgba(255,255,255,0.04)', color: '#6B7280', border: '1px solid rgba(255,255,255,0.08)' }}
+                                    title="LLM calls and estimated tokens consumed by this query">
+                                    <Brain className="w-3 h-3" />
+                                    <span>{report.metadata.budget.llmCalls} LLM calls · ~{Math.round(report.metadata.budget.estimatedTokens / 1000)}k tokens</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
