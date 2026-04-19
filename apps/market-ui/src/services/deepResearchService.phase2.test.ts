@@ -13,6 +13,8 @@ import {
     parseClaimVerdicts,
     auditClaimsWithLLM,
     verifyCitationDensity,
+    deriveConfidence,
+    buildMethodologySection,
 } from './deepResearchService';
 import {
     classifyAuthority,
@@ -594,6 +596,129 @@ The headline miss on services guidance [2] is the key takeaway.
 const tbl = verifyCitationDensity(tableMd);
 check('citation density: table rows not counted as fact sentences',
     tbl.totalFactSentences === 1 && tbl.citedSentences === 1);
+
+// ─── 11. Cross-reference multi-source detection ─────────────────────────────
+console.log('\n[11] Cross-reference multi-source detection');
+
+// The claim "$10B" appears in two web sources → multiSource; "$999B" only in one → singleSource.
+const xrefMd = 'Revenue hit $10B last year. Management now guides to $999B.';
+const xrefVer = verifyNumericConsistency(xrefMd, {
+    webSources: [
+        { title: 'A', url: 'https://a.com', content: 'reported revenue of $10B', score: 1, source: '' } as any,
+        { title: 'B', url: 'https://b.com', content: 'topline of $10B in FY', score: 1, source: '' } as any,
+        { title: 'C', url: 'https://c.com', content: 'guided to $999B ambitious target', score: 1, source: '' } as any,
+    ],
+    ragResult: undefined,
+    companyData: [],
+    knowledgeBase: '',
+    sourceAnalysis: '',
+});
+check('cross-reference: both claims grounded',
+    xrefVer.groundedClaims === 2,
+    `grounded=${xrefVer.groundedClaims}`);
+check('cross-reference: exactly 1 multi-source claim',
+    xrefVer.multiSourceClaims === 1,
+    `multi=${xrefVer.multiSourceClaims}`);
+check('cross-reference: exactly 1 single-source claim flagged',
+    xrefVer.singleSourceClaims.length === 1,
+    `single=${xrefVer.singleSourceClaims.length}`);
+
+// Zero-source claim → unsupported, not single-source.
+const orphanMd = 'Revenue hit $77B last year.';
+const orphanVer = verifyNumericConsistency(orphanMd, {
+    webSources: [{ title: 'A', url: 'https://a.com', content: 'unrelated $3M figure', score: 1, source: '' } as any],
+    ragResult: undefined, companyData: [], knowledgeBase: '', sourceAnalysis: '',
+});
+check('cross-reference: orphan claim goes to unsupported',
+    orphanVer.unsupportedClaims.length === 1 && orphanVer.singleSourceClaims.length === 0,
+    `unsupp=${orphanVer.unsupportedClaims.length} single=${orphanVer.singleSourceClaims.length} total=${orphanVer.totalClaims}`);
+
+// ─── 12. Confidence derivation ──────────────────────────────────────────────
+console.log('\n[12] Confidence derivation');
+
+check('confidence: all signals strong → High',
+    deriveConfidence({
+        numericGroundingRate: 0.9, multiSourceRate: 0.7, citationDensity: 0.9, totalClaims: 20,
+    }) === 'High');
+check('confidence: middling signals → Medium',
+    deriveConfidence({
+        numericGroundingRate: 0.75, multiSourceRate: 0.4, citationDensity: 0.75, totalClaims: 20,
+    }) === 'Medium');
+check('confidence: weak numeric rate → Low',
+    deriveConfidence({
+        numericGroundingRate: 0.3, multiSourceRate: 0.0, citationDensity: 0.4, totalClaims: 20,
+    }) === 'Low');
+check('confidence: too-few-claims → at most Medium',
+    deriveConfidence({
+        numericGroundingRate: 1.0, multiSourceRate: 1.0, citationDensity: 1.0, totalClaims: 2,
+    }) !== 'High');
+check('confidence: high numeric+density but low multi-source → Medium',
+    deriveConfidence({
+        numericGroundingRate: 0.95, multiSourceRate: 0.2, citationDensity: 0.95, totalClaims: 20,
+    }) === 'Medium');
+
+// ─── 13. Methodology section builder ────────────────────────────────────────
+console.log('\n[13] Methodology section builder');
+
+const methSample = buildMethodologySection({
+    searchQueries: 12,
+    rounds: 3,
+    webSources: 42,
+    secFilings: 5,
+    ragSources: 8,
+    subQuestions: ['Growth drivers', 'Margin outlook', 'Regulatory risk'],
+    verification: {
+        totalClaims: 20, groundedClaims: 18, multiSourceClaims: 14,
+        singleSourceClaims: [], unsupportedClaims: [],
+    },
+    citationDensity: {
+        totalFactSentences: 40, citedSentences: 36, density: 0.9, uncitedSamples: [],
+    },
+    confidence: 'High',
+});
+
+check('methodology: includes confidence header',
+    /\*\*Confidence: High\*\*/.test(methSample));
+check('methodology: reports query + round counts',
+    /12 queries/.test(methSample) && /3 adaptive rounds/.test(methSample));
+check('methodology: enumerates source breakdown',
+    /42 web/.test(methSample) && /5 SEC/.test(methSample) && /8 RAG/.test(methSample));
+check('methodology: reports sub-question count',
+    /3 research angles/.test(methSample));
+check('methodology: reports grounding figures',
+    /18\/20/.test(methSample) && /14 corroborated/.test(methSample));
+check('methodology: reports citation density',
+    /36\/40/.test(methSample));
+check('methodology: Medium confidence carries Medium caveat',
+    /one signal is below the High bar/.test(
+        buildMethodologySection({
+            searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+            subQuestions: [],
+            verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+            citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+            confidence: 'Medium',
+        }),
+    ));
+check('methodology: Low confidence carries strong caveat',
+    /Primary-source verification is required/.test(
+        buildMethodologySection({
+            searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+            subQuestions: [],
+            verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+            citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+            confidence: 'Low',
+        }),
+    ));
+check('methodology: singular "round" for 1 round',
+    /1 adaptive round\b/.test(
+        buildMethodologySection({
+            searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+            subQuestions: [],
+            verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+            citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+            confidence: 'High',
+        }),
+    ));
 
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');

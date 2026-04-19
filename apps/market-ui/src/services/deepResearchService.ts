@@ -220,6 +220,8 @@ export interface ResearchReport {
         verification?: {
             totalClaims: number;
             groundedClaims: number;
+            multiSourceClaims: number;
+            singleSourceClaims: string[];
             unsupportedClaims: string[];
         };
         claimAudit?: {
@@ -234,6 +236,12 @@ export interface ResearchReport {
             citedSentences: number;
             density: number;  // 0..1
             uncitedSamples: string[];
+        };
+        confidence?: Confidence;
+        methodology?: {
+            searchQueries: number;
+            rounds: number;
+            subQuestions: string[];
         };
     };
 }
@@ -635,12 +643,14 @@ async function iterativeSearch(
     model: ResearchModelId | undefined,
     onProgress: (p: ResearchProgress) => void,
     maxRounds = 4,
-): Promise<{ sources: TavilySearchResult[]; knowledgeBase: string }> {
+): Promise<{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number }> {
     let allSources: TavilySearchResult[] = [];
     let knowledgeBase = '';
+    let roundsRun = 0;
     const seenUrls = new Set<string>();
 
     for (let round = 0; round < maxRounds; round++) {
+        roundsRun = round + 1;
         const isFirstRound = round === 0;
 
         // Generate queries: use blueprint on round 0, adaptive on subsequent rounds
@@ -716,6 +726,7 @@ Extract as bullet points. Be specific with numbers, dates, and source attributio
     return {
         sources: allSources.sort((a, b) => scoreSource(b) - scoreSource(a)),
         knowledgeBase,
+        roundsRun,
     };
 }
 
@@ -1035,6 +1046,11 @@ interface VerificationInputs {
 interface VerificationResult {
     totalClaims: number;
     groundedClaims: number;
+    // Cross-reference signal (deep-research skill rule): "if only one source
+    // says it, flag it". multiSourceClaims are those found in ≥2 distinct
+    // evidence items; singleSourceClaims are grounded but in one item only.
+    multiSourceClaims: number;
+    singleSourceClaims: string[];
     unsupportedClaims: string[];
 }
 
@@ -1252,8 +1268,12 @@ export function verifyNumericConsistency(
 ): VerificationResult {
     const claims = extractClaims(markdown);
 
-    // Build an evidence corpus from all source material.
-    const evidence: string[] = [
+    // Build evidence as a *list of distinct items* so we can cross-reference
+    // each claim against multiple sources. Collapsing to a single concatenated
+    // string (the prior approach) hides whether a claim appears in 1 vs. many
+    // sources — which is exactly the multi-source signal the deep-research
+    // skill calls out ("if only one source says it, flag it").
+    const evidenceItems: string[] = [
         inputs.knowledgeBase,
         inputs.sourceAnalysis,
         ...inputs.webSources.map(s => `${s.title} ${s.content}`),
@@ -1261,32 +1281,129 @@ export function verifyNumericConsistency(
         ...inputs.companyData.map(c =>
             `${c.marketCap} ${c.peRatio} ${c.fiftyTwoWeekHigh} ${c.fiftyTwoWeekLow}`
         ),
-    ];
-    const normalizedEvidence = evidence.map(normalizeNumber).join(' ');
+    ].filter(s => typeof s === 'string' && s.length > 0);
+
+    const normalizedItems = evidenceItems.map(normalizeNumber);
 
     const unsupported: string[] = [];
+    const singleSource: string[] = [];
     let grounded = 0;
+    let multiSource = 0;
 
     for (const claim of claims) {
         const norm = normalizeNumber(claim);
-        // Match the numeric core — strip unit suffix for loose matching.
         const numericCore = norm.replace(/[a-z%]/g, '');
         if (numericCore.length < 2) {
-            grounded += 1;  // too short to meaningfully verify
+            grounded += 1;
+            multiSource += 1;   // trivially short claims are treated as safe
             continue;
         }
-        if (normalizedEvidence.includes(numericCore)) {
-            grounded += 1;
-        } else {
+        let hits = 0;
+        for (const item of normalizedItems) {
+            if (item.includes(numericCore)) {
+                hits += 1;
+                if (hits >= 2) break;   // short-circuit — we only need ≥2
+            }
+        }
+        if (hits === 0) {
             unsupported.push(claim);
+        } else if (hits === 1) {
+            grounded += 1;
+            singleSource.push(claim);
+        } else {
+            grounded += 1;
+            multiSource += 1;
         }
     }
 
     return {
         totalClaims: claims.length,
         groundedClaims: grounded,
-        unsupportedClaims: unsupported.slice(0, 50),  // cap to avoid metadata bloat
+        multiSourceClaims: multiSource,
+        singleSourceClaims: singleSource.slice(0, 30),
+        unsupportedClaims: unsupported.slice(0, 50),
     };
+}
+
+// ─── Confidence Derivation ──────────────────────────────────────────────────
+// Maps three grounding signals — numeric-grounding rate, cross-reference
+// rate, citation-density — onto a High/Medium/Low banner. Thresholds match
+// the deep-research skill's rules ("every claim needs a source; flag single-
+// source data") and our own §10.5 production-grounding discipline.
+
+export type Confidence = 'High' | 'Medium' | 'Low';
+
+export interface ConfidenceInputs {
+    numericGroundingRate: number;     // grounded / total, 0..1
+    multiSourceRate: number;          // multiSource / grounded, 0..1
+    citationDensity: number;          // cited / factSentences, 0..1
+    totalClaims: number;              // for sanity — <5 claims → downgrade
+}
+
+export function deriveConfidence(i: ConfidenceInputs): Confidence {
+    // Too few claims to trust the other signals — report as Medium at best.
+    const lowSignal = i.totalClaims < 5;
+    const high = !lowSignal
+        && i.numericGroundingRate >= 0.85
+        && i.citationDensity      >= 0.85
+        && i.multiSourceRate      >= 0.60;
+    const medium = i.numericGroundingRate >= 0.65
+        && i.citationDensity      >= 0.65;
+    if (high)   return 'High';
+    if (medium) return 'Medium';
+    return 'Low';
+}
+
+// ─── Methodology Section Builder ────────────────────────────────────────────
+// Appended to the Writer's markdown output so PDF/CSV/XLSX exports carry
+// reproducibility metadata (rounds, queries, source breakdown, confidence).
+// Keeps the LLM output uncontaminated — the section is always appended,
+// never asked-for mid-generation.
+
+export interface MethodologyInputs {
+    searchQueries: number;
+    rounds: number;
+    webSources: number;
+    secFilings: number;
+    ragSources: number;
+    subQuestions: string[];
+    verification: VerificationResult;
+    citationDensity: CitationDensityResult;
+    confidence: Confidence;
+}
+
+export function buildMethodologySection(m: MethodologyInputs): string {
+    const v = m.verification;
+    const d = m.citationDensity;
+    const numericRate = v.totalClaims > 0 ? Math.round((v.groundedClaims / v.totalClaims) * 100) : 100;
+    const multiRate = v.groundedClaims > 0 ? Math.round((v.multiSourceClaims / v.groundedClaims) * 100) : 100;
+    const densityPct = d.totalFactSentences > 0 ? Math.round(d.density * 100) : 100;
+
+    const bullets = [
+        `**Search:** ${m.searchQueries} queries dispatched across ${m.rounds} adaptive round${m.rounds === 1 ? '' : 's'}`,
+        `**Sources analyzed:** ${m.webSources} web · ${m.secFilings} SEC filings · ${m.ragSources} RAG passages`,
+        `**Sub-questions:** ${m.subQuestions.length} research angle${m.subQuestions.length === 1 ? '' : 's'} investigated`,
+        `**Grounding:** ${v.groundedClaims}/${v.totalClaims} numeric claims matched source evidence (${numericRate}%); ${v.multiSourceClaims} corroborated by ≥2 sources (${multiRate}%)`,
+        `**Citation density:** ${d.citedSentences}/${d.totalFactSentences} factual sentences cited (${densityPct}%)`,
+    ];
+
+    const caveat = m.confidence === 'High'
+        ? 'All three grounding signals cleared the High threshold. Report is suitable as a citation-grounded first draft; an analyst review is still recommended before investment-committee distribution.'
+        : m.confidence === 'Medium'
+            ? 'Numeric grounding and citation density cleared the Medium threshold but one signal is below the High bar. Re-verify single-source figures and any uncited factual sentences before publication.'
+            : 'One or more grounding signals fell below acceptable thresholds. Treat this report as a research starting point, not a publication-ready deliverable. Primary-source verification is required before distribution.';
+
+    return `
+
+---
+
+## Methodology & Confidence
+
+**Confidence: ${m.confidence}**
+
+${bullets.map(b => '- ' + b).join('\n')}
+
+${caveat}`;
 }
 
 // ─── Main Export: performDeepResearch ────────────────────────────────────────
@@ -1328,7 +1445,7 @@ export const performDeepResearch = async (
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
     // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro
     const [
-        { sources: webSources, knowledgeBase },
+        { sources: webSources, knowledgeBase, roundsRun },
         ragResult,
         macroText,
         ...secAndCompanyArrays
@@ -1351,7 +1468,7 @@ export const performDeepResearch = async (
         ...blueprint.tickers.slice(0, 4).map(ticker =>
             getCompanyOverview(ticker).catch(() => null)
         ),
-    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string }, GravityRAGResult, string, ...(SECFiling[] | CompanyOverview | null)[]];
+    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number }, GravityRAGResult, string, ...(SECFiling[] | CompanyOverview | null)[]];
 
     // Separate SEC filings from company overviews
     const numSecTargets = blueprint.secTargets.slice(0, 5).length;
@@ -1474,6 +1591,39 @@ export const performDeepResearch = async (
         }
     } catch { /* verifier is advisory — never block */ }
 
+    // ── Confidence derivation + methodology footer ────────────────────────
+    // Rolls the three grounding signals (numeric rate, multi-source rate,
+    // citation density) into a single banner for the report header, then
+    // appends a reproducibility block so exports carry the provenance too.
+    const numericRate = verification.totalClaims > 0
+        ? verification.groundedClaims / verification.totalClaims
+        : 1;
+    const multiSourceRate = verification.groundedClaims > 0
+        ? verification.multiSourceClaims / verification.groundedClaims
+        : 1;
+    const confidence = deriveConfidence({
+        numericGroundingRate: numericRate,
+        multiSourceRate,
+        citationDensity: citationDensity.density,
+        totalClaims: verification.totalClaims,
+    });
+
+    const subQuestions = blueprint.researchAngles.length > 0
+        ? blueprint.researchAngles
+        : blueprint.subtopics;
+    const methodologyMd = buildMethodologySection({
+        searchQueries: blueprint.searchQueries.length,
+        rounds: roundsRun,
+        webSources: webSources.length,
+        secFilings: secFilings.length,
+        ragSources: ragSourceCount,
+        subQuestions,
+        verification,
+        citationDensity,
+        confidence,
+    });
+    const finalMarkdown = markdown + methodologyMd;
+
     const auditTail = claimAudit
         ? ` · ${claimAudit.supported}/${claimAudit.audited} claims supported`
         : '';
@@ -1482,7 +1632,7 @@ export const performDeepResearch = async (
         : '';
     onProgress({
         stage: 'complete',
-        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -1517,15 +1667,17 @@ export const performDeepResearch = async (
     }
 
     // ── Extract Metadata ───────────────────────────────────────────────────
+    // Title / summary pulled from the *original* markdown — the appended
+    // methodology footer is structural, not part of the report body.
     const titleMatch = markdown.match(/^#\s+(.+)$/m);
     const summaryMatch = markdown.match(/^#\s+.+\n\n([\s\S]+?)(?=\n##)/);
-    const wordCount = markdown.split(/\s+/).length;
+    const wordCount = finalMarkdown.split(/\s+/).length;
 
     const report: ResearchReport = {
         query,
         title: titleMatch ? titleMatch[1].replace(/\*\*/g, '').trim() : query,
         summary: summaryMatch ? summaryMatch[1].trim().substring(0, 500) : '',
-        markdown,
+        markdown: finalMarkdown,
         citations,
         metadata: {
             sourcesAnalyzed: totalSources,
@@ -1538,6 +1690,12 @@ export const performDeepResearch = async (
             verification,
             claimAudit,
             citationDensity,
+            confidence,
+            methodology: {
+                searchQueries: blueprint.searchQueries.length,
+                rounds: roundsRun,
+                subQuestions,
+            },
         },
     };
 

@@ -393,8 +393,27 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {report.metadata.confidence && (() => {
+                                const c = report.metadata.confidence;
+                                const bg = c === 'High' ? 'rgba(34, 197, 94, 0.14)' : c === 'Medium' ? 'rgba(234, 179, 8, 0.14)' : 'rgba(239, 68, 68, 0.14)';
+                                const border = c === 'High' ? 'rgba(34, 197, 94, 0.3)' : c === 'Medium' ? 'rgba(234, 179, 8, 0.3)' : 'rgba(239, 68, 68, 0.3)';
+                                const color = c === 'High' ? '#86EFAC' : c === 'Medium' ? '#FDE68A' : '#FCA5A5';
+                                const tip = c === 'High'
+                                    ? 'Numeric grounding, multi-source corroboration and citation density all cleared the High threshold.'
+                                    : c === 'Medium'
+                                        ? 'Numeric grounding and citation density cleared Medium. Re-verify single-source figures before publication.'
+                                        : 'One or more grounding signals below threshold. Primary-source verification required.';
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Shield className="w-3 h-3" />
+                                        <span>Confidence: {c}</span>
+                                    </div>
+                                );
+                            })()}
                             {report.metadata.template && (
                                 <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
                                     style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#A5B4FC', border: '1px solid rgba(99, 102, 241, 0.25)' }}>
@@ -408,12 +427,21 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                 const bg = rate >= 0.85 ? 'rgba(34, 197, 94, 0.12)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.12)' : 'rgba(239, 68, 68, 0.12)';
                                 const border = rate >= 0.85 ? 'rgba(34, 197, 94, 0.25)' : rate >= 0.6 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)';
                                 const color = rate >= 0.85 ? '#86EFAC' : rate >= 0.6 ? '#FDE68A' : '#FCA5A5';
+                                const tip = [
+                                    v.unsupportedClaims.length > 0 ? `Unsupported: ${v.unsupportedClaims.slice(0, 5).join(', ')}` : 'All numeric claims grounded in sources',
+                                    v.singleSourceClaims && v.singleSourceClaims.length > 0
+                                        ? `Single-source (flagged for cross-reference): ${v.singleSourceClaims.slice(0, 5).join(', ')}`
+                                        : '',
+                                ].filter(Boolean).join('\n');
+                                const multiLabel = typeof v.multiSourceClaims === 'number'
+                                    ? ` · ${v.multiSourceClaims} corroborated`
+                                    : '';
                                 return (
                                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
                                         style={{ background: bg, color, border: `1px solid ${border}` }}
-                                        title={v.unsupportedClaims.length > 0 ? `Unsupported: ${v.unsupportedClaims.slice(0, 5).join(', ')}` : 'All numeric claims grounded in sources'}>
+                                        title={tip}>
                                         <Shield className="w-3 h-3" />
-                                        <span>{v.groundedClaims}/{v.totalClaims} numeric claims grounded</span>
+                                        <span>{v.groundedClaims}/{v.totalClaims} numeric grounded{multiLabel}</span>
                                     </div>
                                 );
                             })()}
