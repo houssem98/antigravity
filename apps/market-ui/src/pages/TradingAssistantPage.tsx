@@ -319,13 +319,13 @@ export default function TradingAssistantPage() {
   }, []);
 
   return (
-    <div className="flex h-screen w-full font-sans overflow-hidden" style={{ background: '#0A0E17', color: '#C4CDD8' }}>
+    <div className="flex h-screen w-full font-sans overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-2)]">
       {/* Persistent Left Nav Sidebar */}
-      <aside className="w-[56px] flex flex-col items-center py-4 shrink-0 z-50" style={{ background: '#0B0E14', borderRight: '1px solid #1B2236' }}>
-        <Link to="/search" className="w-9 h-9 rounded-xl flex items-center justify-center mb-5" style={{ background: 'rgba(41,98,255,0.15)' }}>
-          <Sparkles className="w-5 h-5" style={{ color: '#2962FF' }} />
+      <aside className="w-[56px] flex flex-col items-center py-3 shrink-0 z-50 bg-[color:var(--surface)] border-r border-[color:var(--line)]">
+        <Link to="/search" className="w-8 h-8 rounded-sm flex items-center justify-center mb-4 bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)] glint chrome">
+          <Sparkles className="w-4 h-4 text-[color:var(--accent)]" />
         </Link>
-        <nav className="flex flex-col gap-2 flex-1">
+        <nav className="flex flex-col gap-1 flex-1 stagger">
           {NAV.map(({ to, icon: Icon, label }) => {
             const active = location.pathname === to;
             return (
@@ -333,12 +333,13 @@ export default function TradingAssistantPage() {
                 key={to}
                 to={to}
                 title={label}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
-                style={{ background: active ? 'rgba(41,98,255,0.15)' : 'transparent' }}
-                onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#0E1320'; }}
-                onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ${
+                  active
+                    ? 'text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
+                    : 'text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]'
+                }`}
               >
-                <Icon className="w-4.5 h-4.5" style={{ color: active ? '#2962FF' : '#5A6478' }} />
+                <Icon className="w-4 h-4" />
               </Link>
             );
           })}
@@ -348,82 +349,76 @@ export default function TradingAssistantPage() {
       {/* Main Trading Area */}
       <div className="flex flex-col flex-1 overflow-hidden">
       {/* Global Header */}
-      <header className="h-14 shrink-0 flex items-center px-4 justify-between z-50" style={{ background: '#0B0E14', borderBottom: '1px solid #1B2236' }}>
+      <header className="h-12 shrink-0 flex items-center px-3 justify-between z-50 bg-[color:var(--surface)] border-b border-[color:var(--line)]">
         <div className="flex items-center gap-4">
           {currentView === 'chart' && (
             <button
               onClick={() => setCurrentView('markets')}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-              style={{ color: '#5A6478' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#0E1320')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              className="w-7 h-7 rounded-sm flex items-center justify-center transition-colors text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]"
               title="Back to markets"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4" />
             </button>
           )}
           <div
-            className="font-bold text-[18px] tracking-tighter flex items-center gap-2 cursor-pointer text-white"
+            className="flex items-center gap-2 cursor-pointer"
             onClick={() => setCurrentView('markets')}
           >
-            <div className="w-8 h-8 rounded-full flex items-center justify-center shadow-sm" style={{ background: '#2962FF' }}>
-              <span className="text-white font-extrabold text-base leading-none">M</span>
+            <div className="w-6 h-6 rounded-sm flex items-center justify-center bg-[color:var(--accent)] glint chrome">
+              <span className="text-[color:var(--accent-ink)] font-bold text-[13px] leading-none">M</span>
             </div>
-            Markets
+            <span className="font-display font-semibold text-h4 text-[color:var(--text)] tracking-tight">Markets</span>
           </div>
-          <nav className="hidden lg:flex items-center gap-5">
-            {['Cryptocurrencies', 'Exchanges', 'Community', 'Products', 'Learn'].map((label, i) => (
-              <button
-                key={label}
-                onClick={i === 0 ? () => setCurrentView('markets') : undefined}
-                className="text-[13px] font-semibold transition-colors"
-                style={{ color: (i === 0 && currentView === 'markets') ? '#2962FF' : '#5A6478' }}
-                onMouseEnter={e => (e.currentTarget.style.color = '#FFFFFF')}
-                onMouseLeave={e => (e.currentTarget.style.color = (i === 0 && currentView === 'markets') ? '#2962FF' : '#5A6478')}
-              >
-                {label}
-              </button>
-            ))}
+          <nav className="hidden lg:flex items-center gap-4 ml-2">
+            {['Cryptocurrencies', 'Exchanges', 'Community', 'Products', 'Learn'].map((label, i) => {
+              const isActive = i === 0 && currentView === 'markets';
+              return (
+                <button
+                  key={label}
+                  onClick={i === 0 ? () => setCurrentView('markets') : undefined}
+                  className={`text-body font-medium transition-colors ${
+                    isActive
+                      ? 'text-[color:var(--text)]'
+                      : 'text-[color:var(--text-3)] hover:text-[color:var(--text-2)]'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </nav>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden xl:flex items-center gap-4">
-            <button className="flex items-center gap-1.5 text-[13px] font-semibold transition-colors" style={{ color: '#5A6478' }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#FFFFFF')}
-              onMouseLeave={e => (e.currentTarget.style.color = '#5A6478')}>
-              <Star className="w-4 h-4" /> Watchlist
+        <div className="flex items-center gap-2">
+          <div className="hidden xl:flex items-center gap-3">
+            <button className="flex items-center gap-1.5 text-body font-medium text-[color:var(--text-3)] hover:text-[color:var(--text)] transition-colors">
+              <Star className="w-3.5 h-3.5" /> Watchlist
             </button>
-            <button className="flex items-center gap-1.5 text-[13px] font-semibold transition-colors" style={{ color: '#5A6478' }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#FFFFFF')}
-              onMouseLeave={e => (e.currentTarget.style.color = '#5A6478')}>
-              <PieChart className="w-4 h-4" /> Portfolio
+            <button className="flex items-center gap-1.5 text-body font-medium text-[color:var(--text-3)] hover:text-[color:var(--text)] transition-colors">
+              <PieChart className="w-3.5 h-3.5" /> Portfolio
             </button>
           </div>
           <div
             className="relative hidden md:flex items-center cursor-pointer"
             onClick={() => setIsSearchModalOpen(true)}
           >
-            <Search className="w-4 h-4 absolute left-3" style={{ color: '#5A6478' }} />
+            <Search className="w-3.5 h-3.5 absolute left-2.5 text-[color:var(--text-3)]" />
             <input
               type="text"
               placeholder="Search"
               readOnly
-              className="text-[13px] rounded-xl pl-9 pr-10 py-2 w-56 focus:outline-none cursor-pointer transition-all"
-              style={{ background: '#0E1320', border: '1px solid #1B2236', color: '#C4CDD8' }}
+              className="text-body rounded-sm pl-8 pr-9 py-1.5 w-56 focus:outline-none cursor-pointer bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-3)] hover:border-[color:var(--line-strong)] transition-colors"
             />
-            <div className="absolute right-2.5 text-[11px] px-1.5 py-0.5 rounded font-mono" style={{ color: '#5A6478', background: '#1B2236' }}>/</div>
+            <div className="absolute right-2 text-label font-mono px-1.5 py-0.5 rounded-sm text-[color:var(--text-3)] bg-[color:var(--surface-2)] border border-[color:var(--line)]">/</div>
           </div>
-          <button className="p-2 rounded-lg transition-colors" style={{ color: '#5A6478' }}
-            onMouseEnter={e => (e.currentTarget.style.background = '#0E1320')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          <button className="p-1.5 rounded-sm transition-colors text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]">
             <Settings className="w-4 h-4" />
           </button>
-          <button className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all" style={{ background: '#2962FF', color: '#FFFFFF' }}>
-            Log In
+          <button className="text-label font-semibold px-3 py-1.5 rounded-sm bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:brightness-110 transition-colors press shiny chrome cta-glow" style={{ letterSpacing: '0.04em' }}>
+            LOG IN
           </button>
-          <button className="text-[13px] font-bold px-4 py-2 rounded-xl transition-colors" style={{ background: '#0E1320', color: '#C4CDD8', border: '1px solid #1B2236' }}>
-            Sign Up
+          <button className="text-label font-semibold px-3 py-1.5 rounded-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text-2)] hover:border-[color:var(--line-strong)] hover:text-[color:var(--text)] transition-colors" style={{ letterSpacing: '0.04em' }}>
+            SIGN UP
           </button>
         </div>
       </header>
@@ -435,9 +430,9 @@ export default function TradingAssistantPage() {
             initial={{ opacity: 0, y: -20, x: '-50%' }}
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: -20, x: '-50%' }}
-            className="absolute top-20 left-1/2 z-[9999] bg-gray-800 border border-gray-700 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2"
+            className="absolute top-16 left-1/2 z-[9999] px-3 py-1.5 rounded-sm flex items-center gap-2 bg-[color:var(--surface-2)] border border-[color:var(--line-strong)] text-[color:var(--text)] text-body"
           >
-            <div className="w-2 h-2 rounded-full bg-blue-500" />
+            <div className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
             {toastMessage}
           </motion.div>
         )}
@@ -451,7 +446,7 @@ export default function TradingAssistantPage() {
       ) : (
         <>
           {/* 3-column layout: left info | chart | right community */}
-          <div className="flex flex-row flex-1 overflow-hidden" style={{ background: '#0B0E14' }}>
+          <div className="flex flex-row flex-1 overflow-hidden bg-[color:var(--bg)]">
 
             {/* Left: Coin info */}
             <AssetInfoPanel asset={currentAsset} onAskAI={() => setIsAssistantOpen(true)} />
@@ -475,7 +470,7 @@ export default function TradingAssistantPage() {
               {/* Chart area */}
               <div className="flex flex-row flex-1 overflow-hidden relative">
                 {/* Drawing tools sidebar */}
-                <div className="shrink-0" style={{ borderRight: '1px solid #1B2236' }}>
+                <div className="shrink-0">
                   <Sidebar
                     onToolClick={handleToolClick}
                     activeTool={activeTool}
@@ -499,41 +494,37 @@ export default function TradingAssistantPage() {
                   />
 
                   {/* Ask AI bar */}
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
                     <div
-                      className="rounded-full p-2 flex items-center gap-3 cursor-text transition-all"
-                      style={{ background: '#0E1320', border: '1px solid #1B2236', boxShadow: '0 4px 24px rgba(41,98,255,0.15)' }}
+                      className="rounded-sm p-1.5 flex items-center gap-2 cursor-text transition-colors bg-[color:var(--surface)] border border-[color:var(--line-strong)] hover:border-[color:var(--accent)]"
                       onClick={() => setIsAssistantOpen(true)}
-                      onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(41,98,255,0.5)')}
-                      onMouseLeave={e => (e.currentTarget.style.borderColor = '#1B2236')}
                     >
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 ml-1" style={{ background: 'linear-gradient(135deg,#2962FF,#7C3AED)' }}>
-                        <Sparkles className="w-4 h-4 text-white" />
+                      <div className="w-7 h-7 rounded-sm flex items-center justify-center shrink-0 bg-[color:var(--accent)] glint chrome">
+                        <Sparkles className="w-3.5 h-3.5 text-[color:var(--accent-ink)]" />
                       </div>
                       <input
                         type="text"
                         placeholder="Ask AI about this chart..."
-                        className="flex-1 bg-transparent text-[13px] focus:outline-none cursor-text placeholder:text-[#5A6478]"
-                        style={{ color: '#C4CDD8' }}
+                        className="flex-1 bg-transparent text-body focus:outline-none cursor-text text-[color:var(--text)] placeholder:text-[color:var(--text-3)]"
                         onFocus={() => setIsAssistantOpen(true)}
                         readOnly
                       />
-                      <div className="text-[11px] px-2.5 py-1 rounded-full font-mono shrink-0 mr-1" style={{ background: '#1B2236', color: '#5A6478' }}>Shift+/</div>
+                      <div className="text-label px-1.5 py-0.5 rounded-sm font-mono shrink-0 bg-[color:var(--surface-2)] text-[color:var(--text-3)] border border-[color:var(--line)]">Shift+/</div>
                     </div>
                   </div>
 
                   {/* Active tool toast */}
                   {activeTool && (
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
-                      <div className="bg-blue-500 text-white px-5 py-2.5 rounded-full shadow-lg flex items-center gap-3 text-sm">
+                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
+                      <div className="px-3 py-1.5 rounded-sm flex items-center gap-3 text-body bg-[color:var(--surface-2)] border border-[color:var(--line-strong)] text-[color:var(--text)]">
                         <span>
                           {drawingPoints.length === 0
                             ? `Click to set first point for ${activeTool}`
                             : `Click to set point ${drawingPoints.length + 1} for ${activeTool}`}
                         </span>
-                        <div className="w-px h-4 bg-blue-300/50" />
-                        <button onClick={() => { setActiveTool(null); setDrawingPoints([]); }}>
-                          <X className="w-4 h-4" />
+                        <div className="w-px h-4 bg-[color:var(--line)]" />
+                        <button onClick={() => { setActiveTool(null); setDrawingPoints([]); }} className="text-[color:var(--text-3)] hover:text-[color:var(--text)]">
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -549,7 +540,7 @@ export default function TradingAssistantPage() {
 
         {/* Floating Assistant Widget */}
         {isAssistantOpen && (
-          <div className="absolute bottom-24 right-6 w-[380px] h-[600px] max-h-[80vh] bg-[#0B0E14] border border-[#1F2937] rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden">
+          <div className="absolute bottom-20 right-4 w-[380px] h-[600px] max-h-[80vh] z-50 flex flex-col overflow-hidden rounded-[6px] bg-[color:var(--surface)] border border-[color:var(--line-strong)]">
             <Assistant onDraw={handleDraw} currentAsset={currentAsset} onClose={() => setIsAssistantOpen(false)} />
           </div>
         )}
@@ -557,16 +548,12 @@ export default function TradingAssistantPage() {
         {/* Floating Toggle Button */}
         <button
           onClick={() => setIsAssistantOpen(!isAssistantOpen)}
-          className={`absolute bottom-6 right-6 p-4 rounded-full shadow-xl transition-all duration-300 z-40 flex items-center justify-center ${
-            isAssistantOpen
-              ? 'bg-red-500 hover:bg-red-600 rotate-90'
-              : 'bg-blue-600 hover:bg-blue-700 hover:scale-105'
-          }`}
+          className="absolute bottom-4 right-4 w-10 h-10 rounded-sm transition-colors z-40 flex items-center justify-center bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:brightness-110 press"
         >
           {isAssistantOpen ? (
-            <X className="w-6 h-6 text-white" />
+            <X className="w-5 h-5" />
           ) : (
-            <MessageSquare className="w-6 h-6 text-white" />
+            <MessageSquare className="w-5 h-5" />
           )}
         </button>
 

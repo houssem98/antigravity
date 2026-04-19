@@ -140,18 +140,18 @@ export default function HistoryPage() {
                     </div>
                     <button
                         onClick={() => navigate('/research')}
-                        className="flex items-center gap-2 px-5 py-3 rounded-xl font-medium text-sm text-white transition-all hover:scale-105 hover:shadow-xl hover:shadow-[#9B72CB]/20 flex-shrink-0"
-                        style={{ background: 'linear-gradient(135deg, #4285F4, #9B72CB, #D96570)' }}
+                        className="flex items-center gap-2 px-4 py-2 rounded-sm font-semibold text-label text-[color:var(--accent-ink)] bg-[color:var(--accent)] hover:brightness-110 transition-colors flex-shrink-0 shiny chrome cta-glow press"
+                        style={{ letterSpacing: '0.04em' }}
                     >
-                        <Sparkles className="w-4 h-4" />
-                        New Research
-                        <ArrowRight className="w-4 h-4" />
+                        <Sparkles className="w-3.5 h-3.5" />
+                        NEW RESEARCH
+                        <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                 </div>
 
                 {/* ═══ STATS ROW ═══ */}
                 {reports.length > 0 && (
-                    <div className="relative z-10 grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
+                    <div className="relative z-10 grid grid-cols-2 md:grid-cols-4 gap-3 mt-6 stagger">
                         {[
                             { icon: FileText, label: 'Total Reports', value: reports.length, color: '#4285F4' },
                             { icon: Database, label: 'Sources Analyzed', value: totalSources, color: '#9B72CB' },
@@ -249,12 +249,12 @@ export default function HistoryPage() {
                     </p>
                     <button
                         onClick={() => navigate('/research')}
-                        className="px-8 py-3 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 hover:shadow-xl hover:shadow-[#9B72CB]/20"
-                        style={{ background: 'linear-gradient(135deg, #4285F4, #9B72CB, #D96570)' }}
+                        className="px-6 py-2.5 rounded-sm text-label font-semibold text-[color:var(--accent-ink)] bg-[color:var(--accent)] hover:brightness-110 transition-colors shiny chrome cta-glow press"
+                        style={{ letterSpacing: '0.06em' }}
                     >
                         <span className="flex items-center gap-2">
-                            <Sparkles className="w-4 h-4" />
-                            Begin Your First Research
+                            <Sparkles className="w-3.5 h-3.5" />
+                            BEGIN YOUR FIRST RESEARCH
                         </span>
                     </button>
                 </div>

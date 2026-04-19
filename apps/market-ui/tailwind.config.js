@@ -1,82 +1,71 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  darkMode: ["class"],
+  darkMode: ["class", '[data-theme="dark"]'],
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
-        secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
-        },
-        destructive: {
-          DEFAULT: "hsl(var(--destructive) / <alpha-value>)",
-          foreground: "hsl(var(--destructive-foreground) / <alpha-value>)",
-        },
-        muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
-        },
-        accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
-        },
-        popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
-        },
-        card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
-        },
-        sidebar: {
-          DEFAULT: "hsl(var(--sidebar-background))",
-          foreground: "hsl(var(--sidebar-foreground))",
-          primary: "hsl(var(--sidebar-primary))",
-          "primary-foreground": "hsl(var(--sidebar-primary-foreground))",
-          accent: "hsl(var(--sidebar-accent))",
-          "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
-          border: "hsl(var(--sidebar-border))",
-          ring: "hsl(var(--sidebar-ring))",
-        },
+        // Semantic tokens resolve from CSS vars (oklch under the hood)
+        background:   "var(--bg)",
+        foreground:   "var(--text)",
+        surface:      "var(--surface)",
+        "surface-2":  "var(--surface-2)",
+        line:         "var(--line)",
+        "line-strong":"var(--line-strong)",
+        "text-2":     "var(--text-2)",
+        "text-3":     "var(--text-3)",
+        "text-4":     "var(--text-4)",
+        accent:       { DEFAULT: "var(--accent)", foreground: "var(--accent-ink)" },
+        up:           "var(--up)",
+        down:         "var(--down)",
+        flat:         "var(--flat)",
+
+        // Legacy shadcn aliases preserved so existing components keep rendering
+        border:       "var(--line)",
+        input:        "var(--line)",
+        ring:         "var(--accent)",
+        primary:      { DEFAULT: "var(--accent)",     foreground: "var(--accent-ink)" },
+        secondary:    { DEFAULT: "var(--surface-2)",  foreground: "var(--text)" },
+        destructive:  { DEFAULT: "var(--down)",       foreground: "var(--text)" },
+        muted:        { DEFAULT: "var(--surface-2)",  foreground: "var(--text-2)" },
+        popover:      { DEFAULT: "var(--surface-2)",  foreground: "var(--text)" },
+        card:         { DEFAULT: "var(--surface)",    foreground: "var(--text)" },
+      },
+      fontFamily: {
+        sans:    ["Archivo", "system-ui", "sans-serif"],
+        display: ['"Archivo Narrow"', "Archivo", "sans-serif"],
+        mono:    ['"Martian Mono"', "ui-monospace", "monospace"],
+      },
+      fontSize: {
+        label: ["11px", { lineHeight: "1.3", letterSpacing: "0.08em" }],
+        data:  ["12px", { lineHeight: "1.35" }],
+        body:  ["13px", { lineHeight: "1.5" }],
+      },
+      spacing: {
+        "3xs": "2px",
+        "2xs": "4px",
+        xs:    "6px",
+        sm:    "8px",
+        md:    "12px",
+        lg:    "16px",
+        xl:    "24px",
+        "2xl": "32px",
+        "3xl": "48px",
       },
       borderRadius: {
-        xl: "calc(var(--radius) + 4px)",
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-        xs: "calc(var(--radius) - 6px)",
-      },
-      boxShadow: {
-        xs: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        sm: "2px",
+        DEFAULT: "4px",
+        md: "4px",
+        lg: "6px",
+        xl: "8px",
       },
       keyframes: {
-        "accordion-down": {
-          from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
-        },
-        "accordion-up": {
-          from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
-        "caret-blink": {
-          "0%,70%,100%": { opacity: "1" },
-          "20%,50%": { opacity: "0" },
-        },
+        "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
+        "accordion-up":   { from: { height: "var(--radix-accordion-content-height)" }, to: { height: "0" } },
       },
       animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
-        "caret-blink": "caret-blink 1.25s ease-out infinite",
+        "accordion-down": "accordion-down 160ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+        "accordion-up":   "accordion-up 160ms cubic-bezier(0.2, 0.8, 0.2, 1)",
       },
     },
   },
