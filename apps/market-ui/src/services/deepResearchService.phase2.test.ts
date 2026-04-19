@@ -12,7 +12,14 @@ import {
     buildClaimJudgePrompt,
     parseClaimVerdicts,
     auditClaimsWithLLM,
+    verifyCitationDensity,
 } from './deepResearchService';
+import {
+    classifyAuthority,
+    authorityWeight,
+    weightedAuthorityScore,
+    type TavilySearchResult,
+} from './tavilyService';
 import {
     scoreReport,
     summarize,
@@ -473,6 +480,120 @@ const errorAudit = await auditClaimsWithLLM(
     { callLLM: async () => { throw new Error('rate limited'); } },
 );
 check('auditClaimsWithLLM returns [] when LLM throws', errorAudit.length === 0);
+
+// ─── 9. Source-authority classification ─────────────────────────────────────
+console.log('\n[9] Source-authority classification');
+
+check('sec.gov classifies as primary',
+    classifyAuthority('https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany') === 'primary');
+check('ir.apple.com classifies as primary',
+    classifyAuthority('https://ir.apple.com/investor-updates/default.aspx') === 'primary');
+check('investor.microsoft.com classifies as primary',
+    classifyAuthority('https://investor.microsoft.com/investor-relations/earnings') === 'primary');
+check('federalreserve.gov classifies as primary',
+    classifyAuthority('https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm') === 'primary');
+check('reuters.com classifies as premium_news',
+    classifyAuthority('https://www.reuters.com/business/finance/') === 'premium_news');
+check('bloomberg.com classifies as premium_news',
+    classifyAuthority('https://www.bloomberg.com/news/articles/xyz') === 'premium_news');
+check('cnbc.com classifies as mainstream',
+    classifyAuthority('https://www.cnbc.com/2026/04/18/markets') === 'mainstream');
+check('seekingalpha.com classifies as aggregator',
+    classifyAuthority('https://seekingalpha.com/article/123') === 'aggregator');
+check('some-random-blog.xyz classifies as other',
+    classifyAuthority('https://some-random-blog.xyz/post/whatever') === 'other');
+check('malformed URL falls back to other',
+    classifyAuthority('not a url at all') === 'other');
+
+// Authority weights are strictly decreasing across tiers.
+check('authorityWeight(primary) > premium_news',
+    authorityWeight('primary') > authorityWeight('premium_news'));
+check('authorityWeight(premium_news) > mainstream',
+    authorityWeight('premium_news') > authorityWeight('mainstream'));
+check('authorityWeight(mainstream) > aggregator',
+    authorityWeight('mainstream') > authorityWeight('aggregator'));
+check('authorityWeight(aggregator) > other',
+    authorityWeight('aggregator') > authorityWeight('other'));
+
+// weightedAuthorityScore: SEC with a low tavily score beats a blog with a high score.
+const secLow: TavilySearchResult = {
+    title: 'Apple 10-Q', url: 'https://www.sec.gov/Archives/edgar/x/0001.htm',
+    content: '...', score: 0.2,
+};
+const blogHigh: TavilySearchResult = {
+    title: 'Hot take on AAPL', url: 'https://random-blog.com/aapl-is-doomed',
+    content: '...', score: 0.99,
+};
+check('weightedAuthorityScore: SEC with low tavily score > blog with high tavily score',
+    weightedAuthorityScore(secLow) > weightedAuthorityScore(blogHigh));
+
+// ─── 10. Citation-density verifier ──────────────────────────────────────────
+console.log('\n[10] Citation-density verifier');
+
+const fullyCitedMd = `
+# AAPL Earnings Recap
+
+Apple reported revenue of $94.9 billion [1].
+Services grew 12% year-over-year to $24.9 billion [RAG-2].
+Management raised FY guidance to $400B [3].
+We now turn to the bear case.
+`;
+const noCiteMd = `
+# AAPL Earnings Recap
+
+Apple reported revenue of $94.9 billion.
+Services grew 12% year-over-year to $24.9 billion.
+Management raised FY guidance to $400B.
+`;
+const partialMd = `
+# AAPL Earnings Recap
+
+Apple reported revenue of $94.9 billion [1].
+Services grew 12% year-over-year to $24.9 billion.
+Management raised FY guidance to $400B.
+`;
+
+const full = verifyCitationDensity(fullyCitedMd);
+check('citation density: fully-cited report has density 1.0',
+    full.density === 1 && full.totalFactSentences === 3,
+    `density=${full.density} total=${full.totalFactSentences}`);
+check('citation density: non-factual transition not counted',
+    full.totalFactSentences === 3);
+
+const none = verifyCitationDensity(noCiteMd);
+check('citation density: no-cite report has density 0.0',
+    none.density === 0 && none.citedSentences === 0,
+    `density=${none.density} cited=${none.citedSentences}`);
+check('citation density: no-cite report reports 3 fact sentences',
+    none.totalFactSentences === 3);
+check('citation density: no-cite report carries uncited samples',
+    none.uncitedSamples.length === 3);
+
+const part = verifyCitationDensity(partialMd);
+check('citation density: partial-cite report density ~ 0.33',
+    Math.abs(part.density - 1/3) < 0.01,
+    `density=${part.density}`);
+check('citation density: partial-cite report flags 2 uncited',
+    part.uncitedSamples.length === 2);
+
+// Empty / header-only markdown should not throw or divide by zero.
+const empty = verifyCitationDensity('# Title\n\n## Section\n\nWe now turn to analysis.');
+check('citation density: empty markdown yields density 1.0 (no fact sentences)',
+    empty.totalFactSentences === 0 && empty.density === 1);
+
+// Table-row content is stripped (tables carry their own citations in captions/footers).
+const tableMd = `
+## Scorecard
+| Metric | Value |
+|---|---|
+| Revenue | $94.9B |
+| Growth  | 12%    |
+
+The headline miss on services guidance [2] is the key takeaway.
+`;
+const tbl = verifyCitationDensity(tableMd);
+check('citation density: table rows not counted as fact sentences',
+    tbl.totalFactSentences === 1 && tbl.citedSentences === 1);
 
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');

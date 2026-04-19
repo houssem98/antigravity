@@ -9,7 +9,12 @@
 //   5. Report      — Gemini 2.5 Pro: Goldman Sachs-style 3000+ word institutional report
 //   6. Output      — Structured ResearchReport with citations
 
-import { searchMultipleQueriesParallel, type TavilySearchResult } from './tavilyService';
+import {
+    searchMultipleQueriesParallel,
+    classifyAuthority,
+    authorityWeight,
+    type TavilySearchResult,
+} from './tavilyService';
 import { queryGravityRAG, formatRAGSourcesForPrompt, formatRAGStructuredData, type GravityRAGResult } from './gravitySearchService';
 import { searchFilings, type SECFiling } from './secEdgarService';
 import { getCompanyOverview, type CompanyOverview } from './marketData';
@@ -223,6 +228,12 @@ export interface ResearchReport {
             partial: number;
             unsupported: number;
             flags: ClaimVerdict[];
+        };
+        citationDensity?: {
+            totalFactSentences: number;
+            citedSentences: number;
+            density: number;  // 0..1
+            uncitedSamples: string[];
         };
     };
 }
@@ -518,18 +529,18 @@ Return ONLY valid JSON (no markdown, no explanation):
 }
 
 // ─── Source Quality Scorer ────────────────────────────────────────────────────
-
-const PREMIUM_DOMAINS = ['reuters.com', 'bloomberg.com', 'wsj.com', 'ft.com', 'sec.gov', 'federalreserve.gov'];
-const GOOD_DOMAINS = ['cnbc.com', 'marketwatch.com', 'seekingalpha.com', 'barrons.com', 'economist.com', 'forbes.com', 'businessinsider.com'];
+// Blends Tavily's semantic score with the authority classifier in tavilyService
+// (primary > premium_news > mainstream > aggregator > other) plus a freshness
+// bump. Single source of truth for domain weighting lives in tavilyService.
 
 function scoreSource(s: TavilySearchResult): number {
-    let score = s.score ?? 0.5;
-    if (PREMIUM_DOMAINS.some(d => s.url.includes(d))) score += 0.3;
-    else if (GOOD_DOMAINS.some(d => s.url.includes(d))) score += 0.15;
+    const base = s.score ?? 0.5;
+    const auth = authorityWeight(classifyAuthority(s.url));
+    let score = 0.4 * base + 0.5 * auth;
     if (s.publishedDate) {
         const daysSince = (Date.now() - new Date(s.publishedDate).getTime()) / 86400000;
-        if (daysSince < 7) score += 0.2;
-        else if (daysSince < 30) score += 0.1;
+        if (daysSince < 7) score += 0.10;
+        else if (daysSince < 30) score += 0.05;
     }
     return Math.min(score, 1.0);
 }
@@ -991,13 +1002,16 @@ ${bearCase.substring(0, 500)}
 > **Key Finding:** [Non-consensus, data-backed insight in bold — the single thing a reader must remember. Must reference a specific figure from Tier 1 or a verified source.]
 
 ════════════════════════════════════════════
-CRITICAL WRITING STANDARDS
+CRITICAL WRITING STANDARDS — PER-SENTENCE CITATION DISCIPLINE
 ════════════════════════════════════════════
 ✓ NEVER fabricate figures — every number must trace to a cited source
-✓ MINIMUM 30 inline citations [n] or [RAG-n] distributed throughout
-✓ Tier 1 (RAG) figures take priority — mark them [RAG-n] so the reader knows they are verified
+✓ **Every sentence that states a fact, figure, forecast, quote, or attributed claim MUST end with one or more [n] or [RAG-n] tags** before the period. Uncited factual sentences will be rejected by the post-generation verifier and flagged as hallucinations.
+✓ Only transition/narrative sentences that carry no specific claim (e.g. "We now turn to the bear case.") may omit citations. When in doubt, cite.
+✓ MINIMUM 40 inline citations [n] or [RAG-n] distributed throughout — aim for ≥85% sentence-level citation density in factual paragraphs.
+✓ Tier 1 (RAG) figures take priority — mark them [RAG-n] so the reader knows they are verified.
+✓ If a claim cannot be cited from the provided evidence, OMIT it entirely rather than guess.
 ✓ Tone: institutional, direct, zero marketing language
-✓ Specific beats vague: "$2.47B in free cash flow" not "strong cash generation"
+✓ Specific beats vague: "$2.47B in free cash flow [3]" not "strong cash generation"
 ✓ Every required table must be populated — no placeholder rows
 ✓ Report target: 3,500–4,500 words`;
 
@@ -1178,6 +1192,58 @@ export async function auditClaimsWithLLM(
     } catch {
         return [];   // verifier is best-effort — never block the report
     }
+}
+
+// ─── Citation-Density Verifier ──────────────────────────────────────────────
+// Post-generation sweep that flags factual sentences missing an inline [n] /
+// [RAG-n] tag. Paired with the tightened Writer prompt, this turns the plan's
+// §6.2 "per-sentence inline citations enforced via prompt + post-gen verifier"
+// into an actual metric we can report and gate on.
+//
+// Scope: only sentences whose *content after citations are stripped* matches
+// CLAIM_TRIGGERS count as "factual." Pure narrative transitions are ignored.
+
+const CITATION_TAG = /\[(?:RAG-)?\d+\]/;
+
+export interface CitationDensityResult {
+    totalFactSentences: number;
+    citedSentences: number;
+    density: number;
+    uncitedSamples: string[];
+}
+
+export function verifyCitationDensity(markdown: string): CitationDensityResult {
+    const stripped = markdown
+        .replace(/^#+\s.*$/gm, '')        // headers
+        .replace(/^\s*>\s?/gm, '')        // blockquotes
+        .replace(/\|[^\n]*\|/g, '')       // table rows (cited in caption/footnote)
+        .replace(/`[^`]*`/g, '')          // inline code
+        .replace(/^\s*[-*]\s+/gm, '');    // list bullets, keep content
+
+    const sentences = stripped
+        .split(/(?<=[.!?])\s+(?=[A-Z(])|\n{2,}/)
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length >= 20 && s.length <= 500);
+
+    let total = 0;
+    let cited = 0;
+    const uncited: string[] = [];
+    for (const s of sentences) {
+        const withoutCites = s.replace(/\[(?:RAG-)?\d+\]/g, '').trim();
+        if (!CLAIM_TRIGGERS.test(withoutCites)) continue;   // non-factual transition
+        total += 1;
+        if (CITATION_TAG.test(s)) {
+            cited += 1;
+        } else if (uncited.length < 10) {
+            uncited.push(s.length > 180 ? s.slice(0, 177) + '…' : s);
+        }
+    }
+    return {
+        totalFactSentences: total,
+        citedSentences: cited,
+        density: total > 0 ? cited / total : 1,
+        uncitedSamples: uncited,
+    };
 }
 
 export function verifyNumericConsistency(
@@ -1378,6 +1444,10 @@ export const performDeepResearch = async (
         sourceAnalysis,
     });
 
+    // Deterministic citation-density sweep — flags factual sentences missing
+    // an inline [n]/[RAG-n] tag. Cheap (no LLM), so always run.
+    const citationDensity = verifyCitationDensity(markdown);
+
     // Second-pass LLM-judge audit on sentence-level claims. Budget-gated: skip
     // if the tracker would blow past its cap. Failure is silent — the numeric
     // verifier above is the primary gate.
@@ -1407,9 +1477,12 @@ export const performDeepResearch = async (
     const auditTail = claimAudit
         ? ` · ${claimAudit.supported}/${claimAudit.audited} claims supported`
         : '';
+    const densityTail = citationDensity.totalFactSentences > 0
+        ? ` · ${Math.round(citationDensity.density * 100)}% citation density`
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}`,
+        message: `Report finalized · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -1464,6 +1537,7 @@ export const performDeepResearch = async (
             budget: tracker.snapshot(),
             verification,
             claimAudit,
+            citationDensity,
         },
     };
 
