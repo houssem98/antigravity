@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.sectionFanout || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -476,6 +476,25 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Shield className="w-3 h-3" />
                                         <span>{d.citedSentences}/{d.totalFactSentences} sentences cited ({Math.round(rate * 100)}%)</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.sectionFanout && report.metadata.sectionFanout.planned > 0 && (() => {
+                                const f = report.metadata.sectionFanout!;
+                                const rate = f.planned > 0 ? f.completed / f.planned : 0;
+                                const active = f.used && rate >= 0.6;
+                                const bg = active ? 'rgba(56, 189, 248, 0.12)' : 'rgba(156, 163, 175, 0.10)';
+                                const border = active ? 'rgba(56, 189, 248, 0.3)' : 'rgba(156, 163, 175, 0.25)';
+                                const color = active ? '#7DD3FC' : '#9CA3AF';
+                                const tip = f.used
+                                    ? `Parallel section fanout: ${f.completed}/${f.planned} sections written concurrently${f.failed > 0 ? ` (${f.failed} failed)` : ''}. Each section saw only its relevant evidence slice.`
+                                    : 'Section fanout skipped — monolith Writer used (budget-constrained or fallback triggered).';
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>{f.used ? `Fanout ${f.completed}/${f.planned}` : 'Monolith Writer'}</span>
                                     </div>
                                 );
                             })()}

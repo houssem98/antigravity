@@ -243,6 +243,12 @@ export interface ResearchReport {
             rounds: number;
             subQuestions: string[];
         };
+        sectionFanout?: {
+            used: boolean;             // true = per-section fanout; false = monolith fallback
+            planned: number;            // template.sections.length
+            completed: number;          // sections that returned a body
+            failed: number;             // sections that errored or came back empty
+        };
     };
 }
 
@@ -1029,6 +1035,342 @@ CRITICAL WRITING STANDARDS — PER-SENTENCE CITATION DISCIPLINE
     return callLLM(prompt, synthesisModel);
 }
 
+// ─── Stage 5b: Template-Driven Section Fanout ───────────────────────────────
+// Splits the Writer monolith into one LLM call per template section, each
+// seeing only its relevant evidence slice. Plan §6.1 P0: parallel per-section
+// calls give focused evidence, shorter prompts, tighter citation discipline,
+// and lower end-to-end latency.
+//
+// Failure mode: if ≥40% of sections fail, the caller falls back to the
+// monolith Writer. Partial successes still produce a usable report.
+
+const STOPWORDS = new Set([
+    'the','and','for','with','from','into','of','a','an','is','are','be','to',
+    'in','on','at','by','as','it','vs','its','their','our','this','that','these',
+    'those','amp','or','but','how','why','what','which','who','when','where',
+    'over','under','up','down','than','then','so','if','case','key','top',
+]);
+
+export function keywordsFromSection(title: string, extra: string[] = []): string[] {
+    const raw = [...title.split(/[\s\W]+/), ...extra.flatMap(s => s.split(/[\s\W]+/))];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const w of raw) {
+        const k = w.trim().toLowerCase();
+        if (k.length < 3) continue;
+        if (STOPWORDS.has(k)) continue;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(k);
+    }
+    return out;
+}
+
+export function scoreSourceForSection(
+    s: TavilySearchResult,
+    keywords: string[],
+): number {
+    if (keywords.length === 0) return 0;
+    const hay = `${s.title} ${s.content}`.toLowerCase();
+    let hits = 0;
+    for (const k of keywords) if (hay.includes(k)) hits += 1;
+    const kw = hits / keywords.length;
+    const auth = authorityWeight(classifyAuthority(s.url));
+    const semantic = typeof s.score === 'number' ? s.score : 0.5;
+    return 0.5 * kw + 0.3 * auth + 0.2 * semantic;
+}
+
+export function sliceEvidenceForSection(
+    section: string,
+    sources: TavilySearchResult[],
+    extraKeywords: string[],
+    limit = 15,
+): TavilySearchResult[] {
+    if (sources.length === 0) return [];
+    const keywords = keywordsFromSection(section, extraKeywords);
+    if (keywords.length === 0) return sources.slice(0, limit);
+    const scored = sources
+        .map(s => ({ s, score: scoreSourceForSection(s, keywords), kwHits: countHits(s, keywords) }))
+        .sort((a, b) => b.score - a.score);
+    // Prefer sources that hit ≥1 section keyword — off-topic high-semantic
+    // sources (e.g., aggregators SEO'd into the search result set) should
+    // not leak into a focused section just because of their Tavily score.
+    // Fall back to authority-ranked top only when NO source matches any
+    // keyword (rare — means the section title is disjoint from all evidence).
+    const keyworded = scored.filter(x => x.kwHits > 0);
+    const pool = keyworded.length > 0 ? keyworded : scored;
+    return pool.slice(0, limit).map(x => x.s);
+}
+
+function countHits(s: TavilySearchResult, keywords: string[]): number {
+    const hay = `${s.title} ${s.content}`.toLowerCase();
+    let n = 0;
+    for (const k of keywords) if (hay.includes(k)) n += 1;
+    return n;
+}
+
+export function buildReportTitle(blueprint: ResearchBlueprint, template: ReportTemplate): string {
+    const entities = blueprint.targetEntities.slice(0, 3).join(', ');
+    const timeframe = blueprint.timeframe || '';
+    if (entities && timeframe) return `${template.label}: ${entities} — ${timeframe}`;
+    if (entities) return `${template.label}: ${entities}`;
+    return template.label;
+}
+
+// Which template-required table (if any) belongs with this section title.
+// Heuristic: shared tokens ≥ 1. Keeps table placement deterministic without
+// asking the LLM to guess.
+export function requiredTableForSection(section: string, requiredTables: string[]): string | null {
+    const sTokens = new Set(keywordsFromSection(section));
+    for (const t of requiredTables) {
+        const tTokens = keywordsFromSection(t);
+        if (tTokens.some(k => sTokens.has(k))) return t;
+    }
+    return null;
+}
+
+export interface SectionWriterContext {
+    blueprint: ResearchBlueprint;
+    template: ReportTemplate;
+    section: string;
+    sectionIndex: number;
+    totalSections: number;
+    relevantSources: TavilySearchResult[];
+    citationMap: Map<string, number>;
+    verifiedFactsBlock: string;
+    sourceAnalysisExcerpt: string;
+    companyData: CompanyOverview[];
+    secFilings: SECFiling[];
+    bullCase: string;
+    bearCase: string;
+    macroText?: string;
+    ragCitationIndex: string;
+}
+
+export function buildSectionWriterPrompt(ctx: SectionWriterContext): string {
+    const isBullSection = /bull case|path to outperformance|bull surprise|bull scenario/i.test(ctx.section);
+    const isBearSection = /bear case|downside risk|bear surprise|bear scenario|\brisks?\b|risk matrix/i.test(ctx.section);
+    const table = requiredTableForSection(ctx.section, ctx.template.requiredTables);
+
+    const marketDataBlock = ctx.companyData.length > 0
+        ? ctx.companyData.map(c =>
+            `${c.name} (${c.symbol}): Sector=${c.sector} | Mkt Cap=$${(c.marketCap / 1e9).toFixed(1)}B | P/E=${c.peRatio} | 52wk Hi=$${c.fiftyTwoWeekHigh} / Lo=$${c.fiftyTwoWeekLow}`
+        ).join('\n')
+        : 'N/A';
+
+    const secIndex = ctx.secFilings.length > 0
+        ? ctx.secFilings.map((f, i) =>
+            `[SEC-${i + 1}] ${f.company} ${f.filingType} (${f.filingDate})`
+        ).join('\n')
+        : 'N/A';
+
+    const relevantCitations = ctx.relevantSources.length > 0
+        ? ctx.relevantSources
+            .map(s => {
+                const n = ctx.citationMap.get(s.url);
+                return n ? `[${n}] ${s.title} — ${s.url}` : null;
+            })
+            .filter((x): x is string => x !== null)
+            .join('\n')
+        : 'None — rely on Tier 1 / Tier 3 evidence.';
+
+    const adversarialBlock = isBullSection
+        ? `\nPRE-GENERATED BULL CASE — WEAVE INTO THIS SECTION:\n${ctx.bullCase.substring(0, 1600)}\n`
+        : isBearSection
+            ? `\nPRE-GENERATED BEAR CASE — WEAVE INTO THIS SECTION:\n${ctx.bearCase.substring(0, 1600)}\n`
+            : '';
+
+    return `You are a Managing Director of Equity Research writing ONE SECTION of a Goldman Sachs flagship research note.
+
+RESEARCH MANDATE
+Type: ${ctx.blueprint.intent.replace(/_/g, ' ').toUpperCase()}
+Universe: ${ctx.blueprint.targetEntities.join(', ') || 'Broad Market'}
+Tickers: ${ctx.blueprint.tickers.join(', ') || 'N/A'}
+Timeframe: ${ctx.blueprint.timeframe} | Horizon: ${ctx.blueprint.investmentHorizon}
+
+YOU ARE WRITING JUST THIS ONE SECTION (${ctx.sectionIndex + 1} of ${ctx.totalSections}):
+${ctx.section}
+${table ? `\nREQUIRED: include a populated markdown table for "${table}" with ≥6 rows, real figures only, each cell cited.\n` : ''}
+════════════════════════════════════════════
+DATA HIERARCHY — FOCUSED ON THIS SECTION
+════════════════════════════════════════════
+TIER 1 — RAG verified facts (highest authority, use [RAG-n]):
+${ctx.verifiedFactsBlock || '⚠ RAG database offline — rely on Tier 3/4 for this section'}
+
+TIER 2 — Live market data:
+${marketDataBlock}
+${ctx.macroText ? `\nTIER 2b — Macro (FRED):\n${ctx.macroText}\n` : ''}
+TIER 3 — SEC filings (authoritative):
+${secIndex}
+
+TIER 4 — Relevant web sources for this section (cite inline as [n]):
+${ctx.ragCitationIndex ? ctx.ragCitationIndex + '\n' : ''}${relevantCitations}
+
+ANALYST SYNTHESIS (excerpt):
+${ctx.sourceAnalysisExcerpt.substring(0, 2500)}
+${adversarialBlock}
+════════════════════════════════════════════
+OUTPUT CONTRACT — SECTION BODY ONLY
+════════════════════════════════════════════
+✗ Do NOT output "## ${ctx.section}" or any other header — the pipeline prepends the header.
+✗ Do NOT output a report title, table of contents, or "Key Finding" quote.
+✗ Do NOT recap other sections; stay tightly on THIS section's scope.
+
+✓ 3–4 paragraphs, 400–800 words for this section.
+✓ Every factual sentence ends with [n] or [RAG-n] citation tag — uncited claims are rejected by the downstream verifier.
+✓ Only use citation IDs listed in TIER 4 above, or RAG-n IDs from TIER 1.
+✓ If a claim cannot be cited from the provided evidence, OMIT it entirely.
+✓ Specific beats vague: "$2.47B in free cash flow [3]" not "strong cash generation".
+✓ Institutional tone, zero marketing language.
+${table ? '✓ Populate the required table with real figures — no placeholder rows.\n' : ''}`;
+}
+
+export interface SectionFanoutResult {
+    sections: Array<{ title: string; body: string; ok: boolean; error?: string }>;
+    completed: number;
+    failed: number;
+}
+
+async function synthesizeReportBySections(
+    blueprint: ResearchBlueprint,
+    webSources: TavilySearchResult[],
+    secFilings: SECFiling[],
+    companyData: CompanyOverview[],
+    sourceAnalysis: string,
+    bullCase: string,
+    bearCase: string,
+    template: ReportTemplate,
+    model: ResearchModelId | undefined,
+    ragResult: GravityRAGResult | undefined,
+    macroText: string | undefined,
+    onSectionDone?: (done: number, total: number, title: string) => void,
+): Promise<SectionFanoutResult> {
+    const synthesisModel = await pickDriver('premium', model);
+    const top = webSources.slice(0, 35);
+    const citationMap = new Map<string, number>();
+    top.forEach((s, i) => citationMap.set(s.url, i + 1));
+
+    const verifiedFactsBlock = ragResult ? buildVerifiedFactsBlock(ragResult) : '';
+    const ragCitationIndex = ragResult?.available && ragResult.sources.length > 0
+        ? `TIER-1 RAG CITATIONS:\n${ragResult.sources.slice(0, 10).map((s, i) =>
+            `[RAG-${i + 1}] ${s.ticker ? s.ticker + ' ' : ''}${s.title}${s.section ? ' — ' + s.section : ''}`
+          ).join('\n')}`
+        : '';
+
+    const extraKeywords = [
+        ...blueprint.targetEntities,
+        ...blueprint.tickers,
+        ...blueprint.keyMetrics.slice(0, 4),
+        ...blueprint.researchAngles.slice(0, 4),
+    ];
+
+    const results: SectionFanoutResult['sections'] = template.sections.map(s => ({
+        title: s, body: '', ok: false,
+    }));
+
+    const queue = template.sections.map((s, i) => ({ s, i }));
+    const CONCURRENCY = 3;
+    let doneCount = 0;
+
+    async function worker() {
+        while (queue.length > 0) {
+            const item = queue.shift();
+            if (!item) return;
+            const relevant = sliceEvidenceForSection(item.s, top, extraKeywords, 15);
+            const prompt = buildSectionWriterPrompt({
+                blueprint,
+                template,
+                section: item.s,
+                sectionIndex: item.i,
+                totalSections: template.sections.length,
+                relevantSources: relevant,
+                citationMap,
+                verifiedFactsBlock,
+                sourceAnalysisExcerpt: sourceAnalysis,
+                companyData,
+                secFilings,
+                bullCase,
+                bearCase,
+                macroText,
+                ragCitationIndex,
+            });
+            try {
+                const body = await callLLM(prompt, synthesisModel);
+                results[item.i] = { title: item.s, body: body.trim(), ok: true };
+            } catch (e: any) {
+                results[item.i] = {
+                    title: item.s,
+                    body: '',
+                    ok: false,
+                    error: (e?.message || String(e)).substring(0, 200),
+                };
+            }
+            doneCount += 1;
+            onSectionDone?.(doneCount, template.sections.length, item.s);
+        }
+    }
+
+    const workerCount = Math.min(CONCURRENCY, template.sections.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    return {
+        sections: results,
+        completed: results.filter(r => r.ok).length,
+        failed: results.filter(r => !r.ok).length,
+    };
+}
+
+// Pick the first citation-bearing sentence from the lead section as the "Key
+// Finding" — matches the monolith Writer's `> **Key Finding:**` block
+// without spending another LLM call.
+export function extractKeyFinding(firstSectionBody: string): string | null {
+    if (!firstSectionBody) return null;
+    const stripped = firstSectionBody
+        .replace(/^#+\s.*$/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/\|[^\n]*\|/g, '')
+        .replace(/`[^`]*`/g, '');
+    const sentences = stripped
+        .split(/(?<=[.!?])\s+(?=[A-Z(])|\n{2,}/)
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length >= 40 && s.length <= 400);
+    for (const s of sentences) {
+        if (!/\[(?:RAG-)?\d+\]/.test(s)) continue;
+        if (!CLAIM_TRIGGERS.test(s)) continue;
+        return s.length > 380 ? s.slice(0, 377) + '…' : s;
+    }
+    return null;
+}
+
+export function assembleSectionedReport(
+    blueprint: ResearchBlueprint,
+    template: ReportTemplate,
+    sections: SectionFanoutResult['sections'],
+    webSources: TavilySearchResult[],
+): string {
+    const title = buildReportTitle(blueprint, template);
+    const body = sections
+        .filter(s => s.ok && s.body.trim().length > 0)
+        .map(s => `## ${s.title}\n\n${s.body.trim()}`)
+        .join('\n\n');
+
+    const firstOk = sections.find(s => s.ok && s.body.trim().length > 0);
+    const keyFinding = firstOk ? extractKeyFinding(firstOk.body) : null;
+    const keyFindingBlock = keyFinding
+        ? `\n\n---\n\n> **Key Finding:** ${keyFinding}\n`
+        : '';
+
+    const webSourcesFooter = webSources.length > 0
+        ? `\n\n---\n\n### Web Sources\n\n${
+            webSources.slice(0, 35)
+                .map((s, i) => `[${i + 1}] ${s.title} — ${s.url}`)
+                .join('\n')
+          }`
+        : '';
+
+    return `# ${title}\n\n${body}${keyFindingBlock}${webSourcesFooter}`;
+}
+
 // ─── Stage 6: Numeric-Consistency Verifier ──────────────────────────────────
 // Deterministic check that every number in the report appears in some
 // source evidence. Catches the most common finance-RAG hallucination:
@@ -1370,6 +1712,7 @@ export interface MethodologyInputs {
     verification: VerificationResult;
     citationDensity: CitationDensityResult;
     confidence: Confidence;
+    sectionFanout?: { used: boolean; planned: number; completed: number; failed: number };
 }
 
 export function buildMethodologySection(m: MethodologyInputs): string {
@@ -1386,6 +1729,14 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         `**Grounding:** ${v.groundedClaims}/${v.totalClaims} numeric claims matched source evidence (${numericRate}%); ${v.multiSourceClaims} corroborated by ≥2 sources (${multiRate}%)`,
         `**Citation density:** ${d.citedSentences}/${d.totalFactSentences} factual sentences cited (${densityPct}%)`,
     ];
+    if (m.sectionFanout) {
+        const f = m.sectionFanout;
+        bullets.push(
+            f.used
+                ? `**Synthesis:** parallel section fanout — ${f.completed}/${f.planned} sections written concurrently${f.failed > 0 ? ` (${f.failed} retried via monolith)` : ''}`
+                : `**Synthesis:** monolith Writer (section fanout skipped — budget-constrained or fallback triggered)`,
+        );
+    }
 
     const caveat = m.confidence === 'High'
         ? 'All three grounding signals cleared the High threshold. Report is suitable as a citation-grounded first draft; an analyst review is still recommended before investment-committee distribution.'
@@ -1527,23 +1878,84 @@ export const performDeepResearch = async (
 
     // ── Stage 5: Report Synthesis (75–96%) ────────────────────────────────
     // Outline-first: select a fixed template from the query/intent, then
-    // expand each template section with retrieved data.
+    // expand each template section with retrieved data. Fanout mode runs one
+    // LLM call per section in parallel (plan §6.1 P0); falls back to the
+    // monolith Writer if budget is tight or too many sections fail.
     const templateKey = selectTemplate(blueprint.intent, query);
     const template = REPORT_TEMPLATES[templateKey];
 
-    const markdown = await synthesizeInstitutionalReport(
-        blueprint,
-        webSources,
-        secFilings,
-        companyData,
-        sourceAnalysis,
-        bullCase,
-        bearCase,
-        template,
-        driverModel,
-        ragResult,
-        macroText,
-    );
+    const sectionCount = template.sections.length;
+    const remainingLLMCalls = tracker.budget.maxLLMCalls - tracker.llmCalls;
+    // Reserve a few calls for the post-gen claim audit and any stragglers.
+    const RESERVE = 3;
+    const canFanout = sectionCount > 0 && remainingLLMCalls >= sectionCount + RESERVE;
+
+    let markdown: string;
+    let sectionFanout: { used: boolean; planned: number; completed: number; failed: number } = {
+        used: false,
+        planned: sectionCount,
+        completed: 0,
+        failed: 0,
+    };
+
+    if (canFanout) {
+        onProgress({
+            stage: 'synthesizing',
+            message: `Fanning out to ${sectionCount} parallel section writers…`,
+            progress: 77,
+            sourcesFound: totalSources,
+        });
+        try {
+            const fan = await synthesizeReportBySections(
+                blueprint,
+                webSources,
+                secFilings,
+                companyData,
+                sourceAnalysis,
+                bullCase,
+                bearCase,
+                template,
+                driverModel,
+                ragResult,
+                macroText,
+                (done, total, title) => {
+                    onProgress({
+                        stage: 'synthesizing',
+                        message: `Section ${done}/${total} drafted — ${title}`,
+                        progress: 77 + Math.round((done / total) * 15),
+                        sourcesFound: totalSources,
+                    });
+                },
+            );
+            // Accept the fanout if ≥60% of sections came back. Below that,
+            // fall back to the monolith so we don't ship a gutted report.
+            const threshold = Math.ceil(sectionCount * 0.6);
+            if (fan.completed >= threshold) {
+                markdown = assembleSectionedReport(blueprint, template, fan.sections, webSources);
+                sectionFanout = {
+                    used: true,
+                    planned: sectionCount,
+                    completed: fan.completed,
+                    failed: fan.failed,
+                };
+            } else {
+                throw new Error(
+                    `Fanout too incomplete (${fan.completed}/${sectionCount}) — falling back to monolith Writer`,
+                );
+            }
+        } catch (e) {
+            console.warn('Section fanout failed, falling back to monolith:', e);
+            markdown = await synthesizeInstitutionalReport(
+                blueprint, webSources, secFilings, companyData, sourceAnalysis,
+                bullCase, bearCase, template, driverModel, ragResult, macroText,
+            );
+        }
+    } else {
+        markdown = await synthesizeInstitutionalReport(
+            blueprint, webSources, secFilings, companyData, sourceAnalysis,
+            bullCase, bearCase, template, driverModel, ragResult, macroText,
+        );
+    }
 
     // ── Stage 6: Numeric-Consistency Verifier (96–100%) ───────────────────
     onProgress({
@@ -1621,6 +2033,7 @@ export const performDeepResearch = async (
         verification,
         citationDensity,
         confidence,
+        sectionFanout,
     });
     const finalMarkdown = markdown + methodologyMd;
 
@@ -1630,9 +2043,12 @@ export const performDeepResearch = async (
     const densityTail = citationDensity.totalFactSentences > 0
         ? ` · ${Math.round(citationDensity.density * 100)}% citation density`
         : '';
+    const fanoutTail = sectionFanout.used
+        ? ` · ${sectionFanout.completed}/${sectionFanout.planned} sections fanned out`
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${fanoutTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -1696,6 +2112,7 @@ export const performDeepResearch = async (
                 rounds: roundsRun,
                 subQuestions,
             },
+            sectionFanout,
         },
     };
 

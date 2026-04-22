@@ -15,6 +15,16 @@ import {
     verifyCitationDensity,
     deriveConfidence,
     buildMethodologySection,
+    keywordsFromSection,
+    scoreSourceForSection,
+    sliceEvidenceForSection,
+    buildReportTitle,
+    requiredTableForSection,
+    buildSectionWriterPrompt,
+    extractKeyFinding,
+    assembleSectionedReport,
+    REPORT_TEMPLATES,
+    type SectionFanoutResult,
 } from './deepResearchService';
 import {
     classifyAuthority,
@@ -719,6 +729,278 @@ check('methodology: singular "round" for 1 round',
             confidence: 'High',
         }),
     ));
+
+// ─── 14. Section keyword extraction ─────────────────────────────────────────
+console.log('\n[14] Section keyword extraction');
+
+{
+    const kw = keywordsFromSection('Growth Drivers & Catalysts');
+    check('keywords: drops stopwords', !kw.includes('and'));
+    check('keywords: drops short tokens', !kw.includes('&'));
+    check('keywords: keeps domain tokens', kw.includes('growth') && kw.includes('drivers') && kw.includes('catalysts'));
+
+    const extra = keywordsFromSection('Valuation Framework', ['NVDA', 'data center revenue']);
+    check('keywords: merges extra from entities/metrics',
+        extra.includes('nvda') && extra.includes('revenue') && extra.includes('valuation'));
+
+    const dedup = keywordsFromSection('Risk Matrix', ['risk', 'risk', 'risk']);
+    check('keywords: deduplicates across title + extras',
+        dedup.filter(k => k === 'risk').length === 1);
+}
+
+// ─── 15. scoreSourceForSection ──────────────────────────────────────────────
+console.log('\n[15] scoreSourceForSection');
+
+{
+    const src = (over: Partial<TavilySearchResult>): TavilySearchResult => ({
+        title: '', url: 'https://example.com', content: '', score: 0.5, ...over,
+    });
+    const onTopic = src({
+        title: 'NVDA Q3 revenue guidance',
+        content: 'nvidia reported record revenue in the data center segment with strong growth.',
+        url: 'https://www.sec.gov/cgi-bin/browse-edgar?cik=NVDA',
+        score: 0.6,
+    });
+    const offTopic = src({
+        title: 'Weather forecast for California',
+        content: 'partly cloudy with a chance of rain',
+        url: 'https://weather.example.com',
+        score: 0.9,
+    });
+    const kw = keywordsFromSection('Revenue & Growth', ['NVDA']);
+    const s1 = scoreSourceForSection(onTopic, kw);
+    const s2 = scoreSourceForSection(offTopic, kw);
+    check('score: on-topic SEC source outranks off-topic high-semantic source', s1 > s2);
+    check('score: no keywords → returns 0', scoreSourceForSection(onTopic, []) === 0);
+}
+
+// ─── 16. sliceEvidenceForSection ────────────────────────────────────────────
+console.log('\n[16] sliceEvidenceForSection');
+
+{
+    const mk = (title: string, url: string, content = '', score = 0.5): TavilySearchResult => ({
+        title, url, content, score,
+    });
+    const sources: TavilySearchResult[] = [
+        mk('Apple Q3 revenue beats estimates', 'https://reuters.com/apple-q3', 'apple revenue grew 8%'),
+        mk('NVDA data center revenue', 'https://sec.gov/aapl-10q', 'nvidia data center segment revenue rose'),
+        mk('Market weather update', 'https://weather.example.com', 'no finance content here'),
+        mk('AAPL services margin expansion', 'https://wsj.com/aapl', 'services margin improved'),
+        mk('Fed rate cut speculation', 'https://bloomberg.com/fed', 'federal reserve rate expectations'),
+        mk('Apple regulatory risk in EU', 'https://ft.com/apple-eu', 'digital markets act enforcement'),
+    ];
+
+    const slice = sliceEvidenceForSection('Competitive Position & Market Share', sources, ['AAPL'], 2);
+    check('slice: returns at most `limit` sources', slice.length <= 2);
+    // With limit=2, higher-authority keyworded matches (premium news) crowd
+    // out the low-authority weather source even though it shares "market".
+    check('slice: ranks premium-news keyworded sources above low-authority ones',
+        !slice.some(s => s.url.includes('weather.example.com')));
+
+    const emptyKws = sliceEvidenceForSection('', sources, [], 5);
+    check('slice: empty keywords fall back to first `limit` sources', emptyKws.length === 5);
+
+    const empty = sliceEvidenceForSection('Any', [], ['x'], 10);
+    check('slice: empty source list returns []', empty.length === 0);
+}
+
+// ─── 17. buildReportTitle ───────────────────────────────────────────────────
+console.log('\n[17] buildReportTitle');
+
+{
+    const blueprint = (over: any) => ({
+        intent: 'company_analysis' as const,
+        targetEntities: [],
+        tickers: [],
+        keyMetrics: [],
+        subtopics: [],
+        searchQueries: [],
+        secTargets: [],
+        timeframe: '',
+        investmentHorizon: '',
+        researchAngles: [],
+        ...over,
+    });
+    const tmpl = REPORT_TEMPLATES.investment_memo;
+
+    const t1 = buildReportTitle(blueprint({ targetEntities: ['NVDA'], timeframe: 'FY25' }), tmpl);
+    check('title: includes entities and timeframe', /NVDA/.test(t1) && /FY25/.test(t1));
+
+    const t2 = buildReportTitle(blueprint({ targetEntities: ['AAPL'] }), tmpl);
+    check('title: entities only when timeframe empty',
+        /AAPL/.test(t2) && !/—\s*$/.test(t2));
+
+    const t3 = buildReportTitle(blueprint({}), tmpl);
+    check('title: falls back to template label', t3 === tmpl.label);
+}
+
+// ─── 18. requiredTableForSection ────────────────────────────────────────────
+console.log('\n[18] requiredTableForSection');
+
+{
+    const tables = ['Financial Scorecard', 'Risk Matrix'];
+    check('requiredTable: matches Risk Matrix section to table',
+        requiredTableForSection('Risk Matrix', tables) === 'Risk Matrix');
+    check('requiredTable: matches Financial Performance to Financial Scorecard',
+        requiredTableForSection('Financial Performance', tables) === 'Financial Scorecard');
+    check('requiredTable: unrelated section returns null',
+        requiredTableForSection('Macro Context', tables) === null);
+}
+
+// ─── 19. buildSectionWriterPrompt ───────────────────────────────────────────
+console.log('\n[19] buildSectionWriterPrompt');
+
+{
+    const ctx = {
+        blueprint: {
+            intent: 'company_analysis' as const,
+            targetEntities: ['NVDA'],
+            tickers: ['NVDA'],
+            keyMetrics: ['revenue', 'gross margin'],
+            subtopics: [],
+            searchQueries: [],
+            secTargets: ['NVDA'],
+            timeframe: 'FY25',
+            investmentHorizon: '12M',
+            researchAngles: [],
+        },
+        template: REPORT_TEMPLATES.investment_memo,
+        section: 'Bull Case — Path to Outperformance',
+        sectionIndex: 5,
+        totalSections: 11,
+        relevantSources: [
+            { title: 'NVDA Q3 beat', url: 'https://reuters.com/a', content: '', score: 0.9 },
+        ] as TavilySearchResult[],
+        citationMap: new Map<string, number>([['https://reuters.com/a', 7]]),
+        verifiedFactsBlock: 'VERIFIED FILING PASSAGES:\n[RAG-1] NVDA 10-Q snippet',
+        sourceAnalysisExcerpt: 'Analyst notes…',
+        companyData: [],
+        secFilings: [],
+        bullCase: 'Bulls argue accelerating AI capex and record data center revenue.',
+        bearCase: 'Bears cite cyclicality and China export controls.',
+        macroText: '',
+        ragCitationIndex: '[RAG-1] NVDA 10-Q — Revenue',
+    };
+
+    const prompt = buildSectionWriterPrompt(ctx);
+    check('prompt: includes section header in output contract',
+        prompt.includes('Bull Case — Path to Outperformance'));
+    check('prompt: tells writer NOT to output "##" header',
+        /Do NOT output "## /.test(prompt));
+    check('prompt: weaves pre-generated bull case into bull section',
+        /PRE-GENERATED BULL CASE/.test(prompt));
+    check('prompt: uses global citation index [7] for the one relevant source',
+        /\[7\]\s+NVDA Q3 beat/.test(prompt));
+    check('prompt: references RAG citation index',
+        /\[RAG-1\]/.test(prompt));
+    check('prompt: does not inject bear case into bull section',
+        !/PRE-GENERATED BEAR CASE/.test(prompt));
+
+    const bearCtx = { ...ctx, section: 'Bear Case — Key Downside Risks', sectionIndex: 6 };
+    check('prompt: weaves bear case into bear section',
+        /PRE-GENERATED BEAR CASE/.test(buildSectionWriterPrompt(bearCtx)));
+}
+
+// ─── 20. extractKeyFinding ──────────────────────────────────────────────────
+console.log('\n[20] extractKeyFinding');
+
+{
+    const body = `NVDA posted $35.1B in revenue for Q3 [3]. Data center segment grew 112% year-over-year [5]. The transition to Blackwell architecture is on track [7].`;
+    const kf = extractKeyFinding(body);
+    check('keyFinding: returns first cited factual sentence', kf !== null && /35\.1B/.test(kf!));
+
+    const uncited = `No citations here. Just narrative prose.`;
+    check('keyFinding: returns null when no cited sentences', extractKeyFinding(uncited) === null);
+
+    const empty = extractKeyFinding('');
+    check('keyFinding: returns null for empty input', empty === null);
+}
+
+// ─── 21. assembleSectionedReport ────────────────────────────────────────────
+console.log('\n[21] assembleSectionedReport');
+
+{
+    const blueprint = {
+        intent: 'company_analysis' as const,
+        targetEntities: ['NVDA'],
+        tickers: ['NVDA'],
+        keyMetrics: [],
+        subtopics: [],
+        searchQueries: [],
+        secTargets: [],
+        timeframe: 'FY25',
+        investmentHorizon: '12M',
+        researchAngles: [],
+    };
+    const tmpl = REPORT_TEMPLATES.investment_memo;
+
+    const sections: SectionFanoutResult['sections'] = [
+        { title: 'Executive Summary', body: 'NVDA reported $35.1B in Q3 revenue, a record for the data center segment [1]. Full-year guidance was raised by 8 percent to $125B in total revenue [2].', ok: true },
+        { title: 'Investment Thesis', body: 'Strong AI demand across hyperscalers supports the buy thesis [3]. Gross margin expansion continues above 75 percent [4].', ok: true },
+        { title: 'Financial Performance', body: '', ok: false, error: 'LLM timeout' },
+    ];
+    const webSources: TavilySearchResult[] = [
+        { title: 'Source A', url: 'https://reuters.com/a', content: '', score: 1 },
+        { title: 'Source B', url: 'https://sec.gov/b', content: '', score: 1 },
+    ];
+
+    const md = assembleSectionedReport(blueprint, tmpl, sections, webSources);
+
+    check('assemble: starts with H1 title', /^# Investment Memo: NVDA — FY25/.test(md));
+    check('assemble: includes Executive Summary section',
+        /## Executive Summary\n\nNVDA reported/.test(md));
+    check('assemble: includes Investment Thesis section',
+        /## Investment Thesis\n\nStrong AI/.test(md));
+    check('assemble: skips failed (Financial Performance) section',
+        !md.includes('## Financial Performance'));
+    check('assemble: emits Key Finding block from first cited sentence',
+        /> \*\*Key Finding:\*\* NVDA reported \$35\.1B/.test(md));
+    check('assemble: appends Web Sources footer with indexed URLs',
+        /### Web Sources[\s\S]*\[1\] Source A[\s\S]*\[2\] Source B/.test(md));
+
+    // Empty sections case — H1 title + Web Sources footer, no body sections.
+    const mdEmpty = assembleSectionedReport(blueprint, tmpl, [], webSources);
+    check('assemble: handles empty sections gracefully',
+        mdEmpty.startsWith('# Investment Memo:')
+        && !/\n## [A-Z]/.test(mdEmpty)
+        && !/> \*\*Key Finding:/.test(mdEmpty));
+}
+
+// ─── 22. Methodology reports fanout coverage ────────────────────────────────
+console.log('\n[22] Methodology includes fanout');
+
+{
+    const withFanout = buildMethodologySection({
+        searchQueries: 8, rounds: 2, webSources: 24, secFilings: 3, ragSources: 5,
+        subQuestions: ['a', 'b'],
+        verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 7, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 40, citedSentences: 36, density: 0.9, uncitedSamples: [] },
+        confidence: 'High',
+        sectionFanout: { used: true, planned: 11, completed: 11, failed: 0 },
+    });
+    check('methodology: reports fanout coverage', /parallel section fanout — 11\/11/.test(withFanout));
+
+    const withFallback = buildMethodologySection({
+        searchQueries: 8, rounds: 2, webSources: 24, secFilings: 3, ragSources: 5,
+        subQuestions: ['a', 'b'],
+        verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 7, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 40, citedSentences: 36, density: 0.9, uncitedSamples: [] },
+        confidence: 'Medium',
+        sectionFanout: { used: false, planned: 11, completed: 0, failed: 0 },
+    });
+    check('methodology: reports monolith fallback when fanout not used',
+        /monolith Writer/.test(withFallback));
+
+    const noFanout = buildMethodologySection({
+        searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: omits synthesis line when sectionFanout undefined (backward-compat)',
+        !/Synthesis:/.test(noFanout));
+}
 
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
