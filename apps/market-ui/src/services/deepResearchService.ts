@@ -237,6 +237,12 @@ export interface ResearchReport {
             density: number;  // 0..1
             uncitedSamples: string[];
         };
+        factInference?: {
+            totalForwardLooking: number;
+            hedgedCount: number;
+            hedgingRate: number;  // 0..1
+            unhedgedSamples: string[];
+        };
         confidence?: Confidence;
         methodology?: {
             searchQueries: number;
@@ -1027,6 +1033,7 @@ CRITICAL WRITING STANDARDS — PER-SENTENCE CITATION DISCIPLINE
 ✓ MINIMUM 40 inline citations [n] or [RAG-n] distributed throughout — aim for ≥85% sentence-level citation density in factual paragraphs.
 ✓ Tier 1 (RAG) figures take priority — mark them [RAG-n] so the reader knows they are verified.
 ✓ If a claim cannot be cited from the provided evidence, OMIT it entirely rather than guess.
+✓ **Fact vs inference — hedge your forecasts.** Forward-looking claims (forecasts, projections, guidance, targets, "will [do X]") MUST include a hedging qualifier (~, est., likely, could, should, we estimate) OR a clear attribution (management guided, consensus expects, analysts forecast). "Revenue will reach $50B" is flagged as speculation; "Management guided to ~$50B [1]" is correctly hedged. Past/reported events should NOT be hedged — state plainly.
 ✓ Tone: institutional, direct, zero marketing language
 ✓ Specific beats vague: "$2.47B in free cash flow [3]" not "strong cash generation"
 ✓ Every required table must be populated — no placeholder rows
@@ -1221,6 +1228,7 @@ OUTPUT CONTRACT — SECTION BODY ONLY
 ✓ Only use citation IDs listed in TIER 4 above, or RAG-n IDs from TIER 1.
 ✓ If a claim cannot be cited from the provided evidence, OMIT it entirely.
 ✓ Specific beats vague: "$2.47B in free cash flow [3]" not "strong cash generation".
+✓ **Fact vs inference — hedge forecasts.** Forward-looking claims (will, forecasts, projections, targets, guidance) need a hedging qualifier (~, est., likely, could, we estimate) or attribution (management guided, consensus expects, analysts forecast). Past/reported facts are stated plainly. Unhedged forecasts are flagged as speculation by the downstream verifier.
 ✓ Institutional tone, zero marketing language.
 ${table ? '✓ Populate the required table with real figures — no placeholder rows.\n' : ''}`;
 }
@@ -1604,6 +1612,77 @@ export function verifyCitationDensity(markdown: string): CitationDensityResult {
     };
 }
 
+// ─── Fact vs Inference Separation ───────────────────────────────────────────
+// Flags forward-looking sentences that present forecasts/projections as facts
+// without a hedging qualifier or attribution. Plan §6.2: "every forecast
+// clearly labeled as such — hedged or attributed — so readers can distinguish
+// reported figures from analyst inference."
+//
+// Approach: a sentence containing a forward-looking trigger (will/expects/
+// forecasts/projects/targets/guides/anticipates) must also contain a hedging
+// marker (~, est., likely, could, we estimate, consensus expects, management
+// guided, analysts forecast, etc.). Unhedged forward-looking sentences are
+// "speculation risks" and downgrade the Confidence banner.
+
+const FORWARD_LOOKING = /\b(will\s+\w+|expects?\b|expected\b|forecasts?\b|forecasted\b|projects?\b|projected\b|projections?\b|targets?\b|targeted\b|guides?\b|guided\b|guidance\b|anticipates?\b|anticipated\b|predicts?\b|predicted\b|foresees?\b|foreseeable\b)/i;
+
+const HEDGE_MARKERS = /(~\s*\d|\bapprox(?:imately)?\b|\broughly\b|\best\.(?!\w)|\bestimated?\b|\bestimates?\b|\blikely\b|\bunlikely\b|\bprobable\b|\bprobably\b|\bpotentially\b|\bpotential\b|\bcould\b|\bmay\b|\bmight\b|\bshould\b|\bwe (?:expect|forecast|project|anticipate|estimate|believe|see|think)\w*\b|\bour (?:expectation|forecast|projection|estimate|view|model|base case)\b|\bconsensus\b|\banalysts?\b|\bmanagement (?:guided|expects|forecasts|projects|anticipates|sees|expects)\b|\baccording to\b|\bas per\b|\bbase case\b|\bbull case\b|\bbear case\b|\bscenario\b|\bassumes?\b|\bassumption\b|\bimplied\b|\bimplies\b)/i;
+
+// Verbs that often LOOK forward-looking but are actually past/factual and
+// should NOT trip the verifier: "the company reported it will pay a dividend"
+// is attribution; past tense is factual.
+const ATTRIBUTION_LEAD = /\b(reported|announced|disclosed|filed|stated|said|told|confirmed|noted|indicated|revealed|said\s+that|guided\s+(?:to|for))\b/i;
+
+export interface FactInferenceResult {
+    totalForwardLooking: number;
+    hedgedCount: number;
+    hedgingRate: number;                      // hedged / total, 1.0 if no forward-looking sentences
+    unhedgedSamples: string[];
+}
+
+export function verifyFactInferenceSeparation(markdown: string): FactInferenceResult {
+    const stripped = markdown
+        .replace(/^#+\s.*$/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/\|[^\n]*\|/g, '')
+        .replace(/`[^`]*`/g, '')
+        .replace(/^\s*[-*]\s+/gm, '');
+
+    const sentences = stripped
+        .split(/(?<=[.!?])\s+(?=[A-Z(])|\n{2,}/)
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length >= 20 && s.length <= 500);
+
+    let total = 0;
+    let hedged = 0;
+    const unhedged: string[] = [];
+
+    for (const s of sentences) {
+        const withoutCites = s.replace(/\[(?:RAG-)?\d+\]/g, '').trim();
+        if (!FORWARD_LOOKING.test(withoutCites)) continue;
+        // "The company reported it will pay…" — attribution lead exempts the
+        // sentence: the forward-looking claim is explicitly sourced.
+        if (ATTRIBUTION_LEAD.test(withoutCites)) {
+            total += 1;
+            hedged += 1;
+            continue;
+        }
+        total += 1;
+        if (HEDGE_MARKERS.test(withoutCites)) {
+            hedged += 1;
+        } else if (unhedged.length < 20) {
+            unhedged.push(s.length > 200 ? s.slice(0, 197) + '…' : s);
+        }
+    }
+
+    return {
+        totalForwardLooking: total,
+        hedgedCount: hedged,
+        hedgingRate: total > 0 ? hedged / total : 1,
+        unhedgedSamples: unhedged,
+    };
+}
+
 export function verifyNumericConsistency(
     markdown: string,
     inputs: VerificationInputs,
@@ -1680,17 +1759,23 @@ export interface ConfidenceInputs {
     multiSourceRate: number;          // multiSource / grounded, 0..1
     citationDensity: number;          // cited / factSentences, 0..1
     totalClaims: number;              // for sanity — <5 claims → downgrade
+    factInferenceRate?: number;       // hedged forecasts / total forecasts, 0..1 (optional)
 }
 
 export function deriveConfidence(i: ConfidenceInputs): Confidence {
     // Too few claims to trust the other signals — report as Medium at best.
     const lowSignal = i.totalClaims < 5;
+    // If factInferenceRate isn't provided, assume the report has no unhedged
+    // forecasts (backwards-compat for callers that pre-date this signal).
+    const fi = typeof i.factInferenceRate === 'number' ? i.factInferenceRate : 1;
     const high = !lowSignal
         && i.numericGroundingRate >= 0.85
         && i.citationDensity      >= 0.85
-        && i.multiSourceRate      >= 0.60;
+        && i.multiSourceRate      >= 0.60
+        && fi                     >= 0.75;
     const medium = i.numericGroundingRate >= 0.65
-        && i.citationDensity      >= 0.65;
+        && i.citationDensity      >= 0.65
+        && fi                     >= 0.50;
     if (high)   return 'High';
     if (medium) return 'Medium';
     return 'Low';
@@ -1713,6 +1798,7 @@ export interface MethodologyInputs {
     citationDensity: CitationDensityResult;
     confidence: Confidence;
     sectionFanout?: { used: boolean; planned: number; completed: number; failed: number };
+    factInference?: FactInferenceResult;
 }
 
 export function buildMethodologySection(m: MethodologyInputs): string {
@@ -1735,6 +1821,13 @@ export function buildMethodologySection(m: MethodologyInputs): string {
             f.used
                 ? `**Synthesis:** parallel section fanout — ${f.completed}/${f.planned} sections written concurrently${f.failed > 0 ? ` (${f.failed} retried via monolith)` : ''}`
                 : `**Synthesis:** monolith Writer (section fanout skipped — budget-constrained or fallback triggered)`,
+        );
+    }
+    if (m.factInference && m.factInference.totalForwardLooking > 0) {
+        const fi = m.factInference;
+        const fiPct = Math.round(fi.hedgingRate * 100);
+        bullets.push(
+            `**Fact vs inference:** ${fi.hedgedCount}/${fi.totalForwardLooking} forward-looking claims hedged or attributed (${fiPct}%)`,
         );
     }
 
@@ -1977,6 +2070,11 @@ export const performDeepResearch = async (
     // an inline [n]/[RAG-n] tag. Cheap (no LLM), so always run.
     const citationDensity = verifyCitationDensity(markdown);
 
+    // Fact vs inference sweep — flags unhedged forward-looking sentences.
+    // Forecasts must be hedged or attributed; unhedged predictions downgrade
+    // the Confidence banner.
+    const factInference = verifyFactInferenceSeparation(markdown);
+
     // Second-pass LLM-judge audit on sentence-level claims. Budget-gated: skip
     // if the tracker would blow past its cap. Failure is silent — the numeric
     // verifier above is the primary gate.
@@ -2018,6 +2116,7 @@ export const performDeepResearch = async (
         multiSourceRate,
         citationDensity: citationDensity.density,
         totalClaims: verification.totalClaims,
+        factInferenceRate: factInference.hedgingRate,
     });
 
     const subQuestions = blueprint.researchAngles.length > 0
@@ -2034,6 +2133,7 @@ export const performDeepResearch = async (
         citationDensity,
         confidence,
         sectionFanout,
+        factInference,
     });
     const finalMarkdown = markdown + methodologyMd;
 
@@ -2046,9 +2146,12 @@ export const performDeepResearch = async (
     const fanoutTail = sectionFanout.used
         ? ` · ${sectionFanout.completed}/${sectionFanout.planned} sections fanned out`
         : '';
+    const hedgeTail = factInference.totalForwardLooking > 0
+        ? ` · ${Math.round(factInference.hedgingRate * 100)}% forecasts hedged`
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${fanoutTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -2106,6 +2209,7 @@ export const performDeepResearch = async (
             verification,
             claimAudit,
             citationDensity,
+            factInference,
             confidence,
             methodology: {
                 searchQueries: blueprint.searchQueries.length,

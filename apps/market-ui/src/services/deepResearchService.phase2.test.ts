@@ -24,6 +24,7 @@ import {
     extractKeyFinding,
     assembleSectionedReport,
     REPORT_TEMPLATES,
+    verifyFactInferenceSeparation,
     type SectionFanoutResult,
 } from './deepResearchService';
 import {
@@ -1000,6 +1001,138 @@ console.log('\n[22] Methodology includes fanout');
     });
     check('methodology: omits synthesis line when sectionFanout undefined (backward-compat)',
         !/Synthesis:/.test(noFanout));
+}
+
+// ─── 23. verifyFactInferenceSeparation ──────────────────────────────────────
+console.log('\n[23] verifyFactInferenceSeparation');
+
+{
+    // All unhedged — "will reach", "expects to hit", "forecasts"
+    const unhedgedMd = `
+Revenue will reach $50B next year [1]. The company expects margins to expand to 35% [2]. Analysts forecasts vary widely for Q4 [3].
+    `;
+    const r1 = verifyFactInferenceSeparation(unhedgedMd);
+    check('fi: flags unhedged "will reach" forecast',
+        r1.totalForwardLooking >= 1 && r1.unhedgedSamples.some(s => /will reach/.test(s)));
+    check('fi: hedgingRate < 1.0 when unhedged forecasts present',
+        r1.hedgingRate < 1.0);
+
+    // All hedged — tilde, est., likely, could, we estimate
+    const hedgedMd = `
+Revenue will likely reach ~$50B [1]. We estimate margins could expand to 35% [2]. Management guided to approximately $125B for FY25 [3]. Consensus expects EPS of $4.20 [4].
+    `;
+    const r2 = verifyFactInferenceSeparation(hedgedMd);
+    check('fi: tilde/likely hedge counts as hedged', r2.hedgingRate >= 0.75);
+    check('fi: "management guided" attribution counts as hedged',
+        r2.unhedgedSamples.every(s => !/guided/i.test(s)));
+    check('fi: "consensus expects" counts as hedged',
+        r2.unhedgedSamples.every(s => !/consensus/i.test(s)));
+
+    // Past-tense facts — NOT flagged (no forward-looking verb)
+    const factualMd = `
+NVDA reported revenue of $35.1B in Q3 [1]. Gross margin expanded to 75% [2]. The company returned $8B to shareholders last year [3].
+    `;
+    const r3 = verifyFactInferenceSeparation(factualMd);
+    check('fi: past-tense reported facts are not flagged as forecasts',
+        r3.totalForwardLooking === 0);
+    check('fi: empty forward-looking → hedgingRate === 1', r3.hedgingRate === 1);
+
+    // Mixed — 1 hedged, 1 unhedged
+    const mixedMd = `
+The company will hit $50B revenue next year [1]. We expect margins will likely reach 35% by FY26 [2].
+    `;
+    const r4 = verifyFactInferenceSeparation(mixedMd);
+    check('fi: mixed hedged/unhedged counted correctly',
+        r4.totalForwardLooking === 2 && r4.hedgedCount === 1);
+    check('fi: hedgingRate for 1/2 is 0.5', Math.abs(r4.hedgingRate - 0.5) < 0.01);
+
+    // Attribution via "reported that it will" — exempted by ATTRIBUTION_LEAD
+    const attributedMd = `
+The CEO announced that EPS will grow 20% next year [1].
+    `;
+    const r5 = verifyFactInferenceSeparation(attributedMd);
+    check('fi: "announced that ... will" is attributed (hedged)',
+        r5.totalForwardLooking === 1 && r5.hedgedCount === 1);
+
+    // Empty input
+    const empty = verifyFactInferenceSeparation('');
+    check('fi: empty input → totals are 0 and rate is 1',
+        empty.totalForwardLooking === 0 && empty.hedgingRate === 1);
+
+    // Unhedged samples are capped at 20
+    const many = Array.from({ length: 30 }, (_, i) => `The company will increase revenue by ${i}% in year ${i} [${i + 1}].`).join(' ');
+    const rMany = verifyFactInferenceSeparation(many);
+    check('fi: unhedgedSamples capped at 20', rMany.unhedgedSamples.length <= 20);
+}
+
+// ─── 24. deriveConfidence: fact-inference downgrade ─────────────────────────
+console.log('\n[24] Confidence downgrade on low fact-inference rate');
+
+{
+    // All other signals at High threshold; only factInference fails
+    const lowFi = deriveConfidence({
+        numericGroundingRate: 0.9,
+        multiSourceRate: 0.7,
+        citationDensity: 0.9,
+        totalClaims: 10,
+        factInferenceRate: 0.5,   // below High threshold of 0.75
+    });
+    check('confidence: low hedging rate demotes High→Medium', lowFi === 'Medium');
+
+    // Very low hedging → Low
+    const verylowFi = deriveConfidence({
+        numericGroundingRate: 0.9,
+        multiSourceRate: 0.7,
+        citationDensity: 0.9,
+        totalClaims: 10,
+        factInferenceRate: 0.3,   // below Medium threshold of 0.50
+    });
+    check('confidence: very-low hedging rate demotes Medium→Low', verylowFi === 'Low');
+
+    // Fact-inference omitted → defaults to 1, no downgrade (backward-compat)
+    const noFi = deriveConfidence({
+        numericGroundingRate: 0.9,
+        multiSourceRate: 0.7,
+        citationDensity: 0.9,
+        totalClaims: 10,
+    });
+    check('confidence: omitting factInferenceRate preserves High', noFi === 'High');
+
+    // Everything passes including hedging
+    const allGood = deriveConfidence({
+        numericGroundingRate: 0.9,
+        multiSourceRate: 0.7,
+        citationDensity: 0.9,
+        totalClaims: 10,
+        factInferenceRate: 0.85,
+    });
+    check('confidence: all four signals strong → High', allGood === 'High');
+}
+
+// ─── 25. Methodology reports fact-inference rate ────────────────────────────
+console.log('\n[25] Methodology includes fact-inference');
+
+{
+    const md = buildMethodologySection({
+        searchQueries: 8, rounds: 2, webSources: 24, secFilings: 3, ragSources: 5,
+        subQuestions: ['a'],
+        verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 7, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 40, citedSentences: 36, density: 0.9, uncitedSamples: [] },
+        confidence: 'High',
+        factInference: { totalForwardLooking: 12, hedgedCount: 11, hedgingRate: 11 / 12, unhedgedSamples: [] },
+    });
+    check('methodology: reports hedged/total forecasts', /11\/12 forward-looking claims hedged/.test(md));
+
+    const mdNoForecasts = buildMethodologySection({
+        searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        factInference: { totalForwardLooking: 0, hedgedCount: 0, hedgingRate: 1, unhedgedSamples: [] },
+    });
+    check('methodology: omits fact-inference line when no forecasts',
+        !/Fact vs inference:/.test(mdNoForecasts));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────
