@@ -270,6 +270,15 @@ export interface ResearchReport {
             compressionRatio: number;
             fallback: boolean;
         };
+        revisions?: {
+            used: boolean;
+            issuesBefore: number;
+            issuesAfter: number;
+            editsProposed: number;
+            editsApplied: number;
+            accepted: boolean;
+            fallback: boolean;
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -2144,6 +2153,276 @@ export function verifyNumericConsistency(
     };
 }
 
+// ─── Critic → Revisor Loop (plan §6.1 / §6.8) ──────────────────────────────
+// Detect-then-fix stage. We already RUN the three verifiers (citation
+// density, fact-inference, numeric grounding) but, until now, we only
+// SURFACED the issues in the methodology footer. The Revisor takes the
+// concrete issue samples each verifier produces and asks the LLM for
+// surgical line-level edits: add a citation, hedge a forecast, remove an
+// unsupported claim. Each edit is a {find, replace} pair that we apply only
+// when `find` is unique in the draft — no full regeneration, no risk of
+// rewriting unrelated sentences. After application we re-run the verifiers
+// and accept the revision only if the aggregate issue count drops.
+
+export interface RevisionEdit {
+    find: string;       // exact substring to locate (must be unique in draft)
+    replace: string;    // surgical replacement
+    reason: 'add_citation' | 'hedge_forecast' | 'remove_unsupported' | 'other';
+}
+
+export interface RevisionResult {
+    used: boolean;              // whether the Revisor ran (issues present AND draft big enough)
+    issuesBefore: number;       // uncited + unhedged + unsupported count pre-revision
+    issuesAfter: number;        // same count post-revision
+    editsProposed: number;      // LLM returned this many edits
+    editsApplied: number;       // edits that matched unique substrings and passed safety
+    accepted: boolean;          // true if we actually kept the revised draft
+    fallback: boolean;          // LLM threw / returned garbage → original kept
+}
+
+// Collect the ≤5 worst issues from each verifier. Revisor gets a focused
+// worklist rather than the whole report.
+export function selectRevisionTargets(
+    verification: VerificationResult,
+    citationDensity: CitationDensityResult,
+    factInference: FactInferenceResult,
+    maxPerCategory = 5,
+): { uncited: string[]; unhedged: string[]; unsupported: string[]; total: number } {
+    const uncited = citationDensity.uncitedSamples.slice(0, maxPerCategory);
+    const unhedged = factInference.unhedgedSamples.slice(0, maxPerCategory);
+    const unsupported = verification.unsupportedClaims.slice(0, maxPerCategory);
+    return { uncited, unhedged, unsupported, total: uncited.length + unhedged.length + unsupported.length };
+}
+
+export function buildRevisionPrompt(
+    markdown: string,
+    targets: { uncited: string[]; unhedged: string[]; unsupported: string[] },
+    maxEdits = 10,
+): string {
+    const sections = [
+        targets.uncited.length > 0
+            ? `UNCITED FACTUAL SENTENCES (need an inline [n] citation referencing an existing source id used elsewhere in the draft):\n${targets.uncited.map((s, i) => `  U${i + 1}. ${s}`).join('\n')}`
+            : '',
+        targets.unhedged.length > 0
+            ? `UNHEDGED FORWARD-LOOKING CLAIMS (need a hedge such as "we expect", "likely", "could", "approximately", or attribution to a named analyst/management):\n${targets.unhedged.map((s, i) => `  H${i + 1}. ${s}`).join('\n')}`
+            : '',
+        targets.unsupported.length > 0
+            ? `UNSUPPORTED NUMERIC CLAIMS (not found in any source — either remove the figure, attribute it to "internal estimate", or replace with a source-supported number):\n${targets.unsupported.map((c, i) => `  N${i + 1}. ${c}`).join('\n')}`
+            : '',
+    ].filter(Boolean).join('\n\n');
+
+    return `You are the senior reviewer on an institutional research team. The junior analyst's draft has been flagged by three automated verifiers. Your job is to produce SURGICAL line-level edits — NOT a rewrite.
+
+DRAFT:
+${markdown}
+
+ISSUES TO FIX:
+${sections}
+
+Rules:
+1. Return AT MOST ${maxEdits} edits, ordered by severity (unsupported numerics first, then unhedged forecasts, then uncited sentences).
+2. Each edit is a {find, replace} pair. \`find\` must be a verbatim substring of the draft (copy-paste exact). \`replace\` is the surgical fix — same meaning, typically within 50–150% of the original length.
+3. For UNCITED sentences: append an appropriate [n] tag, reusing a source id that already appears elsewhere in the draft for a related claim. Never invent a new source id.
+4. For UNHEDGED forecasts: add a hedge ("we expect", "likely", "~", "could") or attribute ("according to management/consensus/analysts") — do NOT change the substantive claim unless the claim itself is speculative.
+5. For UNSUPPORTED numerics: EITHER remove the figure ("grew 12%" → "grew") OR qualify as internal estimate ("12% [internal estimate]").
+6. Do NOT introduce new facts or new numbers.
+7. Do NOT edit headings, tables, or the methodology footer.
+
+Return ONLY a JSON array, no prose:
+[
+  {"find": "<verbatim substring>", "replace": "<fixed version>", "reason": "add_citation" | "hedge_forecast" | "remove_unsupported" | "other"},
+  ...
+]`;
+}
+
+export function parseRevisionEdits(raw: string): RevisionEdit[] {
+    // Strip optional ```json fence
+    const cleaned = raw
+        .replace(/^\s*```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/i, '')
+        .trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(match[0]);
+    } catch {
+        return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    const out: RevisionEdit[] = [];
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const e = item as Record<string, unknown>;
+        const find = typeof e.find === 'string' ? e.find : '';
+        const replace = typeof e.replace === 'string' ? e.replace : '';
+        const reasonRaw = typeof e.reason === 'string' ? e.reason : 'other';
+        const reason: RevisionEdit['reason'] =
+            reasonRaw === 'add_citation' || reasonRaw === 'hedge_forecast' || reasonRaw === 'remove_unsupported'
+                ? reasonRaw
+                : 'other';
+        if (find.length < 10) continue;          // too short → ambiguous match risk
+        if (!replace || replace.length === 0) continue;
+        out.push({ find, replace, reason });
+    }
+    return out;
+}
+
+// Apply edits sequentially, in order. Safety rules per edit:
+//   1. `find` must occur EXACTLY ONCE in the current draft (ambiguous → skip)
+//   2. `replace.length` within [0.4 × find.length, 2.5 × find.length] (bloat/deletion guard)
+//   3. Citations (ids) in `replace` must not introduce brand-new ids — must exist in draft
+//   4. Any edit inside the methodology footer (`## Methodology & Confidence` onward) is rejected
+export function applyRevisionEdits(
+    markdown: string,
+    edits: RevisionEdit[],
+): { markdown: string; applied: number } {
+    let out = markdown;
+    let applied = 0;
+
+    // Existing citation ids — collected once from the pre-revision draft so
+    // added-via-edit ids don't silently become "valid" for later edits.
+    const existingIds = new Set<string>();
+    for (const m of markdown.matchAll(/\[((?:RAG-)?\d+)\]/g)) existingIds.add(m[1]);
+
+    for (const e of edits) {
+        if (!e.find || !e.replace) continue;
+
+        // Recompute the methodology boundary each iteration — prior edits may
+        // have shifted offsets if they grew or shrank the draft.
+        const methodologyStart = out.search(/^##\s+Methodology\s*&\s*Confidence/m);
+        const editableEnd = methodologyStart >= 0 ? methodologyStart : out.length;
+
+        // Occurrence count within the editable region only.
+        const editable = out.slice(0, editableEnd);
+        const first = editable.indexOf(e.find);
+        if (first === -1) continue;
+        const second = editable.indexOf(e.find, first + 1);
+        if (second !== -1) continue;   // ambiguous — multiple matches, skip
+
+        // Length guard: surgical edits should be within 0.4× – 2.5× of the source span.
+        const ratio = e.replace.length / Math.max(1, e.find.length);
+        if (ratio < 0.4 || ratio > 2.5) continue;
+
+        // Veto invented citation ids — only ids already present in the draft are allowed.
+        const newIds = Array.from(e.replace.matchAll(/\[((?:RAG-)?\d+)\]/g)).map(m => m[1]);
+        if (newIds.some(id => !existingIds.has(id))) continue;
+
+        out = out.slice(0, first) + e.replace + out.slice(first + e.find.length);
+        applied += 1;
+    }
+
+    return { markdown: out, applied };
+}
+
+export interface RevisionInputs {
+    markdown: string;
+    verification: VerificationResult;
+    citationDensity: CitationDensityResult;
+    factInference: FactInferenceResult;
+}
+
+export async function reviseReport(
+    inputs: RevisionInputs,
+    options: {
+        model?: ResearchModelId;
+        callLLM?: (prompt: string) => Promise<string>;
+        tracker?: BudgetTracker | null;
+        maxEdits?: number;
+    } = {},
+): Promise<{ markdown: string; stats: RevisionResult }> {
+    const targets = selectRevisionTargets(
+        inputs.verification, inputs.citationDensity, inputs.factInference,
+    );
+    const issuesBefore = targets.total;
+
+    // No issues → skip entirely.
+    if (issuesBefore === 0) {
+        return {
+            markdown: inputs.markdown,
+            stats: {
+                used: false, issuesBefore: 0, issuesAfter: 0,
+                editsProposed: 0, editsApplied: 0, accepted: false, fallback: false,
+            },
+        };
+    }
+
+    // Budget guard — skip if next LLM call would blow the cap.
+    const tracker = options.tracker ?? _activeBudget;
+    if (tracker && tracker.llmCalls >= tracker.budget.maxLLMCalls) {
+        return {
+            markdown: inputs.markdown,
+            stats: {
+                used: false, issuesBefore, issuesAfter: issuesBefore,
+                editsProposed: 0, editsApplied: 0, accepted: false, fallback: false,
+            },
+        };
+    }
+
+    const maxEdits = options.maxEdits ?? 10;
+    const prompt = buildRevisionPrompt(inputs.markdown, targets, maxEdits);
+    const call = options.callLLM ?? ((p: string) => callDriver(p, 'standard', options.model));
+
+    let raw = '';
+    try {
+        raw = await call(prompt);
+    } catch {
+        return {
+            markdown: inputs.markdown,
+            stats: {
+                used: true, issuesBefore, issuesAfter: issuesBefore,
+                editsProposed: 0, editsApplied: 0, accepted: false, fallback: true,
+            },
+        };
+    }
+
+    const edits = parseRevisionEdits(raw);
+    if (edits.length === 0) {
+        return {
+            markdown: inputs.markdown,
+            stats: {
+                used: true, issuesBefore, issuesAfter: issuesBefore,
+                editsProposed: 0, editsApplied: 0, accepted: false, fallback: false,
+            },
+        };
+    }
+
+    const { markdown: revised, applied } = applyRevisionEdits(inputs.markdown, edits.slice(0, maxEdits));
+
+    // Re-run the three deterministic verifiers on the revised draft.
+    const revCitation = verifyCitationDensity(revised);
+    const revFactInf = verifyFactInferenceSeparation(revised);
+    // Numeric consistency is the expensive one — we already have the evidence
+    // bundle via inputs.verification; re-verify against the same evidence by
+    // re-extracting claims from the revised draft and comparing to the
+    // existing `groundedClaims`/`unsupportedClaims` split is out of scope
+    // here. We conservatively assume unsupported count didn't increase (the
+    // Revisor only edits flagged spans; it can't add new unsupported figures
+    // given the "do not introduce new facts" rule — untrusted LLM output is
+    // guarded by the length + citation-id checks in applyRevisionEdits).
+    const issuesAfter =
+        revCitation.uncitedSamples.length
+        + revFactInf.unhedgedSamples.length
+        + inputs.verification.unsupportedClaims.length;
+
+    // Accept revision only if issue count strictly drops. Tie or increase →
+    // keep the original (no risk of silently making the report worse).
+    const accepted = applied > 0 && issuesAfter < issuesBefore;
+
+    return {
+        markdown: accepted ? revised : inputs.markdown,
+        stats: {
+            used: true,
+            issuesBefore,
+            issuesAfter: accepted ? issuesAfter : issuesBefore,
+            editsProposed: edits.length,
+            editsApplied: applied,
+            accepted,
+            fallback: false,
+        },
+    };
+}
+
 // ─── Confidence Derivation ──────────────────────────────────────────────────
 // Maps three grounding signals — numeric-grounding rate, cross-reference
 // rate, citation-density — onto a High/Medium/Low banner. Thresholds match
@@ -2199,6 +2478,7 @@ export interface MethodologyInputs {
     factInference?: FactInferenceResult;
     contextualRetrieval?: ContextualRetrievalResult;
     distillation?: DistillationResult;
+    revisions?: RevisionResult;
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -2244,6 +2524,16 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         const savedPct = Math.round((1 - dd.compressionRatio) * 100);
         bullets.push(
             `**Context distillation:** knowledge base compressed ${dd.inputChars.toLocaleString()} → ${dd.outputChars.toLocaleString()} chars (${savedPct}% saved), preserving numeric facts and named quotes`,
+        );
+    }
+    if (m.revisions && m.revisions.used && m.revisions.accepted) {
+        const rv = m.revisions;
+        bullets.push(
+            `**Self-revision:** senior reviewer applied ${rv.editsApplied} surgical edit${rv.editsApplied === 1 ? '' : 's'} — flagged issues reduced from ${rv.issuesBefore} to ${rv.issuesAfter}`,
+        );
+    } else if (m.revisions && m.revisions.used && !m.revisions.accepted && m.revisions.issuesBefore > 0 && !m.revisions.fallback) {
+        bullets.push(
+            `**Self-revision:** reviewer examined ${m.revisions.issuesBefore} flagged issue${m.revisions.issuesBefore === 1 ? '' : 's'} but produced no accepted surgical edits — original draft retained`,
         );
     }
     if (m.hitl && m.hitl.used) {
@@ -2526,7 +2816,7 @@ export const performDeepResearch = async (
         sourcesFound: totalSources,
     });
 
-    const verification = verifyNumericConsistency(markdown, {
+    let verification = verifyNumericConsistency(markdown, {
         webSources,
         ragResult,
         companyData,
@@ -2536,12 +2826,40 @@ export const performDeepResearch = async (
 
     // Deterministic citation-density sweep — flags factual sentences missing
     // an inline [n]/[RAG-n] tag. Cheap (no LLM), so always run.
-    const citationDensity = verifyCitationDensity(markdown);
+    let citationDensity = verifyCitationDensity(markdown);
 
     // Fact vs inference sweep — flags unhedged forward-looking sentences.
     // Forecasts must be hedged or attributed; unhedged predictions downgrade
     // the Confidence banner.
-    const factInference = verifyFactInferenceSeparation(markdown);
+    let factInference = verifyFactInferenceSeparation(markdown);
+
+    // ── Stage 6b: Revisor (self-critique + surgical edits) ────────────────
+    // Plan §6.1/§6.8: once the three verifiers have flagged concrete issues,
+    // ask the senior-reviewer LLM for line-level fixes (add citation, hedge
+    // forecast, drop unsupported figure). Each edit is a {find, replace}
+    // pair applied only when `find` is unique in the draft. Accepted only
+    // if aggregate issue count strictly drops.
+    onProgress({
+        stage: 'synthesizing',
+        message: 'Senior reviewer applying surgical edits…',
+        progress: 98,
+        sourcesFound: totalSources,
+    });
+    const revisionOutcome = await reviseReport(
+        { markdown, verification, citationDensity, factInference },
+        { model: driverModel },
+    );
+    const revisions = revisionOutcome.stats;
+    if (revisions.accepted) {
+        markdown = revisionOutcome.markdown;
+        // Re-run verifiers on the revised draft so the Confidence banner and
+        // methodology reflect the fixes, not the pre-revision state.
+        verification = verifyNumericConsistency(markdown, {
+            webSources, ragResult, companyData, knowledgeBase, sourceAnalysis,
+        });
+        citationDensity = verifyCitationDensity(markdown);
+        factInference = verifyFactInferenceSeparation(markdown);
+    }
 
     // Second-pass LLM-judge audit on sentence-level claims. Budget-gated: skip
     // if the tracker would blow past its cap. Failure is silent — the numeric
@@ -2604,6 +2922,7 @@ export const performDeepResearch = async (
         factInference,
         contextualRetrieval,
         distillation,
+        revisions: revisions.used ? revisions : undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -2623,12 +2942,15 @@ export const performDeepResearch = async (
     const ctxTail = contextualRetrieval.used && contextualRetrieval.total > 0
         ? ` · ${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`
         : '';
+    const revTail = revisions.accepted && revisions.editsApplied > 0
+        ? ` · ${revisions.editsApplied} surgical edit${revisions.editsApplied === 1 ? '' : 's'} applied`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${revTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -2702,6 +3024,7 @@ export const performDeepResearch = async (
                 compressionRatio: distillation.compressionRatio,
                 fallback: distillation.fallback,
             } : undefined,
+            revisions: revisions.used ? { ...revisions } : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };

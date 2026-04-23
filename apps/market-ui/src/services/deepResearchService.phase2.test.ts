@@ -36,6 +36,11 @@ import {
     distillKnowledgeBase,
     KB_DISTILL_THRESHOLD,
     KB_DISTILL_TARGET,
+    selectRevisionTargets,
+    buildRevisionPrompt,
+    parseRevisionEdits,
+    applyRevisionEdits,
+    reviseReport,
     type SectionFanoutResult,
 } from './deepResearchService';
 import {
@@ -1653,6 +1658,336 @@ console.log('\n[34] Methodology includes context distillation');
     });
     check('methodology: distillation line absent on fallback',
         !/\*\*Context distillation:\*\*/.test(mdFallback));
+}
+
+// ─── 35. Revisor: target selection + prompt shape ──────────────────────────
+console.log('\n[35] Revisor target selection + prompt');
+
+{
+    const verification = {
+        totalClaims: 10, groundedClaims: 7, multiSourceClaims: 5,
+        singleSourceClaims: [], unsupportedClaims: ['$999T revenue', '12x growth unsupported', 'zzz', 'qqq', 'www', 'extra6'],
+    };
+    const cd = {
+        totalFactSentences: 20, citedSentences: 15, density: 0.75,
+        uncitedSamples: ['Revenue grew fast.', 'Margins improved.', 's3', 's4', 's5', 's6'],
+    };
+    const fi = {
+        totalForwardLooking: 5, hedgedCount: 2, hedgingRate: 0.4,
+        unhedgedSamples: ['The company will reach $100B.', 'Margins will expand to 40%.', 'p3', 'p4', 'p5', 'p6'],
+    };
+    const t = selectRevisionTargets(verification as any, cd as any, fi as any, 5);
+    check('targets: caps each category at maxPerCategory',
+        t.uncited.length === 5 && t.unhedged.length === 5 && t.unsupported.length === 5);
+    check('targets: total sums correctly', t.total === 15);
+
+    const prompt = buildRevisionPrompt('# Draft body', t, 10);
+    check('revision prompt: references up to N edits', /AT MOST 10 edits/.test(prompt));
+    check('revision prompt: includes uncited section', /UNCITED FACTUAL/.test(prompt));
+    check('revision prompt: includes unhedged section', /UNHEDGED FORWARD-LOOKING/.test(prompt));
+    check('revision prompt: includes unsupported section', /UNSUPPORTED NUMERIC/.test(prompt));
+    check('revision prompt: demands verbatim find substring', /verbatim substring/i.test(prompt));
+    check('revision prompt: asks for JSON array output only', /Return ONLY a JSON array/.test(prompt));
+
+    // Empty targets → issue sections omitted (rule-text mentions the labels,
+    // so we check for the full header strings only).
+    const emptyTargets = { uncited: [], unhedged: [], unsupported: [], total: 0 };
+    const emptyPrompt = buildRevisionPrompt('x', emptyTargets, 5);
+    check('revision prompt: omits empty-category headers',
+        !/UNCITED FACTUAL SENTENCES/.test(emptyPrompt)
+        && !/UNHEDGED FORWARD-LOOKING/.test(emptyPrompt)
+        && !/UNSUPPORTED NUMERIC CLAIMS/.test(emptyPrompt));
+}
+
+// ─── 36. parseRevisionEdits: JSON extraction + guards ──────────────────────
+console.log('\n[36] parseRevisionEdits');
+
+{
+    const good = `[
+        {"find": "Revenue grew fast.", "replace": "Revenue grew fast [1].", "reason": "add_citation"},
+        {"find": "Margins will expand to 40%.", "replace": "We expect margins could expand to ~40%.", "reason": "hedge_forecast"}
+    ]`;
+    const r1 = parseRevisionEdits(good);
+    check('parseRevision: parses 2 well-formed edits', r1.length === 2);
+    check('parseRevision: assigns enumerated reason', r1[0].reason === 'add_citation' && r1[1].reason === 'hedge_forecast');
+
+    // ```json fence stripped
+    const fenced = '```json\n[{"find":"Some flagged sentence here.","replace":"Fixed version here [2].","reason":"add_citation"}]\n```';
+    const r2 = parseRevisionEdits(fenced);
+    check('parseRevision: strips code fence', r2.length === 1 && r2[0].replace.includes('[2]'));
+
+    // Garbage
+    check('parseRevision: empty string → empty',
+        parseRevisionEdits('').length === 0);
+    check('parseRevision: non-JSON prose → empty',
+        parseRevisionEdits('here are my thoughts...').length === 0);
+    check('parseRevision: malformed JSON → empty',
+        parseRevisionEdits('[{find:x}]').length === 0);
+
+    // Unknown reason normalized
+    const weirdReason = '[{"find":"Some long enough sentence here.","replace":"Replaced sentence here.","reason":"make_better"}]';
+    const r3 = parseRevisionEdits(weirdReason);
+    check('parseRevision: unknown reason → "other"', r3.length === 1 && r3[0].reason === 'other');
+
+    // Too-short find rejected
+    const shortFind = '[{"find":"ab","replace":"cde","reason":"other"}]';
+    check('parseRevision: rejects find length < 10', parseRevisionEdits(shortFind).length === 0);
+
+    // Missing replace rejected
+    const missingReplace = '[{"find":"A sentence long enough.","replace":"","reason":"other"}]';
+    check('parseRevision: rejects empty replace', parseRevisionEdits(missingReplace).length === 0);
+}
+
+// ─── 37. applyRevisionEdits: safety rules ──────────────────────────────────
+console.log('\n[37] applyRevisionEdits safety');
+
+{
+    const draft = `# Apple Q4 Report
+
+Revenue grew fast. iPhone revenue of $46.2B [1]. Margins will expand to 40%.
+
+## Methodology & Confidence
+
+Revenue grew fast.`;
+
+    // Unique-substring rule: "Revenue grew fast." appears once in body, once
+    // in methodology. Methodology region is off-limits, so the body
+    // occurrence is the "only" occurrence in the editable region.
+    const e1: any = [{
+        find: 'Revenue grew fast.',
+        replace: 'Revenue grew fast [1].',
+        reason: 'add_citation',
+    }];
+    const { markdown: m1, applied: a1 } = applyRevisionEdits(draft, e1);
+    check('apply: edit in body region is applied',
+        a1 === 1 && m1.includes('Revenue grew fast [1].'));
+    check('apply: methodology region left untouched',
+        /## Methodology & Confidence[\s\S]*Revenue grew fast\.$/.test(m1));
+
+    // Hedge edit with length change inside bounds
+    const e2: any = [{
+        find: 'Margins will expand to 40%.',
+        replace: 'We expect margins could expand to ~40%.',
+        reason: 'hedge_forecast',
+    }];
+    const { markdown: m2, applied: a2 } = applyRevisionEdits(draft, e2);
+    check('apply: hedge edit applied', a2 === 1 && m2.includes('We expect margins could expand'));
+
+    // Reject invented citation id — draft has [1]; an edit citing [5] is vetoed
+    const e3: any = [{
+        find: 'Revenue grew fast.',
+        replace: 'Revenue grew fast [5].',
+        reason: 'add_citation',
+    }];
+    const r3 = applyRevisionEdits(draft, e3);
+    check('apply: rejects invented citation id [5]', r3.applied === 0);
+
+    // Length-bloat guard (> 2.5× source span)
+    const e4: any = [{
+        find: 'Revenue grew fast.',
+        replace: 'Revenue grew fast. ' + 'x '.repeat(60) + '[1].',
+        reason: 'add_citation',
+    }];
+    check('apply: rejects replacement > 2.5× source length',
+        applyRevisionEdits(draft, e4).applied === 0);
+
+    // Ambiguous match (two body occurrences) rejected
+    const dupDraft = 'Big paragraph here. Revenue grew fast. Then later. Revenue grew fast. End of body.';
+    const e5: any = [{
+        find: 'Revenue grew fast.',
+        replace: 'Revenue grew fast [1].',
+        reason: 'add_citation',
+    }];
+    check('apply: ambiguous match (2 occurrences) skipped',
+        applyRevisionEdits(dupDraft, e5).applied === 0);
+
+    // Missing find silently skipped
+    const e6: any = [{
+        find: 'Sentence that does not exist in the draft at all.',
+        replace: 'Something else [1].',
+        reason: 'other',
+    }];
+    check('apply: missing find silently skipped',
+        applyRevisionEdits(draft, e6).applied === 0);
+}
+
+// ─── 38. reviseReport: end-to-end with stub LLM ────────────────────────────
+console.log('\n[38] reviseReport integration');
+
+{
+    const draft = `# Report
+
+Revenue grew fast. Margins will expand to 40%.
+
+## Methodology & Confidence
+
+Trailer.`;
+
+    const v: any = {
+        totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3,
+        singleSourceClaims: [], unsupportedClaims: [],
+    };
+    const cd: any = {
+        totalFactSentences: 2, citedSentences: 0, density: 0,
+        uncitedSamples: ['Revenue grew fast.'],
+    };
+    const fi: any = {
+        totalForwardLooking: 1, hedgedCount: 0, hedgingRate: 0,
+        unhedgedSamples: ['Margins will expand to 40%.'],
+    };
+
+    // No issues → used=false, draft unchanged
+    const empty = await reviseReport(
+        { markdown: draft, verification: v,
+          citationDensity: { ...cd, uncitedSamples: [] },
+          factInference: { ...fi, unhedgedSamples: [] } },
+        { callLLM: async () => '[]' },
+    );
+    check('revise: no issues → used=false, unchanged',
+        empty.stats.used === false && empty.markdown === draft);
+
+    // Happy path: LLM returns two edits, issues drop
+    // Need to include [1] somewhere in draft so the applied citation survives
+    // the invented-id check. Add it in a non-target sentence.
+    const draftWithId = `# Report
+
+Context note [1]. Revenue grew fast. Margins will expand to 40%.
+
+## Methodology & Confidence
+
+Trailer.`;
+    const fixLLM = async () => JSON.stringify([
+        { find: 'Revenue grew fast.', replace: 'Revenue grew fast [1].', reason: 'add_citation' },
+        { find: 'Margins will expand to 40%.', replace: 'We expect margins could expand to ~40%.', reason: 'hedge_forecast' },
+    ]);
+    const happy = await reviseReport(
+        { markdown: draftWithId, verification: v, citationDensity: cd, factInference: fi },
+        { callLLM: fixLLM },
+    );
+    check('revise happy: used=true', happy.stats.used === true);
+    check('revise happy: editsProposed=2', happy.stats.editsProposed === 2);
+    check('revise happy: editsApplied=2', happy.stats.editsApplied === 2);
+    check('revise happy: issues strictly decrease',
+        happy.stats.issuesAfter < happy.stats.issuesBefore);
+    check('revise happy: accepted=true', happy.stats.accepted === true);
+    check('revise happy: markdown contains both fixes',
+        happy.markdown.includes('Revenue grew fast [1].') &&
+        happy.markdown.includes('We expect margins could expand to ~40%.'));
+
+    // LLM throws → fallback, original kept
+    const throwLLM = async (): Promise<string> => { throw new Error('boom'); };
+    const thrown = await reviseReport(
+        { markdown: draftWithId, verification: v, citationDensity: cd, factInference: fi },
+        { callLLM: throwLLM },
+    );
+    check('revise fallback: fallback=true', thrown.stats.fallback === true);
+    check('revise fallback: markdown unchanged', thrown.markdown === draftWithId);
+    check('revise fallback: editsApplied=0', thrown.stats.editsApplied === 0);
+
+    // LLM returns garbage → no edits, not accepted
+    const garbageLLM = async () => 'here are my thoughts but no JSON';
+    const garbage = await reviseReport(
+        { markdown: draftWithId, verification: v, citationDensity: cd, factInference: fi },
+        { callLLM: garbageLLM },
+    );
+    check('revise garbage: used=true, accepted=false',
+        garbage.stats.used === true && garbage.stats.accepted === false);
+    check('revise garbage: markdown unchanged', garbage.markdown === draftWithId);
+
+    // Edit applied but re-verified draft has no strict issue drop → rejected.
+    // Use a draft whose SOLE flaw is the uncited sentence. Real verifiers
+    // scan the whole post-revision draft, so we need the rest of the draft
+    // to be already clean.
+    const cleanDraft = `# Report
+
+Context [1]. Revenue grew fast.
+
+## Methodology & Confidence
+
+Trailer.`;
+    const cleanCd: any = {
+        totalFactSentences: 1, citedSentences: 0, density: 0,
+        uncitedSamples: ['Revenue grew fast.'],
+    };
+    const cleanFi: any = {
+        totalForwardLooking: 0, hedgedCount: 0, hedgingRate: 1,
+        unhedgedSamples: [],
+    };
+    const citeOnlyLLM = async () => JSON.stringify([
+        { find: 'Revenue grew fast.', replace: 'Revenue grew fast [1].', reason: 'add_citation' },
+    ]);
+    const cleanRun = await reviseReport(
+        { markdown: cleanDraft, verification: v, citationDensity: cleanCd, factInference: cleanFi },
+        { callLLM: citeOnlyLLM },
+    );
+    check('revise partial: 1 edit applied on clean draft, accepted',
+        cleanRun.stats.editsApplied === 1 && cleanRun.stats.accepted === true);
+    check('revise partial: issuesAfter=0 when only flaw is fixed',
+        cleanRun.stats.issuesAfter === 0);
+}
+
+// ─── 39. Methodology surfaces self-revision ────────────────────────────────
+console.log('\n[39] Methodology includes revision line');
+
+{
+    const mdRev = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        revisions: {
+            used: true, issuesBefore: 5, issuesAfter: 2,
+            editsProposed: 4, editsApplied: 3, accepted: true, fallback: false,
+        },
+    });
+    check('methodology: revision line when accepted',
+        /\*\*Self-revision:\*\*/.test(mdRev) && /3 surgical edits/.test(mdRev) && /from 5 to 2/.test(mdRev));
+
+    // Not accepted but examined → alternate bullet
+    const mdNotAccepted = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        revisions: {
+            used: true, issuesBefore: 3, issuesAfter: 3,
+            editsProposed: 2, editsApplied: 0, accepted: false, fallback: false,
+        },
+    });
+    check('methodology: examined-no-fix bullet when not accepted',
+        /no accepted surgical edits/.test(mdNotAccepted));
+
+    // Skipped (no issues) → no bullet
+    const mdSkipped = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        revisions: {
+            used: false, issuesBefore: 0, issuesAfter: 0,
+            editsProposed: 0, editsApplied: 0, accepted: false, fallback: false,
+        },
+    });
+    check('methodology: revision bullet absent when used=false',
+        !/\*\*Self-revision:\*\*/.test(mdSkipped));
+
+    // Fallback (LLM threw) with issues present → no bullet (don't claim credit)
+    const mdFallback = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        revisions: {
+            used: true, issuesBefore: 4, issuesAfter: 4,
+            editsProposed: 0, editsApplied: 0, accepted: false, fallback: true,
+        },
+    });
+    check('methodology: revision bullet absent on fallback',
+        !/\*\*Self-revision:\*\*/.test(mdFallback));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────
