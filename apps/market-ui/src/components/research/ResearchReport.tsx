@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -532,6 +532,19 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Contextual Retrieval {cr.enriched}/{cr.total}</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.distillation && report.metadata.distillation.used && !report.metadata.distillation.fallback && (() => {
+                                const dd = report.metadata.distillation!;
+                                const savedPct = Math.round((1 - dd.compressionRatio) * 100);
+                                const tip = `Context distillation: accumulated intelligence compressed ${dd.inputChars.toLocaleString()} → ${dd.outputChars.toLocaleString()} chars (${savedPct}% saved) before Writer handoff. Preserves numeric facts and named quotes that a silent substring truncation would drop from later rounds.`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: 'rgba(20, 184, 166, 0.12)', color: '#5EEAD4', border: '1px solid rgba(20, 184, 166, 0.3)' }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>Distilled −{savedPct}%</span>
                                     </div>
                                 );
                             })()}

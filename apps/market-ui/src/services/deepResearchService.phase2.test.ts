@@ -31,6 +31,11 @@ import {
     contextualizeSources,
     _clearContextCache_FOR_TESTS,
     CONTEXT_BATCH_SIZE,
+    buildKbDistillationPrompt,
+    isAcceptableDistillation,
+    distillKnowledgeBase,
+    KB_DISTILL_THRESHOLD,
+    KB_DISTILL_TARGET,
     type SectionFanoutResult,
 } from './deepResearchService';
 import {
@@ -1519,6 +1524,135 @@ console.log('\n[32] HITL plan approval surfaces in methodology');
     });
     check('methodology: HITL line absent when used=false',
         !/\*\*Plan review:\*\*/.test(mdFalse));
+}
+
+// ─── 33. Context distillation: prompt, acceptance, end-to-end ──────────────
+console.log('\n[33] Context distillation');
+
+{
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue', 'EPS'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['iPhone revenue', 'Services growth'],
+    };
+
+    // Prompt shape
+    const prompt = buildKbDistillationPrompt('raw kb content here', blueprint, 4500);
+    check('distill prompt: mentions target char count', /4500/.test(prompt));
+    check('distill prompt: preserves numeric fact directive',
+        /PRESERVE every specific number/i.test(prompt));
+    check('distill prompt: includes research topic', /Apple/.test(prompt));
+
+    // Acceptance rules
+    check('distill accept: rejects empty output',
+        isAcceptableDistillation('a'.repeat(8000), '') === false);
+    check('distill accept: rejects output longer than input',
+        isAcceptableDistillation('a'.repeat(1000), 'b'.repeat(1500)) === false);
+    check('distill accept: rejects near-identity (<15% shrink)',
+        isAcceptableDistillation('a'.repeat(1000), 'b'.repeat(950)) === false);
+    check('distill accept: rejects tiny stub',
+        isAcceptableDistillation('a'.repeat(10000), 'ok') === false);
+    check('distill accept: accepts meaningful compression',
+        isAcceptableDistillation('a'.repeat(10000), 'b'.repeat(3000)) === true);
+
+    // Threshold skip — small KB short-circuits, no LLM call
+    let skipCalls = 0;
+    const skipLLM = async () => { skipCalls++; return 'nope'; };
+    const skipKb = 'short base';
+    const rSkip = await distillKnowledgeBase(skipKb, blueprint, { callLLM: skipLLM });
+    check('distill skip: kb below threshold returns unchanged',
+        rSkip.kb === skipKb && rSkip.stats.used === false && skipCalls === 0);
+    check('distill skip: outputChars equals inputChars when skipped',
+        rSkip.stats.outputChars === skipKb.length && rSkip.stats.compressionRatio === 1);
+
+    // Threshold exceeded — LLM called, compressed kb returned
+    const bigKb = 'Round 1: Apple reported Q4 revenue of $94.9B, up 6% YoY. iPhone revenue $46.2B. '.repeat(150);
+    const compressed = '- Q4 revenue: $94.9B (+6% YoY)\n- iPhone Q4: $46.2B\n- Services growth continues as a material driver across FY24 with improved gross margin mix. Guidance points to continued growth into FY25. Management noted channel health remains healthy.';
+    const runLLM = async () => compressed;
+    const rRun = await distillKnowledgeBase(bigKb, blueprint, { callLLM: runLLM });
+    check('distill run: used=true when input exceeds threshold',
+        rRun.stats.used === true);
+    check('distill run: outputChars reflects compressed body',
+        rRun.stats.outputChars === compressed.length);
+    check('distill run: compressionRatio < 1',
+        rRun.stats.compressionRatio < 1 && rRun.stats.compressionRatio > 0);
+    check('distill run: kb replaced with compressed body',
+        rRun.kb === compressed);
+    check('distill run: fallback=false on success',
+        rRun.stats.fallback === false);
+
+    // LLM throws → fallback path, original KB preserved
+    const bigKb2 = 'Round 1 facts repeated many times. '.repeat(500);
+    const throwingLLM = async (): Promise<string> => { throw new Error('boom'); };
+    const rThrow = await distillKnowledgeBase(bigKb2, blueprint, { callLLM: throwingLLM });
+    check('distill fallback: kb unchanged when LLM throws',
+        rThrow.kb === bigKb2);
+    check('distill fallback: stats.used=true, fallback=true',
+        rThrow.stats.used === true && rThrow.stats.fallback === true);
+    check('distill fallback: compressionRatio=1 on fallback',
+        rThrow.stats.compressionRatio === 1);
+
+    // LLM returns empty → rejected, fallback
+    const bigKb3 = 'Round 1 facts. '.repeat(800);
+    const garbageLLM = async () => '';
+    const rGarbage = await distillKnowledgeBase(bigKb3, blueprint, { callLLM: garbageLLM });
+    check('distill reject: empty output → fallback',
+        rGarbage.kb === bigKb3 && rGarbage.stats.fallback === true);
+
+    // LLM returns near-identity → rejected (<15% shrink)
+    const bigKb4 = 'x'.repeat(10000);
+    const nearIdentityLLM = async () => 'x'.repeat(9000);
+    const rNear = await distillKnowledgeBase(bigKb4, blueprint, { callLLM: nearIdentityLLM });
+    check('distill reject: near-identity output → fallback',
+        rNear.kb === bigKb4 && rNear.stats.fallback === true);
+
+    // Exported constants are sane
+    check('distill constants: threshold > target', KB_DISTILL_THRESHOLD > KB_DISTILL_TARGET);
+    check('distill constants: threshold and target positive',
+        KB_DISTILL_THRESHOLD > 0 && KB_DISTILL_TARGET > 0);
+}
+
+// ─── 34. Methodology surfaces context distillation ─────────────────────────
+console.log('\n[34] Methodology includes context distillation');
+
+{
+    const mdDistilled = buildMethodologySection({
+        searchQueries: 5, rounds: 3, webSources: 30, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 6, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 30, citedSentences: 28, density: 0.93, uncitedSamples: [] },
+        confidence: 'High',
+        distillation: { used: true, inputChars: 12000, outputChars: 4200, compressionRatio: 0.35, fallback: false },
+    });
+    check('methodology: distillation line present',
+        /\*\*Context distillation:\*\*/.test(mdDistilled) && /12,000/.test(mdDistilled) && /4,200/.test(mdDistilled));
+    check('methodology: distillation saved-percent rendered',
+        /65% saved/.test(mdDistilled));
+
+    // Skipped → no line
+    const mdSkipped = buildMethodologySection({
+        searchQueries: 1, rounds: 1, webSources: 5, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        distillation: { used: false, inputChars: 2000, outputChars: 2000, compressionRatio: 1, fallback: false },
+    });
+    check('methodology: distillation line absent when skipped',
+        !/\*\*Context distillation:\*\*/.test(mdSkipped));
+
+    // Fallback (LLM failed) → no line (we don't claim credit for a failed compression)
+    const mdFallback = buildMethodologySection({
+        searchQueries: 1, rounds: 2, webSources: 10, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'Medium',
+        distillation: { used: true, inputChars: 10000, outputChars: 10000, compressionRatio: 1, fallback: true },
+    });
+    check('methodology: distillation line absent on fallback',
+        !/\*\*Context distillation:\*\*/.test(mdFallback));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

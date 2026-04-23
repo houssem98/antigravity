@@ -263,6 +263,13 @@ export interface ResearchReport {
             deterministicBatches: number;
             cacheHits: number;
         };
+        distillation?: {
+            used: boolean;
+            inputChars: number;
+            outputChars: number;
+            compressionRatio: number;
+            fallback: boolean;
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -668,6 +675,124 @@ Mark sufficient=true only if coverage_score >= 0.75 AND all major research angle
     }
 }
 
+// ─── Context Distillation ──────────────────────────────────────────────────
+// Plan §6.1 P0: "every sub-agent must return a cleaned summary, not raw
+// scraped content." The per-round Extractor already produces bullet-form
+// extraction, but across 2–4 rounds the accumulated knowledgeBase can
+// exceed 20K chars — at which point the final analyzeSources call silently
+// truncates with `substring(0, 5000)`, dropping early-round intelligence.
+// We replace that silent slice with an explicit compression pass that
+// preserves ALL numeric facts and quotes while compressing narrative prose.
+
+export const KB_DISTILL_THRESHOLD = 7000;   // compress if accumulated KB exceeds this
+export const KB_DISTILL_TARGET = 4500;      // target size after compression
+export const KB_DISTILL_MIN_SHRINK = 0.15;  // accept distillation only if it saved ≥15%
+
+export interface DistillationResult {
+    used: boolean;            // whether compression actually ran
+    inputChars: number;       // size of knowledgeBase before compression
+    outputChars: number;      // size after (equals inputChars when used=false)
+    compressionRatio: number; // outputChars / inputChars, 0..1 (1 when skipped)
+    fallback: boolean;        // true if LLM returned garbage and we kept the pre-distill KB
+}
+
+export function buildKbDistillationPrompt(
+    kb: string,
+    blueprint: ResearchBlueprint,
+    targetChars: number,
+): string {
+    return `You are the supervising research analyst. Compress the accumulated intelligence below to roughly ${targetChars} characters WITHOUT losing any specific numeric fact, date, or named quote.
+
+RESEARCH TOPIC: ${blueprint.targetEntities.join(', ') || blueprint.subtopics[0] || 'see angles'}
+KEY METRICS: ${blueprint.keyMetrics.join(', ') || '(none specified)'}
+RESEARCH ANGLES: ${blueprint.researchAngles.join(' | ') || '(none)'}
+
+ACCUMULATED INTELLIGENCE (from multiple search rounds):
+${kb}
+
+Compression rules:
+1. PRESERVE every specific number (revenue, EPS, growth %, margins, price targets, headcount, dates) verbatim
+2. PRESERVE direct named quotes with attribution
+3. PRESERVE conflicting figures — flag them with "(conflicts: …)"
+4. MERGE duplicate facts that appear across rounds
+5. DROP marketing adjectives, hedging, narrative filler
+6. Format as tight bullet points grouped by theme (financials, guidance, competitive, risks)
+7. Do NOT invent or extrapolate — only rephrase what's there
+
+Return ONLY the compressed brief. No preamble, no closing commentary.`;
+}
+
+// Sanity-check the LLM's compressed output — reject if it's empty, longer
+// than the input, or clearly non-text garbage. Keeping the original KB is
+// strictly safer than accepting a malformed compression.
+export function isAcceptableDistillation(input: string, output: string): boolean {
+    if (!output || output.trim().length < 200) return false;
+    if (output.length >= input.length) return false;
+    // Require the compression to actually save space (not just shave whitespace).
+    const shrink = 1 - output.length / input.length;
+    if (shrink < KB_DISTILL_MIN_SHRINK) return false;
+    return true;
+}
+
+export async function distillKnowledgeBase(
+    kb: string,
+    blueprint: ResearchBlueprint,
+    options: {
+        model?: ResearchModelId;
+        callLLM?: (prompt: string) => Promise<string>;
+        threshold?: number;
+        target?: number;
+    } = {},
+): Promise<{ kb: string; stats: DistillationResult }> {
+    const threshold = options.threshold ?? KB_DISTILL_THRESHOLD;
+    const target = options.target ?? KB_DISTILL_TARGET;
+    const inputChars = kb.length;
+
+    // Skip compression when the base is already small enough — a single LLM
+    // call to "compress 4K→4K" would be pure cost, no signal.
+    if (inputChars <= threshold) {
+        return {
+            kb,
+            stats: { used: false, inputChars, outputChars: inputChars, compressionRatio: 1, fallback: false },
+        };
+    }
+
+    const prompt = buildKbDistillationPrompt(kb, blueprint, target);
+    // Defer model resolution to callDriver so tests don't need real providers.
+    const call = options.callLLM ?? ((p: string) => callDriver(p, 'standard', options.model));
+
+    let compressed = '';
+    try {
+        compressed = await call(prompt);
+    } catch {
+        // LLM failure → keep the raw KB (silent truncation downstream is still
+        // better than an empty string).
+        return {
+            kb,
+            stats: { used: true, inputChars, outputChars: inputChars, compressionRatio: 1, fallback: true },
+        };
+    }
+
+    const trimmed = compressed.trim();
+    if (!isAcceptableDistillation(kb, trimmed)) {
+        return {
+            kb,
+            stats: { used: true, inputChars, outputChars: inputChars, compressionRatio: 1, fallback: true },
+        };
+    }
+
+    return {
+        kb: trimmed,
+        stats: {
+            used: true,
+            inputChars,
+            outputChars: trimmed.length,
+            compressionRatio: trimmed.length / inputChars,
+            fallback: false,
+        },
+    };
+}
+
 // ─── Iterative Search: Main loop ──────────────────────────────────────────────
 
 async function iterativeSearch(
@@ -675,7 +800,7 @@ async function iterativeSearch(
     model: ResearchModelId | undefined,
     onProgress: (p: ResearchProgress) => void,
     maxRounds = 4,
-): Promise<{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number }> {
+): Promise<{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number; distillation: DistillationResult }> {
     let allSources: TavilySearchResult[] = [];
     let knowledgeBase = '';
     let roundsRun = 0;
@@ -755,10 +880,30 @@ Extract as bullet points. Be specific with numbers, dates, and source attributio
         }
     }
 
+    // ── Post-rounds distillation (plan §6.1) ──────────────────────────────
+    // Compress accumulated intelligence to a bounded size BEFORE analyzeSources
+    // slices it to 5000 chars. The explicit pass preserves numeric facts and
+    // named quotes that `substring(0, 5000)` would silently drop from rounds 3–4.
+    const { kb: distilled, stats: distillation } = await distillKnowledgeBase(
+        knowledgeBase,
+        blueprint,
+        { model },
+    );
+    if (distillation.used && !distillation.fallback) {
+        const pct = Math.round(distillation.compressionRatio * 100);
+        onProgress({
+            stage: 'searching',
+            message: `Knowledge base distilled: ${distillation.inputChars.toLocaleString()} → ${distillation.outputChars.toLocaleString()} chars (${pct}%)`,
+            progress: 42,
+            sourcesFound: allSources.length,
+        });
+    }
+
     return {
         sources: allSources.sort((a, b) => scoreSource(b) - scoreSource(a)),
-        knowledgeBase,
+        knowledgeBase: distilled,
         roundsRun,
+        distillation,
     };
 }
 
@@ -2053,6 +2198,7 @@ export interface MethodologyInputs {
     sectionFanout?: { used: boolean; planned: number; completed: number; failed: number };
     factInference?: FactInferenceResult;
     contextualRetrieval?: ContextualRetrievalResult;
+    distillation?: DistillationResult;
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -2091,6 +2237,13 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         const detTail = cr.deterministicBatches > 0 ? `, ${cr.deterministicBatches} deterministic fallback` : '';
         bullets.push(
             `**Contextual Retrieval:** ${cr.enriched}/${cr.total} sources tagged (${cr.llmBatches} LLM batch${cr.llmBatches === 1 ? '' : 'es'}${cacheTail}${detTail})`,
+        );
+    }
+    if (m.distillation && m.distillation.used && !m.distillation.fallback) {
+        const dd = m.distillation;
+        const savedPct = Math.round((1 - dd.compressionRatio) * 100);
+        bullets.push(
+            `**Context distillation:** knowledge base compressed ${dd.inputChars.toLocaleString()} → ${dd.outputChars.toLocaleString()} chars (${savedPct}% saved), preserving numeric facts and named quotes`,
         );
     }
     if (m.hitl && m.hitl.used) {
@@ -2187,7 +2340,7 @@ export const performDeepResearch = async (
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
     // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro
     let [
-        { sources: webSources, knowledgeBase, roundsRun },
+        { sources: webSources, knowledgeBase, roundsRun, distillation },
         ragResult,
         macroText,
         ...secAndCompanyArrays
@@ -2210,7 +2363,7 @@ export const performDeepResearch = async (
         ...blueprint.tickers.slice(0, 4).map(ticker =>
             getCompanyOverview(ticker).catch(() => null)
         ),
-    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number }, GravityRAGResult, string, ...(SECFiling[] | CompanyOverview | null)[]];
+    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number; distillation: DistillationResult }, GravityRAGResult, string, ...(SECFiling[] | CompanyOverview | null)[]];
 
     // Separate SEC filings from company overviews
     const numSecTargets = blueprint.secTargets.slice(0, 5).length;
@@ -2450,6 +2603,7 @@ export const performDeepResearch = async (
         sectionFanout,
         factInference,
         contextualRetrieval,
+        distillation,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -2541,6 +2695,13 @@ export const performDeepResearch = async (
             },
             sectionFanout,
             contextualRetrieval,
+            distillation: distillation.used ? {
+                used: true,
+                inputChars: distillation.inputChars,
+                outputChars: distillation.outputChars,
+                compressionRatio: distillation.compressionRatio,
+                fallback: distillation.fallback,
+            } : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };
