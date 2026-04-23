@@ -279,6 +279,11 @@ export interface ResearchReport {
             accepted: boolean;
             fallback: boolean;
         };
+        injectionDefense?: {
+            scanned: number;
+            flagged: number;
+            patternHits: Record<string, number>;
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -371,6 +376,116 @@ let _activeSignal: AbortSignal | null = null;
 export function throwIfAborted(signal?: AbortSignal | null) {
     const s = signal ?? _activeSignal;
     if (s?.aborted) throw new ResearchCancelledError();
+}
+
+// ─── Prompt-Injection Defense (plan §6.12) ──────────────────────────────────
+// Web content fetched via Tavily is UNTRUSTED — a malicious page can
+// embed strings that try to hijack the LLM ("ignore previous instructions",
+// role-header spoofing, instruct tokens). We sanitize each snippet before
+// it's concatenated into any LLM prompt.
+//
+// Design choices:
+//   - Conservative patterns only (low false-positive): role-headers at line
+//     start, literal instruct tokens, explicit "ignore previous instructions"
+//     phrasing, jailbreak keywords, override-safety phrasing. NOT "you are
+//     now" / "act as" — those trip legitimate news copy too often.
+//   - Replace with "[REDACTED]" — clear signal to the LLM that content was
+//     removed, not silent deletion.
+//   - Track hits in a module-level stats ref (matches _activeBudget
+//     pattern) so the pipeline can surface defense activity in metadata
+//     without threading an extra parameter through every prompt builder.
+
+export interface InjectionDefenseStats {
+    scanned: number;                         // total untrusted snippets passed through the sanitizer
+    flagged: number;                         // snippets where ≥1 pattern fired
+    patternHits: Record<string, number>;     // pattern name → number of times it matched
+}
+
+export function newInjectionStats(): InjectionDefenseStats {
+    return { scanned: 0, flagged: 0, patternHits: {} };
+}
+
+interface InjectionPattern {
+    name: string;
+    re: RegExp;
+}
+
+// Each regex below has been hand-picked to minimize false positives on
+// financial news / SEC prose. "ignore previous instructions" is specific
+// enough; "you are now" is not.
+const INJECTION_PATTERNS: InjectionPattern[] = [
+    // Chat role headers at line start — rare in articles, common in injection.
+    { name: 'role_header',
+      re: /^[ \t]*(?:SYSTEM|ASSISTANT|HUMAN|USER)\s*:\s*/gmi },
+    // Literal instruct tokens from various LLM chat templates.
+    { name: 'instruct_token',
+      re: /\[\/?(?:INST|SYS|INSTRUCT)\]|<\|(?:im_start|im_end|system|user|assistant|start_header_id|end_header_id|eot_id)\|>/gi },
+    // "Ignore previous/prior/above instructions/prompts/rules" — classic PI.
+    { name: 'ignore_previous',
+      re: /\b(?:please\s+)?(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier|preceding|preceding\s+above|any|your)\s+(?:instructions?|prompts?|rules?|guidelines?|system\s+(?:prompt|message)s?)\b/gi },
+    // Jailbreak handles.
+    { name: 'jailbreak',
+      re: /\b(?:DAN\s+mode|jailbreak\s+mode|developer\s+mode\s+(?:enabled|on)|do\s+anything\s+now)\b/gi },
+    // "Override/bypass safety/guardrails/rules". `\w*` picks up common verb
+    // inflections (bypassing / overrides / disabled) without a full list.
+    { name: 'override_safety',
+      re: /\b(?:override|bypass|disable)\w*\s+(?:your\s+)?(?:safety|guardrails?|restrictions?|filters?)\b/gi },
+    // Reveal-system-prompt probes.
+    { name: 'reveal_system',
+      re: /\b(?:reveal|show|print|output|repeat|echo)\s+(?:your|the)\s+(?:system\s+(?:prompt|message)|initial\s+(?:prompt|instructions?)|hidden\s+instructions?)\b/gi },
+];
+
+export interface SanitizationResult {
+    clean: string;
+    flagged: boolean;
+    patternsFound: string[];
+}
+
+// Pure sanitizer. Replaces injection patterns with [REDACTED] and returns
+// the cleaned text plus which patterns fired. Does NOT truncate — callers
+// keep their own length caps.
+export function sanitizeUntrustedContent(raw: string): SanitizationResult {
+    if (!raw) return { clean: '', flagged: false, patternsFound: [] };
+    const patternsFound: string[] = [];
+    let out = raw;
+    for (const { name, re } of INJECTION_PATTERNS) {
+        // Reset regex lastIndex in case a previous call left stateful progress.
+        re.lastIndex = 0;
+        if (re.test(out)) {
+            patternsFound.push(name);
+            re.lastIndex = 0;
+            out = out.replace(re, '[REDACTED]');
+        }
+    }
+    return { clean: out, flagged: patternsFound.length > 0, patternsFound };
+}
+
+let _activeInjectionStats: InjectionDefenseStats | null = null;
+
+// Sanitize + update the active stats counter (if any). Used at prompt-
+// construction sites so downstream LLMs never see raw untrusted text.
+export function sanitizeAndTrack(raw: string): string {
+    const r = sanitizeUntrustedContent(raw);
+    const stats = _activeInjectionStats;
+    if (stats) {
+        stats.scanned += 1;
+        if (r.flagged) {
+            stats.flagged += 1;
+            for (const p of r.patternsFound) {
+                stats.patternHits[p] = (stats.patternHits[p] || 0) + 1;
+            }
+        }
+    }
+    return r.clean;
+}
+
+// Test-only hooks so phase-2 can assert the module-level state isolates
+// correctly across runs.
+export function _setActiveInjectionStats_FOR_TESTS(s: InjectionDefenseStats | null): void {
+    _activeInjectionStats = s;
+}
+export function _getActiveInjectionStats_FOR_TESTS(): InjectionDefenseStats | null {
+    return _activeInjectionStats;
 }
 
 // ─── LLM Layer — Server Proxy ────────────────────────────────────────────────
@@ -858,7 +973,7 @@ async function iterativeSearch(
             `You are a senior analyst. Extract ALL specific facts, figures, quotes, and data points from these sources relevant to: ${blueprint.targetEntities.join(', ')} — ${blueprint.researchAngles.slice(0, 3).join(' | ')}
 
 Sources:
-${fresh.slice(0, 12).map((s, i) => `[${i + 1}] ${s.title}\n${s.content.substring(0, 700)}`).join('\n\n---\n\n')}
+${fresh.slice(0, 12).map((s, i) => `[${i + 1}] ${sanitizeAndTrack(s.title)}\n${sanitizeAndTrack(s.content).substring(0, 700)}`).join('\n\n---\n\n')}
 
 Extract as bullet points. Be specific with numbers, dates, and source attribution. Skip marketing language.`,
             'standard',
@@ -963,7 +1078,7 @@ Be specific with numbers. Never invent data. Cross-reference conflicting figures
     const sourceText = top20
         .map((s, i) => {
             const ctxLine = s.context ? `    context: ${s.context}\n` : '';
-            return `[Source ${i + 1}] "${s.title}" (${s.publishedDate || 'recent'})\n${ctxLine}${(s.content || '').substring(0, 900)}`;
+            return `[Source ${i + 1}] "${sanitizeAndTrack(s.title)}" (${s.publishedDate || 'recent'})\n${ctxLine}${sanitizeAndTrack(s.content || '').substring(0, 900)}`;
         })
         .join('\n\n---\n\n');
 
@@ -1379,8 +1494,9 @@ export function buildContextEnrichmentPrompt(
 ): string {
     const sourceLines = sources.map((s, i) => {
         const date = s.publishedDate ? `published ${s.publishedDate.slice(0, 10)}` : 'undated';
-        const excerpt = (s.content || '').replace(/\s+/g, ' ').slice(0, 180);
-        return `[${i + 1}] url=${s.url}\n    title="${s.title}" — ${date}\n    excerpt="${excerpt}"`;
+        const excerpt = sanitizeAndTrack(s.content || '').replace(/\s+/g, ' ').slice(0, 180);
+        const safeTitle = sanitizeAndTrack(s.title);
+        return `[${i + 1}] url=${s.url}\n    title="${safeTitle}" — ${date}\n    excerpt="${excerpt}"`;
     }).join('\n\n');
 
     return `You are tagging financial research sources for a retrieval pipeline.
@@ -2479,6 +2595,7 @@ export interface MethodologyInputs {
     contextualRetrieval?: ContextualRetrievalResult;
     distillation?: DistillationResult;
     revisions?: RevisionResult;
+    injectionDefense?: InjectionDefenseStats;
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -2536,6 +2653,17 @@ export function buildMethodologySection(m: MethodologyInputs): string {
             `**Self-revision:** reviewer examined ${m.revisions.issuesBefore} flagged issue${m.revisions.issuesBefore === 1 ? '' : 's'} but produced no accepted surgical edits — original draft retained`,
         );
     }
+    if (m.injectionDefense && m.injectionDefense.scanned > 0 && m.injectionDefense.flagged > 0) {
+        const ij = m.injectionDefense;
+        const topPatterns = Object.entries(ij.patternHits)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([k, v]) => `${k}×${v}`)
+            .join(', ');
+        bullets.push(
+            `**Prompt-injection defense:** ${ij.flagged} of ${ij.scanned} untrusted snippet${ij.scanned === 1 ? '' : 's'} contained injection-attempt patterns — redacted before reaching any LLM (${topPatterns})`,
+        );
+    }
     if (m.hitl && m.hitl.used) {
         bullets.push(
             m.hitl.modified
@@ -2583,6 +2711,10 @@ export const performDeepResearch = async (
     const tracker = new BudgetTracker(budget);
     _activeBudget = tracker;
     _activeSignal = signal ?? null;
+    // Per-query injection-defense counter: web snippets sanitized during this
+    // run accumulate here so the final report can surface defense activity.
+    const injectionStats = newInjectionStats();
+    _activeInjectionStats = injectionStats;
     throwIfAborted(signal);
 
     const driverModel = await pickDriver('premium', model);
@@ -2923,6 +3055,7 @@ export const performDeepResearch = async (
         contextualRetrieval,
         distillation,
         revisions: revisions.used ? revisions : undefined,
+        injectionDefense: injectionStats.scanned > 0 ? injectionStats : undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -2945,12 +3078,15 @@ export const performDeepResearch = async (
     const revTail = revisions.accepted && revisions.editsApplied > 0
         ? ` · ${revisions.editsApplied} surgical edit${revisions.editsApplied === 1 ? '' : 's'} applied`
         : '';
+    const injTail = injectionStats.flagged > 0
+        ? ` · ${injectionStats.flagged} injection attempt${injectionStats.flagged === 1 ? '' : 's'} blocked`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${revTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${revTail}${injTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -3025,12 +3161,18 @@ export const performDeepResearch = async (
                 fallback: distillation.fallback,
             } : undefined,
             revisions: revisions.used ? { ...revisions } : undefined,
+            injectionDefense: injectionStats.scanned > 0 ? {
+                scanned: injectionStats.scanned,
+                flagged: injectionStats.flagged,
+                patternHits: { ...injectionStats.patternHits },
+            } : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };
 
     _activeBudget = null;
     _activeSignal = null;
+    _activeInjectionStats = null;
     return report;
 };
 

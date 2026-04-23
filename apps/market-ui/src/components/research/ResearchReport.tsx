@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -545,6 +545,29 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Distilled −{savedPct}%</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.injectionDefense && report.metadata.injectionDefense.scanned > 0 && (() => {
+                                const ij = report.metadata.injectionDefense!;
+                                const hot = ij.flagged > 0;
+                                const bg = hot ? 'rgba(239, 68, 68, 0.12)' : 'rgba(34, 197, 94, 0.10)';
+                                const color = hot ? '#FCA5A5' : '#86EFAC';
+                                const border = hot ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.25)';
+                                const patternSummary = Object.entries(ij.patternHits)
+                                    .sort((a, b) => (b[1] as number) - (a[1] as number))
+                                    .slice(0, 4)
+                                    .map(([k, v]) => `${k} ×${v}`)
+                                    .join(', ');
+                                const tip = hot
+                                    ? `Prompt-injection defense: ${ij.flagged} of ${ij.scanned} untrusted web snippets contained injection-attempt patterns (${patternSummary}). Patterns were redacted before any LLM saw them.`
+                                    : `Prompt-injection defense: scanned ${ij.scanned} untrusted web snippet${ij.scanned === 1 ? '' : 's'} — none contained known injection patterns.`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>{hot ? `${ij.flagged} injection${ij.flagged === 1 ? '' : 's'} blocked` : `${ij.scanned} snippet${ij.scanned === 1 ? '' : 's'} clean`}</span>
                                     </div>
                                 );
                             })()}
