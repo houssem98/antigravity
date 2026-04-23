@@ -255,6 +255,14 @@ export interface ResearchReport {
             completed: number;          // sections that returned a body
             failed: number;             // sections that errored or came back empty
         };
+        contextualRetrieval?: {
+            used: boolean;
+            total: number;
+            enriched: number;
+            llmBatches: number;
+            deterministicBatches: number;
+            cacheHits: number;
+        };
     };
 }
 
@@ -787,9 +795,10 @@ Be specific with numbers. Never invent data. Cross-reference conflicting figures
     // Fallback: extract fresh from raw sources (used if iterative search wasn't run)
     const top20 = sources.slice(0, 20);
     const sourceText = top20
-        .map((s, i) =>
-            `[Source ${i + 1}] "${s.title}" (${s.publishedDate || 'recent'})\n${(s.content || '').substring(0, 900)}`
-        )
+        .map((s, i) => {
+            const ctxLine = s.context ? `    context: ${s.context}\n` : '';
+            return `[Source ${i + 1}] "${s.title}" (${s.publishedDate || 'recent'})\n${ctxLine}${(s.content || '').substring(0, 900)}`;
+        })
         .join('\n\n---\n\n');
 
     const prompt = `You are a senior financial research analyst at a bulge-bracket bank. Extract and synthesize intelligence from these source documents for a team of institutional analysts.
@@ -934,9 +943,14 @@ async function synthesizeInstitutionalReport(
         ).join('\n')}\n`
         : '';
 
-    // Tier-4: Web sources (narrative / analyst consensus)
+    // Tier-4: Web sources (narrative / analyst consensus). Contextual
+    // Retrieval tags (when present) are prepended in parens so the Writer
+    // sees *what each source is* before deciding whether to cite it.
     const webCitationIndex = webSources.slice(0, 35)
-        .map((s, i) => `[${i + 1}] ${s.title} — ${s.url}`)
+        .map((s, i) => {
+            const tag = s.context ? `(${s.context}) ` : '';
+            return `[${i + 1}] ${tag}${s.title} — ${s.url}`;
+        })
         .join('\n');
 
     // RAG citation index for inline reference
@@ -1136,6 +1150,231 @@ export function requiredTableForSection(section: string, requiredTables: string[
     return null;
 }
 
+// ─── Stage 4b: Anthropic-style Contextual Retrieval ──────────────────────────
+// Plan §10.1: prepending a short LLM-generated context summary to each source
+// before it flows into evidence blocks reduces retrieval failure ~49% on
+// Anthropic's benchmarks. True ingestion-layer contextual retrieval lives in
+// gravity-api (chunks prefixed before embedding). Here in market-ui we apply
+// the *same spirit* at the web-source layer: one cheap LLM call per batch of
+// 10 sources emits a 50–100 token self-describing tag (source type, primary
+// entity, date, relevance-to-query) which the Writer + verifiers then see
+// alongside the raw content. Deterministic URL-based fallback covers any
+// batch that fails to parse, and a session-level cache avoids redundant work
+// across retries.
+
+export interface ContextualRetrievalResult {
+    used: boolean;           // did we attempt enrichment?
+    total: number;           // sources inspected
+    enriched: number;        // sources that received a context tag
+    llmBatches: number;      // successful LLM batch calls
+    deterministicBatches: number; // batches that fell back to URL-based inference
+    cacheHits: number;       // sources answered from the session cache
+}
+
+export const CONTEXT_BATCH_SIZE = 10;
+
+// Session-level cache: reused across retries within the same browser tab so a
+// Writer retry or a second "related" query doesn't pay to re-contextualize
+// URLs we've already seen.
+const _contextCache = new Map<string, string>();
+
+export function _clearContextCache_FOR_TESTS(): void {
+    _contextCache.clear();
+}
+
+// Deterministic URL → source-type classifier. Used as a fallback when the
+// LLM batch fails (parse error, rate limit, budget exhausted) so we always
+// ship *some* context, never empty strings.
+export function inferBasicSourceContext(s: TavilySearchResult): string {
+    const host = (() => {
+        try { return new URL(s.url).hostname.replace(/^www\./, ''); }
+        catch { return ''; }
+    })();
+    let kind = 'web article';
+    if (/\bsec\.gov\b/.test(host)) kind = 'SEC filing';
+    else if (/^ir\.|^investor\.|\binvestor\.|\binvestors\./.test(host)) kind = 'issuer IR page';
+    else if (/reuters\.com|bloomberg\.com|ft\.com|wsj\.com|nytimes\.com|economist\.com|barrons\.com/.test(host)) kind = 'premium financial news';
+    else if (/cnbc\.com|marketwatch\.com|forbes\.com|businessinsider\.com|axios\.com/.test(host)) kind = 'mainstream financial news';
+    else if (/seekingalpha\.com|finance\.yahoo|benzinga\.com|fool\.com|zacks\.com|investorplace\.com/.test(host)) kind = 'financial aggregator';
+    else if (/substack\.com|medium\.com|reddit\.com|twitter\.com|x\.com/.test(host)) kind = 'social / blog';
+    else if (/press|prnewswire\.com|businesswire\.com|globenewswire\.com/.test(host)) kind = 'press release';
+    const date = s.publishedDate ? ` (${s.publishedDate.slice(0, 10)})` : '';
+    const titleSnippet = s.title ? ` on "${s.title.slice(0, 80)}"` : '';
+    return `${kind}${date}${titleSnippet}`.trim();
+}
+
+// Batch several sources into one LLM prompt. 10 is the sweet spot: short
+// enough for a cheap-tier call (~1500 input tokens), wide enough that a
+// typical 25-source research run costs ≤3 batches.
+export function buildContextEnrichmentPrompt(
+    sources: TavilySearchResult[],
+    query: string,
+    blueprint: ResearchBlueprint,
+): string {
+    const sourceLines = sources.map((s, i) => {
+        const date = s.publishedDate ? `published ${s.publishedDate.slice(0, 10)}` : 'undated';
+        const excerpt = (s.content || '').replace(/\s+/g, ' ').slice(0, 180);
+        return `[${i + 1}] url=${s.url}\n    title="${s.title}" — ${date}\n    excerpt="${excerpt}"`;
+    }).join('\n\n');
+
+    return `You are tagging financial research sources for a retrieval pipeline.
+
+QUERY: "${query}"
+FOCUS: ${blueprint.targetEntities.join(', ') || 'broad'} — ${blueprint.researchAngles.slice(0, 4).join(' | ') || 'n/a'}
+
+For EACH source below, emit ONE short "context tag" (40–80 tokens, single line) that captures:
+  • source type (SEC 10-K/10-Q/8-K, earnings transcript, IR page, analyst note, press release, premium news, aggregator, blog/social)
+  • primary entity (ticker or company) when identifiable
+  • recency signal (year, or "undated")
+  • which angle of the QUERY this source covers (what claim it supports)
+
+Output STRICTLY a JSON array with one object per input source, in the same order:
+[
+  {"url": "<exact url>", "context": "<one-line tag>"},
+  ...
+]
+No prose before or after, no markdown fence, no comments. Every url in my input MUST appear in your output.
+
+SOURCES:
+${sourceLines}`;
+}
+
+// Robust JSON extractor — LLMs on 'lite' tier occasionally wrap output in
+// markdown fences or add a preamble despite the instruction. We strip those
+// then parse; on any failure we return an empty map so the caller can fall
+// back to deterministic inference.
+export function parseContextEnrichmentResponse(
+    raw: string,
+    expectedUrls: string[],
+): Map<string, string> {
+    const out = new Map<string, string>();
+    if (!raw) return out;
+    let cleaned = raw.trim();
+    // Strip ```json ... ``` or ``` ... ``` fences
+    const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence) cleaned = fence[1].trim();
+    // Find the first [ ... ] block
+    const firstBracket = cleaned.indexOf('[');
+    const lastBracket = cleaned.lastIndexOf(']');
+    if (firstBracket === -1 || lastBracket === -1 || lastBracket <= firstBracket) return out;
+    const jsonSlice = cleaned.slice(firstBracket, lastBracket + 1);
+    let parsed: unknown;
+    try { parsed = JSON.parse(jsonSlice); } catch { return out; }
+    if (!Array.isArray(parsed)) return out;
+    const expected = new Set(expectedUrls);
+    for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const obj = item as Record<string, unknown>;
+        const url = typeof obj.url === 'string' ? obj.url : null;
+        const ctx = typeof obj.context === 'string' ? obj.context.trim() : null;
+        if (!url || !ctx) continue;
+        if (!expected.has(url)) continue;  // reject hallucinated urls
+        // Clamp to a sane length — guards against runaway LLM responses
+        out.set(url, ctx.slice(0, 280));
+    }
+    return out;
+}
+
+// Main async driver. Budget-aware: each batch checks the tracker before
+// firing; if the cap is hit we stop calling the LLM and let remaining
+// sources take the deterministic fallback.
+export async function contextualizeSources(
+    sources: TavilySearchResult[],
+    query: string,
+    blueprint: ResearchBlueprint,
+    options?: {
+        model?: ResearchModelId;
+        callLLM?: (prompt: string) => Promise<string>;
+        tracker?: BudgetTracker | null;
+    },
+): Promise<{ enriched: TavilySearchResult[]; stats: ContextualRetrievalResult }> {
+    const stats: ContextualRetrievalResult = {
+        used: false,
+        total: sources.length,
+        enriched: 0,
+        llmBatches: 0,
+        deterministicBatches: 0,
+        cacheHits: 0,
+    };
+    if (sources.length === 0) {
+        return { enriched: sources, stats };
+    }
+
+    stats.used = true;
+    const call = options?.callLLM ?? ((p: string) => callDriver(p, 'lite'));
+    const tracker = options?.tracker ?? _activeBudget;
+
+    // Short per-query digest so cache keys are query-aware. Two different
+    // queries hitting the same URL should get different context tags.
+    const queryHash = (query || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 48);
+
+    const result: TavilySearchResult[] = sources.map(s => ({ ...s }));
+    const pending: number[] = [];
+
+    // Pass 1: drain the session cache
+    for (let i = 0; i < result.length; i++) {
+        const cacheKey = `${result[i].url}::${queryHash}`;
+        const cached = _contextCache.get(cacheKey);
+        if (cached) {
+            result[i].context = cached;
+            stats.cacheHits += 1;
+            stats.enriched += 1;
+        } else {
+            pending.push(i);
+        }
+    }
+
+    // Pass 2: batch the rest through the LLM (or deterministic fallback
+    // when the budget is tight)
+    for (let start = 0; start < pending.length; start += CONTEXT_BATCH_SIZE) {
+        const batchIdxs = pending.slice(start, start + CONTEXT_BATCH_SIZE);
+        const batch = batchIdxs.map(i => result[i]);
+        const urls = batch.map(s => s.url);
+
+        // Budget guard — if we'd blow the cap, stop LLM enrichment and let
+        // the rest fall through to the deterministic path below.
+        let useLLM = true;
+        if (tracker) {
+            try { tracker.checkBeforeCall(); } catch { useLLM = false; }
+        }
+
+        let contextMap = new Map<string, string>();
+        if (useLLM) {
+            const prompt = buildContextEnrichmentPrompt(batch, query, blueprint);
+            try {
+                const raw = await call(prompt);
+                contextMap = parseContextEnrichmentResponse(raw, urls);
+                if (tracker) tracker.recordCall(prompt.length, raw.length);
+                if (contextMap.size > 0) {
+                    stats.llmBatches += 1;
+                }
+            } catch {
+                // LLM failed — fall through to deterministic fallback below
+            }
+        }
+
+        // Fill any missing URLs in this batch with deterministic inference
+        let usedDeterministic = false;
+        for (let k = 0; k < batchIdxs.length; k++) {
+            const i = batchIdxs[k];
+            const src = result[i];
+            let ctx = contextMap.get(src.url);
+            if (!ctx) {
+                ctx = inferBasicSourceContext(src);
+                usedDeterministic = true;
+            }
+            src.context = ctx;
+            stats.enriched += 1;
+            _contextCache.set(`${src.url}::${queryHash}`, ctx);
+        }
+        if (usedDeterministic && contextMap.size === 0) {
+            stats.deterministicBatches += 1;
+        }
+    }
+
+    return { enriched: result, stats };
+}
+
 export interface SectionWriterContext {
     blueprint: ResearchBlueprint;
     template: ReportTemplate;
@@ -1175,7 +1414,9 @@ export function buildSectionWriterPrompt(ctx: SectionWriterContext): string {
         ? ctx.relevantSources
             .map(s => {
                 const n = ctx.citationMap.get(s.url);
-                return n ? `[${n}] ${s.title} — ${s.url}` : null;
+                if (!n) return null;
+                const tag = s.context ? `(${s.context}) ` : '';
+                return `[${n}] ${tag}${s.title} — ${s.url}`;
             })
             .filter((x): x is string => x !== null)
             .join('\n')
@@ -1799,6 +2040,7 @@ export interface MethodologyInputs {
     confidence: Confidence;
     sectionFanout?: { used: boolean; planned: number; completed: number; failed: number };
     factInference?: FactInferenceResult;
+    contextualRetrieval?: ContextualRetrievalResult;
 }
 
 export function buildMethodologySection(m: MethodologyInputs): string {
@@ -1828,6 +2070,14 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         const fiPct = Math.round(fi.hedgingRate * 100);
         bullets.push(
             `**Fact vs inference:** ${fi.hedgedCount}/${fi.totalForwardLooking} forward-looking claims hedged or attributed (${fiPct}%)`,
+        );
+    }
+    if (m.contextualRetrieval && m.contextualRetrieval.used && m.contextualRetrieval.total > 0) {
+        const cr = m.contextualRetrieval;
+        const cacheTail = cr.cacheHits > 0 ? `, ${cr.cacheHits} from cache` : '';
+        const detTail = cr.deterministicBatches > 0 ? `, ${cr.deterministicBatches} deterministic fallback` : '';
+        bullets.push(
+            `**Contextual Retrieval:** ${cr.enriched}/${cr.total} sources tagged (${cr.llmBatches} LLM batch${cr.llmBatches === 1 ? '' : 'es'}${cacheTail}${detTail})`,
         );
     }
 
@@ -1888,7 +2138,7 @@ export const performDeepResearch = async (
 
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
     // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro
-    const [
+    let [
         { sources: webSources, knowledgeBase, roundsRun },
         ragResult,
         macroText,
@@ -1935,10 +2185,27 @@ export const performDeepResearch = async (
         sourcesFound: totalSources,
     });
 
-    // ── Stage 3: Source Intelligence (45–65%) ─────────────────────────────
+    // ── Stage 2b: Contextual Retrieval (45–48%) ───────────────────────────
+    // Before sources flow into Tier-4 evidence blocks or the analyst
+    // synthesis, tag each one with a 40–80 token self-describing context
+    // (source type, entity, recency, relevance). Plan §10.1 — highest-ROI
+    // single retrieval intervention. Budget-aware: falls back to
+    // deterministic URL-based inference if the LLM cap would be exceeded.
     onProgress({
         stage: 'analyzing',
-        message: 'Analyst team extracting intelligence from sources…',
+        message: 'Contextualizing sources for retrieval…',
+        progress: 46,
+        sourcesFound: totalSources,
+    });
+    throwIfAborted(signal);
+    const { enriched: enrichedWebSources, stats: contextualRetrieval } =
+        await contextualizeSources(webSources, query, blueprint, { model: driverModel });
+    webSources = enrichedWebSources;
+
+    // ── Stage 3: Source Intelligence (48–65%) ─────────────────────────────
+    onProgress({
+        stage: 'analyzing',
+        message: `Analyst team extracting intelligence · ${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`,
         progress: 48,
         sourcesFound: totalSources,
     });
@@ -2134,6 +2401,7 @@ export const performDeepResearch = async (
         confidence,
         sectionFanout,
         factInference,
+        contextualRetrieval,
     });
     const finalMarkdown = markdown + methodologyMd;
 
@@ -2149,9 +2417,12 @@ export const performDeepResearch = async (
     const hedgeTail = factInference.totalForwardLooking > 0
         ? ` · ${Math.round(factInference.hedgingRate * 100)}% forecasts hedged`
         : '';
+    const ctxTail = contextualRetrieval.used && contextualRetrieval.total > 0
+        ? ` · ${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -2217,6 +2488,7 @@ export const performDeepResearch = async (
                 subQuestions,
             },
             sectionFanout,
+            contextualRetrieval,
         },
     };
 

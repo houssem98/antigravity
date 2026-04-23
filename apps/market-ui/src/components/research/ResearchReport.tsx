@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -513,6 +513,25 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>{f.used ? `Fanout ${f.completed}/${f.planned}` : 'Monolith Writer'}</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.contextualRetrieval && report.metadata.contextualRetrieval.total > 0 && (() => {
+                                const cr = report.metadata.contextualRetrieval!;
+                                const rate = cr.total > 0 ? cr.enriched / cr.total : 0;
+                                const active = cr.used && rate >= 0.8;
+                                const bg = active ? 'rgba(168, 85, 247, 0.12)' : 'rgba(156, 163, 175, 0.10)';
+                                const border = active ? 'rgba(168, 85, 247, 0.3)' : 'rgba(156, 163, 175, 0.25)';
+                                const color = active ? '#D8B4FE' : '#9CA3AF';
+                                const tip = cr.used
+                                    ? `Contextual Retrieval: ${cr.enriched}/${cr.total} sources tagged with self-describing context (${cr.llmBatches} LLM batch${cr.llmBatches === 1 ? '' : 'es'}${cr.cacheHits > 0 ? `, ${cr.cacheHits} from cache` : ''}${cr.deterministicBatches > 0 ? `, ${cr.deterministicBatches} deterministic fallback` : ''}). Writer sees source type, entity, date, and query relevance inline with every citation.`
+                                    : 'Contextual Retrieval skipped (no sources).';
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>Contextual Retrieval {cr.enriched}/{cr.total}</span>
                                     </div>
                                 );
                             })()}

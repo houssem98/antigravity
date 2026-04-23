@@ -25,6 +25,12 @@ import {
     assembleSectionedReport,
     REPORT_TEMPLATES,
     verifyFactInferenceSeparation,
+    inferBasicSourceContext,
+    buildContextEnrichmentPrompt,
+    parseContextEnrichmentResponse,
+    contextualizeSources,
+    _clearContextCache_FOR_TESTS,
+    CONTEXT_BATCH_SIZE,
     type SectionFanoutResult,
 } from './deepResearchService';
 import {
@@ -1133,6 +1139,334 @@ console.log('\n[25] Methodology includes fact-inference');
     });
     check('methodology: omits fact-inference line when no forecasts',
         !/Fact vs inference:/.test(mdNoForecasts));
+}
+
+// ─── 26. inferBasicSourceContext: deterministic URL classifier ──────────────
+console.log('\n[26] inferBasicSourceContext classifier');
+
+{
+    const sec: TavilySearchResult = {
+        title: 'Apple Inc. 10-K Annual Report FY2024',
+        url: 'https://www.sec.gov/Archives/edgar/data/320193/0000320193-24-000123/aapl-10k.htm',
+        content: 'Apple Inc.',
+        score: 0.9,
+        publishedDate: '2024-11-01',
+    };
+    const secCtx = inferBasicSourceContext(sec);
+    check('ctx: sec.gov classified as SEC filing', /SEC filing/.test(secCtx));
+    check('ctx: date inserted when present', /\(2024-11-01\)/.test(secCtx));
+    check('ctx: title snippet included', /Apple Inc\. 10-K/.test(secCtx));
+
+    const reuters: TavilySearchResult = {
+        title: 'Apple Q4 results beat', url: 'https://www.reuters.com/business/apple-q4', content: '', score: 0.8, publishedDate: '2024-10-31',
+    };
+    check('ctx: reuters → premium financial news',
+        /premium financial news/.test(inferBasicSourceContext(reuters)));
+
+    const seekingAlpha: TavilySearchResult = {
+        title: 'Apple Bull Case', url: 'https://seekingalpha.com/article/foo', content: '', score: 0.5,
+    };
+    check('ctx: seekingalpha → financial aggregator',
+        /financial aggregator/.test(inferBasicSourceContext(seekingAlpha)));
+
+    const ir: TavilySearchResult = {
+        title: 'Investor Relations', url: 'https://ir.apple.com/investor-relations', content: '', score: 0.7,
+    };
+    check('ctx: ir.*.com → issuer IR page',
+        /issuer IR page/.test(inferBasicSourceContext(ir)));
+
+    const press: TavilySearchResult = {
+        title: 'Apple announces…', url: 'https://www.prnewswire.com/news-releases/apple-foo', content: '', score: 0.6,
+    };
+    check('ctx: prnewswire → press release',
+        /press release/.test(inferBasicSourceContext(press)));
+
+    const social: TavilySearchResult = {
+        title: 'Discussion', url: 'https://www.reddit.com/r/wallstreetbets/comments/x', content: '', score: 0.4,
+    };
+    check('ctx: reddit → social / blog',
+        /social \/ blog/.test(inferBasicSourceContext(social)));
+
+    const unknown: TavilySearchResult = {
+        title: 'Some page', url: 'https://example-unknown.io/foo', content: '', score: 0.3,
+    };
+    check('ctx: unknown host → web article',
+        /web article/.test(inferBasicSourceContext(unknown)));
+
+    const noDate: TavilySearchResult = {
+        title: 'No date', url: 'https://www.sec.gov/filing', content: '', score: 0.5,
+    };
+    check('ctx: missing date omits parens',
+        !/\(\)/.test(inferBasicSourceContext(noDate)));
+
+    const malformedUrl: TavilySearchResult = {
+        title: 'Broken', url: 'not-a-url', content: '', score: 0.1,
+    };
+    check('ctx: malformed url does not throw, falls back to web article',
+        /web article/.test(inferBasicSourceContext(malformedUrl)));
+}
+
+// ─── 27. buildContextEnrichmentPrompt shape ─────────────────────────────────
+console.log('\n[27] buildContextEnrichmentPrompt shape');
+
+{
+    const sources: TavilySearchResult[] = [
+        { title: 'Apple 10-K', url: 'https://sec.gov/apple-10k', content: 'Revenue was $394.3B.', score: 0.9, publishedDate: '2024-11-01' },
+        { title: 'Analyst note', url: 'https://reuters.com/apple-q4', content: 'Q4 beat expectations.', score: 0.8, publishedDate: '2024-10-31' },
+    ];
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue', 'margin'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['earnings quality', 'capital return'],
+    };
+    const p = buildContextEnrichmentPrompt(sources, 'Apple FY24 earnings quality', blueprint);
+    check('prompt: mentions query', /Apple FY24 earnings quality/.test(p));
+    check('prompt: mentions primary entity', /Apple/.test(p));
+    check('prompt: mentions research angles', /earnings quality/.test(p));
+    check('prompt: includes all source urls',
+        /sec\.gov\/apple-10k/.test(p) && /reuters\.com\/apple-q4/.test(p));
+    check('prompt: asks for strict JSON array',
+        /STRICTLY a JSON array/.test(p) && /"url":/.test(p) && /"context":/.test(p));
+    check('prompt: numbered source list', /\[1\]/.test(p) && /\[2\]/.test(p));
+}
+
+// ─── 28. parseContextEnrichmentResponse: robust JSON extractor ──────────────
+console.log('\n[28] parseContextEnrichmentResponse');
+
+{
+    const urls = ['https://sec.gov/a', 'https://reuters.com/b'];
+
+    // Clean JSON array
+    const clean = '[{"url":"https://sec.gov/a","context":"SEC 10-K, AAPL, 2024"},{"url":"https://reuters.com/b","context":"Reuters news, 2024"}]';
+    const r1 = parseContextEnrichmentResponse(clean, urls);
+    check('parse: clean array → both entries', r1.size === 2);
+    check('parse: preserves context text',
+        r1.get('https://sec.gov/a') === 'SEC 10-K, AAPL, 2024');
+
+    // Wrapped in ```json fence
+    const fenced = '```json\n[{"url":"https://sec.gov/a","context":"x"}]\n```';
+    const r2 = parseContextEnrichmentResponse(fenced, urls);
+    check('parse: strips ```json fence', r2.size === 1);
+
+    // Preamble + array
+    const preamble = 'Here are the contexts:\n[{"url":"https://sec.gov/a","context":"y"}]';
+    const r3 = parseContextEnrichmentResponse(preamble, urls);
+    check('parse: tolerates preamble before array', r3.size === 1);
+
+    // Hallucinated URL is rejected
+    const hallu = '[{"url":"https://evil.com/made-up","context":"fake"}]';
+    const r4 = parseContextEnrichmentResponse(hallu, urls);
+    check('parse: rejects hallucinated urls', r4.size === 0);
+
+    // Malformed JSON
+    const broken = 'this is not json {{ [[';
+    const r5 = parseContextEnrichmentResponse(broken, urls);
+    check('parse: malformed JSON → empty map', r5.size === 0);
+
+    // Empty string
+    check('parse: empty input → empty map',
+        parseContextEnrichmentResponse('', urls).size === 0);
+
+    // Clamps long context
+    const longCtx = 'x'.repeat(500);
+    const longResp = `[{"url":"https://sec.gov/a","context":"${longCtx}"}]`;
+    const r6 = parseContextEnrichmentResponse(longResp, urls);
+    check('parse: clamps over-long context to 280 chars',
+        (r6.get('https://sec.gov/a') || '').length <= 280);
+
+    // Missing context field is skipped
+    const missing = '[{"url":"https://sec.gov/a"}]';
+    const r7 = parseContextEnrichmentResponse(missing, urls);
+    check('parse: entries missing context are skipped', r7.size === 0);
+}
+
+// ─── 29. contextualizeSources: end-to-end with stub LLM ─────────────────────
+console.log('\n[29] contextualizeSources integration');
+
+{
+    _clearContextCache_FOR_TESTS();
+
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: [], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['earnings'],
+    };
+    const sources: TavilySearchResult[] = [
+        { title: 'Apple 10-K', url: 'https://sec.gov/a', content: '', score: 0.9 },
+        { title: 'Reuters note', url: 'https://reuters.com/b', content: '', score: 0.8 },
+    ];
+
+    // Happy path: LLM returns well-formed JSON for all urls
+    let llmCalls = 0;
+    const goodLLM = async (_p: string) => {
+        llmCalls++;
+        return '[{"url":"https://sec.gov/a","context":"10-K, AAPL, FY24, revenue segment"},{"url":"https://reuters.com/b","context":"premium news, AAPL, 2024-10, Q4 beat"}]';
+    };
+    const r = await contextualizeSources(sources, 'apple earnings', blueprint, { callLLM: goodLLM });
+    check('ctxualize: all sources enriched (happy path)',
+        r.stats.enriched === 2 && r.enriched.every(s => (s as any).context));
+    check('ctxualize: llmBatches counted', r.stats.llmBatches === 1);
+    check('ctxualize: one LLM call for 2 sources', llmCalls === 1);
+    check('ctxualize: LLM tags propagated to sources',
+        /10-K, AAPL/.test((r.enriched[0] as any).context || ''));
+
+    // Cache hit: second call for same query+url should not call LLM
+    let llmCalls2 = 0;
+    const goodLLM2 = async (_p: string) => { llmCalls2++; return '[]'; };
+    const r2 = await contextualizeSources(sources, 'apple earnings', blueprint, { callLLM: goodLLM2 });
+    check('ctxualize: cache hits on repeat query', r2.stats.cacheHits === 2);
+    check('ctxualize: no LLM call when fully cached', llmCalls2 === 0);
+
+    _clearContextCache_FOR_TESTS();
+
+    // Bad-JSON LLM falls back to deterministic inference
+    const badLLM = async (_p: string) => 'not json at all';
+    const r3 = await contextualizeSources(sources, 'apple earnings', blueprint, { callLLM: badLLM });
+    check('ctxualize: all sources still tagged via deterministic fallback',
+        r3.stats.enriched === 2 && r3.enriched.every(s => (s as any).context));
+    check('ctxualize: deterministicBatches counted when LLM fails',
+        r3.stats.deterministicBatches === 1 && r3.stats.llmBatches === 0);
+    check('ctxualize: deterministic context contains source type',
+        /SEC filing|web article|premium financial news/.test((r3.enriched[0] as any).context || ''));
+
+    _clearContextCache_FOR_TESTS();
+
+    // LLM throwing → deterministic fallback
+    const throwingLLM = async (_p: string) => { throw new Error('rate limited'); };
+    const r4 = await contextualizeSources(sources, 'apple earnings', blueprint, { callLLM: throwingLLM });
+    check('ctxualize: LLM throw → deterministic fallback enriches all',
+        r4.stats.enriched === 2 && r4.stats.deterministicBatches === 1);
+
+    _clearContextCache_FOR_TESTS();
+
+    // Empty sources: early return, used=false
+    const rEmpty = await contextualizeSources([], 'q', blueprint, { callLLM: async () => '[]' });
+    check('ctxualize: empty input → used=false, no batches',
+        !rEmpty.stats.used && rEmpty.stats.enriched === 0 && rEmpty.stats.llmBatches === 0);
+
+    _clearContextCache_FOR_TESTS();
+
+    // Batching: 25 sources → 3 batches (10/10/5)
+    const many: TavilySearchResult[] = Array.from({ length: 25 }, (_, i) => ({
+        title: `Source ${i}`, url: `https://example.com/${i}`, content: '', score: 0.5,
+    }));
+    let batchCount = 0;
+    const batchLLM = async (p: string) => {
+        batchCount++;
+        const urlMatches = p.match(/url=https:\/\/example\.com\/\d+/g) || [];
+        const arr = urlMatches.map(m => ({
+            url: m.replace('url=', ''),
+            context: 'test ctx',
+        }));
+        return JSON.stringify(arr);
+    };
+    const rMany = await contextualizeSources(many, 'q', blueprint, { callLLM: batchLLM });
+    check('ctxualize: 25 sources → 3 batches (10+10+5)',
+        batchCount === 3 && rMany.stats.llmBatches === 3);
+    check('ctxualize: CONTEXT_BATCH_SIZE exported and = 10',
+        CONTEXT_BATCH_SIZE === 10);
+    check('ctxualize: all 25 sources enriched', rMany.stats.enriched === 25);
+
+    _clearContextCache_FOR_TESTS();
+
+    // Query-aware cache: different query → different cache bucket → LLM call
+    let llmCalls3 = 0;
+    const counting = async (_p: string) => {
+        llmCalls3++;
+        return '[{"url":"https://sec.gov/a","context":"A"},{"url":"https://reuters.com/b","context":"B"}]';
+    };
+    await contextualizeSources(sources, 'query one', blueprint, { callLLM: counting });
+    await contextualizeSources(sources, 'query two', blueprint, { callLLM: counting });
+    check('ctxualize: different query → cache miss → second LLM call',
+        llmCalls3 === 2);
+}
+
+// ─── 30. Methodology surfaces Contextual Retrieval ──────────────────────────
+console.log('\n[30] Methodology includes Contextual Retrieval');
+
+{
+    const md = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 20, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 20, citedSentences: 18, density: 0.9, uncitedSamples: [] },
+        confidence: 'High',
+        contextualRetrieval: { used: true, total: 20, enriched: 20, llmBatches: 2, deterministicBatches: 0, cacheHits: 0 },
+    });
+    check('methodology: contextual retrieval line present',
+        /Contextual Retrieval:/.test(md) && /20\/20 sources tagged/.test(md) && /2 LLM batches/.test(md));
+
+    // Omitted when not used or zero sources
+    const mdSkipped = buildMethodologySection({
+        searchQueries: 1, rounds: 1, webSources: 0, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        contextualRetrieval: { used: false, total: 0, enriched: 0, llmBatches: 0, deterministicBatches: 0, cacheHits: 0 },
+    });
+    check('methodology: omits contextual retrieval line when skipped',
+        !/Contextual Retrieval:/.test(mdSkipped));
+
+    // Cache-hit tail is rendered
+    const mdCache = buildMethodologySection({
+        searchQueries: 1, rounds: 1, webSources: 10, secFilings: 0, ragSources: 0,
+        subQuestions: [],
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 0, citedSentences: 0, density: 1, uncitedSamples: [] },
+        confidence: 'Medium',
+        contextualRetrieval: { used: true, total: 10, enriched: 10, llmBatches: 0, deterministicBatches: 0, cacheHits: 10 },
+    });
+    check('methodology: cache-hit tail rendered', /10 from cache/.test(mdCache));
+}
+
+// ─── 31. Section writer prompt surfaces source.context ──────────────────────
+console.log('\n[31] Section writer prompt uses source.context');
+
+{
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: [], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: [],
+    };
+    const template = REPORT_TEMPLATES.investment_memo;
+    const citationMap = new Map<string, number>();
+    const s1: TavilySearchResult = {
+        title: 'Q4 beat', url: 'https://reuters.com/q4', content: '', score: 0.8,
+        context: 'premium financial news, AAPL, 2024-10-31, Q4 earnings beat',
+    };
+    const s2: TavilySearchResult = {
+        title: 'Random', url: 'https://example.com/x', content: '', score: 0.5,
+    };
+    citationMap.set(s1.url, 1);
+    citationMap.set(s2.url, 2);
+
+    const prompt = buildSectionWriterPrompt({
+        blueprint,
+        template,
+        section: template.sections[0],
+        sectionIndex: 0,
+        totalSections: template.sections.length,
+        relevantSources: [s1, s2],
+        citationMap,
+        verifiedFactsBlock: '',
+        sourceAnalysisExcerpt: '',
+        companyData: [],
+        secFilings: [],
+        bullCase: '',
+        bearCase: '',
+        ragCitationIndex: '',
+    });
+
+    check('section prompt: context appears in parens for enriched source',
+        /\(premium financial news, AAPL/.test(prompt));
+    check('section prompt: url still present',
+        /reuters\.com\/q4/.test(prompt));
+    check('section prompt: non-enriched source still rendered',
+        /\[2\] Random — https:\/\/example\.com\/x/.test(prompt));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

@@ -11,6 +11,13 @@ export interface TavilySearchResult {
     content: string;
     score: number;
     publishedDate?: string;
+    // Anthropic-style Contextual Retrieval tag (plan §6.2 / §10.1): a 50–100
+    // token LLM-produced summary of what this source IS (type, date, entity,
+    // relevance-to-query), prepended to evidence blocks so the Writer and
+    // every verifier downstream sees self-describing chunks. Optional —
+    // populated by `contextualizeSources()` when budget allows; absent
+    // sources fall back to their raw title + URL.
+    context?: string;
 }
 
 export interface TavilySearchResponse {
