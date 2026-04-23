@@ -1469,6 +1469,58 @@ console.log('\n[31] Section writer prompt uses source.context');
         /\[2\] Random — https:\/\/example\.com\/x/.test(prompt));
 }
 
+// ─── 32. HITL plan approval: methodology + badge gate ───────────────────────
+console.log('\n[32] HITL plan approval surfaces in methodology');
+
+{
+    // Accepted as-is → "accepted" bullet
+    const mdAccepted = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 3, groundedClaims: 3, multiSourceClaims: 2, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        hitl: { used: true, modified: false },
+    });
+    check('methodology: HITL accepted line present',
+        /\*\*Plan review:\*\*/.test(mdAccepted) && /accepted the auto-generated blueprint as-is/.test(mdAccepted));
+
+    // Edited → "edited" bullet
+    const mdEdited = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 3, groundedClaims: 3, multiSourceClaims: 2, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        hitl: { used: true, modified: true },
+    });
+    check('methodology: HITL edited line present',
+        /\*\*Plan review:\*\*/.test(mdEdited) && /edited the research blueprint/.test(mdEdited));
+
+    // Not used → no bullet
+    const mdNoHitl = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 3, groundedClaims: 3, multiSourceClaims: 2, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: HITL line absent when callback not wired',
+        !/\*\*Plan review:\*\*/.test(mdNoHitl));
+
+    // used=false should also suppress the bullet (edge case)
+    const mdFalse = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 3, groundedClaims: 3, multiSourceClaims: 2, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        hitl: { used: false, modified: false },
+    });
+    check('methodology: HITL line absent when used=false',
+        !/\*\*Plan review:\*\*/.test(mdFalse));
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);

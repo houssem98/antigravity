@@ -263,12 +263,17 @@ export interface ResearchReport {
             deterministicBatches: number;
             cacheHits: number;
         };
+        hitl?: {
+            used: boolean;     // onBlueprintReady was supplied and invoked
+            modified: boolean; // user returned an edited blueprint (not just accepted)
+            cancelled: boolean; // run was stopped at review (never true in a returned report, kept for symmetry with telemetry)
+        };
     };
 }
 
 // ─── Internal Blueprint Type ──────────────────────────────────────────────────
 
-interface ResearchBlueprint {
+export interface ResearchBlueprint {
     intent: 'company_analysis' | 'sector_analysis' | 'macro_analysis' | 'thematic' | 'comparative';
     targetEntities: string[];
     tickers: string[];
@@ -280,6 +285,13 @@ interface ResearchBlueprint {
     investmentHorizon: string;
     researchAngles: string[];
 }
+
+// Human-in-the-loop plan approval (plan §6.1 P0 — Gemini-DR's editable-blueprint pattern).
+// Callback receives the auto-generated blueprint; return `undefined` to accept as-is,
+// a mutated `ResearchBlueprint` to run with user edits, or `null` to cancel the whole run.
+export type BlueprintReviewCallback = (
+    blueprint: ResearchBlueprint,
+) => Promise<ResearchBlueprint | null | undefined> | ResearchBlueprint | null | undefined;
 
 // ─── Budget Tracking ─────────────────────────────────────────────────────────
 // Hard caps protect against runaway costs on a single query.
@@ -2041,6 +2053,7 @@ export interface MethodologyInputs {
     sectionFanout?: { used: boolean; planned: number; completed: number; failed: number };
     factInference?: FactInferenceResult;
     contextualRetrieval?: ContextualRetrievalResult;
+    hitl?: { used: boolean; modified: boolean };
 }
 
 export function buildMethodologySection(m: MethodologyInputs): string {
@@ -2080,6 +2093,13 @@ export function buildMethodologySection(m: MethodologyInputs): string {
             `**Contextual Retrieval:** ${cr.enriched}/${cr.total} sources tagged (${cr.llmBatches} LLM batch${cr.llmBatches === 1 ? '' : 'es'}${cacheTail}${detTail})`,
         );
     }
+    if (m.hitl && m.hitl.used) {
+        bullets.push(
+            m.hitl.modified
+                ? `**Plan review:** human-in-the-loop enabled — analyst edited the research blueprint before retrieval`
+                : `**Plan review:** human-in-the-loop enabled — analyst accepted the auto-generated blueprint as-is`,
+        );
+    }
 
     const caveat = m.confidence === 'High'
         ? 'All three grounding signals cleared the High threshold. Report is suitable as a citation-grounded first draft; an analyst review is still recommended before investment-committee distribution.'
@@ -2108,6 +2128,7 @@ export const performDeepResearch = async (
     model?: ResearchModelId,
     budget: ResearchBudget = DEFAULT_BUDGET,
     signal?: AbortSignal,
+    onBlueprintReady?: BlueprintReviewCallback,
 ): Promise<ResearchReport> => {
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
@@ -2126,11 +2147,38 @@ export const performDeepResearch = async (
     // ── Stage 1: Blueprint (0–10%) ─────────────────────────────────────────
     onProgress({ stage: 'planning', message: 'Chief Analyst building research blueprint…', progress: 3 });
 
-    const blueprint = await buildResearchBlueprint(query, driverModel);
+    let blueprint = await buildResearchBlueprint(query, driverModel);
+
+    // ── Stage 1b: Human-in-the-loop plan approval (optional) ──────────────
+    // Plan §6.1 P0: before firing 12+ web queries + SEC targets, offer the
+    // analyst a chance to edit the blueprint (Gemini-DR pattern). Skipped
+    // silently when no callback is wired, so existing callers stay on the
+    // auto-path.
+    const hitl = { used: false, modified: false, cancelled: false };
+    if (onBlueprintReady) {
+        hitl.used = true;
+        onProgress({
+            stage: 'planning',
+            message: 'Plan ready — awaiting analyst review…',
+            progress: 6,
+        });
+        const review = await onBlueprintReady(blueprint);
+        if (review === null) {
+            hitl.cancelled = true;
+            throw new ResearchCancelledError('Research cancelled at plan review');
+        }
+        if (review) {
+            // Shallow JSON comparison is sufficient — blueprint is plain data.
+            hitl.modified = JSON.stringify(review) !== JSON.stringify(blueprint);
+            blueprint = review;
+        }
+    }
 
     onProgress({
         stage: 'planning',
-        message: `Blueprint: ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`,
+        message: hitl.modified
+            ? `Blueprint (edited): ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`
+            : `Blueprint: ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`,
         progress: 10,
     });
 
@@ -2402,6 +2450,7 @@ export const performDeepResearch = async (
         sectionFanout,
         factInference,
         contextualRetrieval,
+        hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
 
@@ -2420,9 +2469,12 @@ export const performDeepResearch = async (
     const ctxTail = contextualRetrieval.used && contextualRetrieval.total > 0
         ? ` · ${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`
         : '';
+    const hitlTail = hitl.used
+        ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
+        : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -2489,6 +2541,7 @@ export const performDeepResearch = async (
             },
             sectionFanout,
             contextualRetrieval,
+            hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };
 

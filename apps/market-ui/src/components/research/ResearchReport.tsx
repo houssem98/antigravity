@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -532,6 +532,20 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Contextual Retrieval {cr.enriched}/{cr.total}</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.hitl && report.metadata.hitl.used && (() => {
+                                const h = report.metadata.hitl!;
+                                const tip = h.modified
+                                    ? 'Human-in-the-loop plan review: analyst edited the research blueprint (queries, SEC targets, angles) before retrieval fired. Reflects deliberate scoping choices rather than the LLM\'s first pass.'
+                                    : 'Human-in-the-loop plan review: analyst inspected the auto-generated blueprint and accepted it as-is before retrieval fired.';
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: 'rgba(236, 72, 153, 0.12)', color: '#F9A8D4', border: '1px solid rgba(236, 72, 153, 0.3)' }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>{h.modified ? 'Plan edited by analyst' : 'Plan approved by analyst'}</span>
                                     </div>
                                 );
                             })()}
