@@ -453,6 +453,10 @@ export interface ResearchReport {
             count: number;
             topics: string[];
         };
+        cacheHit?: {
+            ageMs: number;
+            ttlMs: number;
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -545,6 +549,64 @@ let _activeSignal: AbortSignal | null = null;
 export function throwIfAborted(signal?: AbortSignal | null) {
     const s = signal ?? _activeSignal;
     if (s?.aborted) throw new ResearchCancelledError();
+}
+
+// ─── Output Cache (plan §6.13 — query-scoped TTL cache) ───────────────────
+// Session-scoped cache of completed reports keyed by normalized query +
+// model + workflow. Deliberate feature: a user who hits Enter twice on the
+// same question within 15 minutes gets an instant replay instead of paying
+// for another 8-minute run. Defeated by different query text, different
+// model tier, or TTL expiry — so stale cached reports can't silently mask
+// a new piece of news.
+
+export const CACHE_TTL_MS = 15 * 60 * 1000;   // 15 minutes
+
+interface CachedReport {
+    report: ResearchReport;
+    timestamp: number;
+}
+
+const _outputCache = new Map<string, CachedReport>();
+
+export function _clearOutputCache_FOR_TESTS(): void {
+    _outputCache.clear();
+}
+
+export function makeCacheKey(
+    query: string,
+    model?: ResearchModelId,
+    workflow?: WorkflowId,
+): string {
+    const normQ = (query || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    return `${normQ}::${model ?? 'auto'}::${workflow ?? 'none'}`;
+}
+
+export function lookupCachedReport(
+    query: string,
+    model?: ResearchModelId,
+    workflow?: WorkflowId,
+    nowMs: number = Date.now(),
+): { report: ResearchReport; ageMs: number } | null {
+    const key = makeCacheKey(query, model, workflow);
+    const hit = _outputCache.get(key);
+    if (!hit) return null;
+    const ageMs = nowMs - hit.timestamp;
+    if (ageMs > CACHE_TTL_MS) {
+        _outputCache.delete(key);
+        return null;
+    }
+    return { report: hit.report, ageMs };
+}
+
+export function storeCachedReport(
+    query: string,
+    report: ResearchReport,
+    model?: ResearchModelId,
+    workflow?: WorkflowId,
+    nowMs: number = Date.now(),
+): void {
+    const key = makeCacheKey(query, model, workflow);
+    _outputCache.set(key, { report, timestamp: nowMs });
 }
 
 // ─── Prompt-Injection Defense (plan §6.12) ──────────────────────────────────
@@ -3345,6 +3407,27 @@ export const performDeepResearch = async (
     onBlueprintReady?: BlueprintReviewCallback,
     workflow?: WorkflowId,
 ): Promise<ResearchReport> => {
+    // Output-cache lookup BEFORE validating providers — a cache hit is a
+    // free instant response, no need to prove the LLM backend is up.
+    const cached = lookupCachedReport(query, model, workflow);
+    if (cached) {
+        onProgress({
+            stage: 'complete',
+            message: `Cached report (${Math.round(cached.ageMs / 1000)}s old) — re-run to regenerate`,
+            progress: 100,
+            sourcesFound: cached.report.metadata.sourcesAnalyzed,
+        });
+        // Return a shallow-cloned report with cacheHit populated; don't
+        // mutate the stored copy.
+        return {
+            ...cached.report,
+            metadata: {
+                ...cached.report.metadata,
+                cacheHit: { ageMs: cached.ageMs, ttlMs: CACHE_TTL_MS },
+            },
+        };
+    }
+
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
     if (providers.length === 0) {
@@ -3879,6 +3962,9 @@ export const performDeepResearch = async (
     _activeSignal = null;
     _activeInjectionStats = null;
     _activeReaderStats = null;
+
+    // Store in session cache so repeat hits within TTL are instant.
+    storeCachedReport(query, report, model, workflow);
     return report;
 };
 

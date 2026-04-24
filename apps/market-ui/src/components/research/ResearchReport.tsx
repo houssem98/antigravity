@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.recency || report.metadata.workflow || report.metadata.limitations || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.recency || report.metadata.workflow || report.metadata.limitations || report.metadata.cacheHit || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -545,6 +545,20 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Distilled −{savedPct}%</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.cacheHit && (() => {
+                                const ch = report.metadata.cacheHit!;
+                                const ageSec = Math.round(ch.ageMs / 1000);
+                                const ttlSec = Math.round(ch.ttlMs / 1000);
+                                const tip = `Session cache hit: this report was generated ${ageSec}s ago. Cache expires after ${ttlSec}s (${Math.round(ttlSec / 60)} min). Re-run the exact same query+model+workflow combo within TTL returns the cached copy instantly.`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: 'rgba(14, 165, 233, 0.12)', color: '#7DD3FC', border: '1px solid rgba(14, 165, 233, 0.3)' }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>Cached · {ageSec}s old</span>
                                     </div>
                                 );
                             })()}

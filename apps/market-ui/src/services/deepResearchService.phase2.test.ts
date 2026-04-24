@@ -72,6 +72,11 @@ import {
     applyWorkflowToBlueprint,
     dedupeMerge,
     buildLimitationsSection,
+    makeCacheKey,
+    lookupCachedReport,
+    storeCachedReport,
+    _clearOutputCache_FOR_TESTS,
+    CACHE_TTL_MS,
     type WorkflowId,
 } from './deepResearchService';
 import {
@@ -3126,6 +3131,62 @@ console.log('\n[61] Under-explored angle detection');
     });
     check('limitations: angle with only tiny words → not flagged',
         !/go us/.test(noneValid.section));
+}
+
+// ─── 62. Output cache — key + lookup + TTL ────────────────────────────────
+console.log('\n[62] Output cache');
+
+{
+    _clearOutputCache_FOR_TESTS();
+
+    // Key normalization: case-insensitive, whitespace-collapsed
+    const k1 = makeCacheKey('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction');
+    const k2 = makeCacheKey('  APPLE   Q4   EARNINGS  ', 'gemini-2.5-pro' as any, 'earnings_reaction');
+    check('cache key: case + whitespace normalized', k1 === k2);
+
+    // Distinct when model differs
+    const k3 = makeCacheKey('Apple Q4 earnings', 'gemini-2.5-flash' as any, 'earnings_reaction');
+    check('cache key: different model → different key', k1 !== k3);
+
+    // Distinct when workflow differs
+    const k4 = makeCacheKey('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'swot_analysis');
+    check('cache key: different workflow → different key', k1 !== k4);
+
+    // Cold miss
+    const cold = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction');
+    check('cache: cold miss → null', cold === null);
+
+    // Store + fresh hit
+    const fakeReport: any = { query: 'x', title: 't', summary: '', markdown: '', citations: [],
+        metadata: { sourcesAnalyzed: 3, generatedAt: '', estimatedReadTime: 1, modelUsed: 'm', template: 'investment_memo',
+            verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] } } };
+    const now = Date.now();
+    storeCachedReport('Apple Q4 earnings', fakeReport, 'gemini-2.5-pro' as any, 'earnings_reaction', now);
+    const hit = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction', now);
+    check('cache: fresh hit returns report', hit !== null && hit.report.query === 'x');
+    check('cache: fresh hit age ~0', hit !== null && hit.ageMs < 100);
+
+    // Different normalized query misses
+    const otherQuery = lookupCachedReport('AAPL earnings preview', 'gemini-2.5-pro' as any, 'earnings_reaction', now);
+    check('cache: different query → miss', otherQuery === null);
+
+    // TTL boundary: within TTL still hits
+    const within = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction', now + CACHE_TTL_MS - 1);
+    check('cache: within TTL still hits',
+        within !== null && within.ageMs === CACHE_TTL_MS - 1);
+
+    // TTL expired — miss AND entry evicted
+    const expired = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction', now + CACHE_TTL_MS + 1);
+    check('cache: past TTL → miss', expired === null);
+    const afterEvict = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction', now);
+    check('cache: expired entry evicted on lookup', afterEvict === null);
+
+    // CACHE_TTL_MS exported and sane
+    check('cache: TTL constant exported = 15 min', CACHE_TTL_MS === 15 * 60 * 1000);
+
+    _clearOutputCache_FOR_TESTS();
+    const afterClear = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction');
+    check('cache: clear helper wipes all entries', afterClear === null);
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────
