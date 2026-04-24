@@ -1,0 +1,29 @@
+{
+  "goldenId": "nvda-earnings-preview",
+  "report": {
+    "query": "earnings preview for NVDA Q4",
+    "title": "NVIDIA (NVDA) Q4 FY26 Earnings Preview",
+    "summary": "Consensus expects revenue of $38.2B with data-center growth continuing to dominate.",
+    "markdown": "# NVIDIA (NVDA) Q4 FY26 Earnings Preview\n\nAnalysts see NVDA delivering another strong quarter driven by sustained hyperscaler demand [1].\n\n## Consensus Estimates\n\nStreet consensus calls for revenue of $38.2B [1], up 72% YoY, with EPS of $0.86 [2]. Gross margin is modelled at 75.5% [1].\n\n## Segments to Watch\n\nThe data center segment, now >85% of revenue, remains the primary driver [1]. Networking (InfiniBand + Spectrum-X) is expected to contribute ~$3.5B [2].\n\n## Guidance\n\nManagement guided Q4 revenue to $37.5B ± 2% on the Q3 call [1]. The company reiterated it expects the Blackwell ramp to contribute meaningfully starting in fiscal Q4 [2].\n\n## Scenarios\n\nBull: blowout on Blackwell allocations and sovereign AI deals; $41B+ revenue possible per consensus sidebar [2]. Bear: hyperscaler capex pause; revenue could slip toward $36B [1].\n\n## Key Risks\n\nCustomer concentration, export controls, and competitive pressure from ASICs remain the dominant risks [2].",
+    "citations": [
+      { "id": 1, "title": "NVIDIA Q3 FY26 earnings call transcript", "url": "https://ir.nvidia.com/q3-fy26", "source": "Web" },
+      { "id": 2, "title": "Reuters: NVDA analyst consensus update", "url": "https://reuters.com/nvda-consensus", "source": "Web" }
+    ],
+    "metadata": {
+      "sourcesAnalyzed": 28,
+      "generatedAt": "2026-04-20T12:00:00Z",
+      "estimatedReadTime": 3,
+      "modelUsed": "gemini-2.5-pro",
+      "intent": "company_analysis",
+      "template": "earnings_preview",
+      "verification": {
+        "totalClaims": 9,
+        "groundedClaims": 9,
+        "multiSourceClaims": 6,
+        "singleSourceClaims": [],
+        "unsupportedClaims": []
+      },
+      "confidence": "High"
+    }
+  }
+}

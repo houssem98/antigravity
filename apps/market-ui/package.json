@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "phase2": "node scripts/run-phase2.mjs",
+    "eval": "node scripts/run-eval.mjs fixtures",
+    "eval:synthetic": "node scripts/run-eval.mjs synthetic"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

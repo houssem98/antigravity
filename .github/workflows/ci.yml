@@ -141,9 +141,9 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
         run: npm run build --workspace=apps/gravity-ui
 
-  # ── Market UI — typecheck + deep-research eval gate ────────────────────
+  # ── Market UI — typecheck + phase-2 + deep-research eval gate ──────────
   market-ui:
-    name: Market UI — typecheck & eval gate
+    name: Market UI — typecheck, phase-2, eval gate
     runs-on: ubuntu-latest
 
     steps:
@@ -160,18 +160,19 @@ jobs:
 
       - name: TypeScript check
         working-directory: apps/market-ui
-        run: npx tsc -b
+        run: npm run typecheck
 
-      - name: Deep-research + grid eval suite
+      - name: Phase-2 test suite (service + harness contract)
         working-directory: apps/market-ui
-        run: |
-          npx esbuild src/services/deepResearchService.phase2.test.ts \
-            --bundle \
-            --platform=node \
-            --format=esm \
-            --define:import.meta.env='{}' \
-            --outfile=/tmp/phase2.mjs
-          node /tmp/phase2.mjs
+        run: npm run phase2
+
+      # Quality gate — scores frozen fixtures against SEED_GOLDEN. Fails the
+      # job when aggregate pass rate / grounding / overall drop below floors.
+      # Empty fixtures dir → informational pass; drop JSONs in eval/fixtures/
+      # to increase coverage (see apps/market-ui/eval/README.md).
+      - name: Deep-research eval gate (fixtures)
+        working-directory: apps/market-ui
+        run: npm run eval
 
   # ── Evaluation gate (runs on main only) ────────────────────────────────
   eval-gate:

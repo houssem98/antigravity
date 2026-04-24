@@ -2140,6 +2140,170 @@ console.log('\n[42] Methodology includes injection-defense line');
         !/\*\*Prompt-injection defense:\*\*/.test(mdAbsent));
 }
 
+// ─── 43. Eval harness contract: SEED_GOLDEN is well-formed ────────────────
+console.log('\n[43] Eval harness: SEED_GOLDEN structural contract');
+
+{
+    const validTemplates = new Set([
+        'investment_memo', 'company_primer', 'earnings_preview',
+        'earnings_recap', 'comparative', 'macro', 'sector', 'thematic',
+    ]);
+
+    check('SEED_GOLDEN: non-empty',
+        SEED_GOLDEN.length > 0);
+
+    // Each entry: required fields present, ids unique, template valid,
+    // tickers ALL CAPS when present, expectedSections non-empty (the whole
+    // point of a golden set is to pin the outline).
+    const idSet = new Set<string>();
+    for (const g of SEED_GOLDEN) {
+        check(`SEED_GOLDEN[${g.id}]: id non-empty string`, typeof g.id === 'string' && g.id.length > 0);
+        check(`SEED_GOLDEN[${g.id}]: query non-empty`, typeof g.query === 'string' && g.query.length > 5);
+        check(`SEED_GOLDEN[${g.id}]: expectedTemplate valid`, validTemplates.has(g.expectedTemplate));
+        check(`SEED_GOLDEN[${g.id}]: expectedTickers is array`, Array.isArray(g.expectedTickers));
+        check(`SEED_GOLDEN[${g.id}]: expectedMetrics non-empty`,
+            Array.isArray(g.expectedMetrics) && g.expectedMetrics.length > 0);
+        check(`SEED_GOLDEN[${g.id}]: expectedSections non-empty`,
+            Array.isArray(g.expectedSections) && g.expectedSections.length > 0);
+        check(`SEED_GOLDEN[${g.id}]: tickers uppercase`,
+            g.expectedTickers.every(t => t === t.toUpperCase()));
+        check(`SEED_GOLDEN[${g.id}]: id unique`, !idSet.has(g.id));
+        idSet.add(g.id);
+    }
+}
+
+// ─── 44. scoreReport: invariants on synthetic inputs ──────────────────────
+console.log('\n[44] scoreReport invariants');
+
+{
+    const golden: GoldenEntry = {
+        id: 'synth-1',
+        query: 'synthetic test query',
+        expectedTemplate: 'investment_memo',
+        expectedTickers: ['AAPL', 'MSFT'],
+        expectedMetrics: ['revenue', 'margin'],
+        expectedSections: ['Thesis', 'Bull Case'],
+    };
+
+    const makeReport = (overrides: Partial<any> = {}): any => ({
+        query: 'q',
+        title: 'Synthetic',
+        summary: '',
+        markdown: 'Apple AAPL revenue trends. MSFT margin expansion. ## Thesis. ## Bull Case.',
+        citations: [],
+        metadata: {
+            sourcesAnalyzed: 10,
+            generatedAt: new Date().toISOString(),
+            estimatedReadTime: 2,
+            modelUsed: 'gemini-2.5-flash',
+            template: 'investment_memo',
+            verification: {
+                totalClaims: 10, groundedClaims: 9, multiSourceClaims: 6,
+                singleSourceClaims: [], unsupportedClaims: [],
+            },
+            ...overrides,
+        },
+    });
+
+    // Perfect report → overall near 1, passed
+    const good = scoreReport(makeReport(), golden);
+    check('scoreReport: perfect synthetic → passed', good.passed === true);
+    check('scoreReport: perfect synthetic → overall >= 0.9', good.overall >= 0.9);
+    check('scoreReport: perfect synthetic → templateMatch true', good.templateMatch === true);
+    check('scoreReport: perfect synthetic → grounding=0.9', Math.abs(good.groundingRate - 0.9) < 1e-9);
+
+    // Wrong template → templateMatch false + notes entry
+    const wrongT = scoreReport(makeReport({ template: 'company_primer' }), golden);
+    check('scoreReport: wrong template → templateMatch false', wrongT.templateMatch === false);
+    check('scoreReport: wrong template → note mentions template',
+        wrongT.notes.some(n => n.toLowerCase().includes('template')));
+
+    // Missing tickers → coverage < 1
+    const rNoT: any = makeReport();
+    rNoT.markdown = 'revenue margin Thesis Bull Case only, no tickers here';
+    const missing = scoreReport(rNoT, golden);
+    check('scoreReport: missing tickers → tickerCoverage=0', missing.tickerCoverage === 0);
+    check('scoreReport: missing tickers → note lists them',
+        missing.notes.some(n => n.includes('missing tickers')));
+
+    // Below grounding floor → failed even with high coverage
+    const lowG = scoreReport(makeReport({
+        verification: { totalClaims: 10, groundedClaims: 5, multiSourceClaims: 2,
+                         singleSourceClaims: [], unsupportedClaims: [] },
+    }), golden);
+    check('scoreReport: grounding below 0.7 → failed', lowG.passed === false);
+    check('scoreReport: grounding note attached',
+        lowG.notes.some(n => n.includes('grounding')));
+
+    // Empty expectedTickers → tickerCoverage == 1 (vacuously satisfied)
+    const vac = scoreReport(makeReport(), { ...golden, expectedTickers: [] });
+    check('scoreReport: empty expected tickers → vacuous full coverage',
+        vac.tickerCoverage === 1);
+
+    // Case insensitivity on matches
+    const caseR = makeReport();
+    caseR.markdown = 'aapl and msft Revenue Margin Thesis bull case';
+    const cs = scoreReport(caseR, golden);
+    check('scoreReport: case-insensitive tickers', cs.tickerCoverage === 1);
+    check('scoreReport: case-insensitive metrics', cs.metricCoverage === 1);
+}
+
+// ─── 45. summarize + runGolden: aggregation + error isolation ────────────
+console.log('\n[45] summarize / runGolden');
+
+{
+    const golden: GoldenEntry = {
+        id: 'x', query: 'q', expectedTemplate: 'investment_memo',
+        expectedTickers: [], expectedMetrics: ['revenue'], expectedSections: ['Thesis'],
+    };
+    const perfectReport: any = {
+        query: 'q', title: 't', summary: '', markdown: 'revenue Thesis', citations: [],
+        metadata: {
+            sourcesAnalyzed: 1, generatedAt: '', estimatedReadTime: 1, modelUsed: 'x',
+            template: 'investment_memo',
+            verification: { totalClaims: 2, groundedClaims: 2, multiSourceClaims: 1,
+                             singleSourceClaims: [], unsupportedClaims: [] },
+        },
+    };
+
+    // summarize aggregates correctly
+    const s1 = scoreReport(perfectReport, golden);
+    const s2: any = { ...s1, passed: false, overall: 0.4 };
+    const sum = summarize([s1, s2]);
+    check('summarize: total=2', sum.total === 2);
+    check('summarize: passed=1', sum.passed === 1);
+    check('summarize: failed=1', sum.failed === 1);
+    check('summarize: avgOverall correct',
+        Math.abs(sum.avgOverall - (s1.overall + 0.4) / 2) < 1e-9);
+
+    // runGolden: generator returning a report → scored
+    const okRun = await runGolden(
+        [golden],
+        async () => perfectReport,
+    );
+    check('runGolden: one passing entry → passed=1', okRun.passed === 1);
+
+    // runGolden: generator throws → entry scored 0 with "threw:" note
+    const failRun = await runGolden(
+        [golden],
+        async () => { throw new Error('synthetic-boom'); },
+    );
+    check('runGolden: thrown generator → failed=1', failRun.failed === 1);
+    check('runGolden: thrown generator → note contains "threw:"',
+        failRun.scores[0].notes.some(n => n.includes('threw:')));
+    check('runGolden: thrown generator → overall=0', failRun.scores[0].overall === 0);
+
+    // runGolden: progress callback fires per entry
+    let progressCalls = 0;
+    await runGolden(
+        [golden, golden],
+        async () => perfectReport,
+        () => { progressCalls += 1; },
+    );
+    check('runGolden: progress callback fires N times for N entries',
+        progressCalls === 2);
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
