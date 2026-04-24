@@ -3476,6 +3476,165 @@ console.log('\n[68] Financial model templates (DCF / Comps / LBO)');
         && irr.formula.includes('B8/B4'));
 }
 
+// ─── 69. Macro expansion: BLS/WB/ECB/ALFRED parsers ───────────────────────
+console.log('\n[69] Macro expansion (BLS / World Bank / ECB / FRED vintages)');
+
+{
+    const fred = await import('./fredService');
+
+    // ── BLS period → date conversion ──────────────────────────────────
+    check('bls: M01 → YYYY-01-01', fred.blsPeriodToDate('2026', 'M01') === '2026-01-01');
+    check('bls: M03 → YYYY-03-01', fred.blsPeriodToDate('2026', 'M03') === '2026-03-01');
+    check('bls: M12 → YYYY-12-01', fred.blsPeriodToDate('2026', 'M12') === '2026-12-01');
+    check('bls: Q01 → YYYY-01-01', fred.blsPeriodToDate('2025', 'Q01') === '2025-01-01');
+    check('bls: Q02 → YYYY-04-01', fred.blsPeriodToDate('2025', 'Q02') === '2025-04-01');
+    check('bls: Q04 → YYYY-10-01', fred.blsPeriodToDate('2025', 'Q04') === '2025-10-01');
+    check('bls: annual A01 → YYYY-01-01', fred.blsPeriodToDate('2024', 'A01') === '2024-01-01');
+
+    // ── BLS series registry shape ─────────────────────────────────────
+    check('bls: CPI-U canonical id', fred.BLS_SERIES.cpi_u.id === 'CUUR0000SA0');
+    check('bls: unemployment canonical id', fred.BLS_SERIES.unemp_rate.id === 'LNS14000000');
+    check('bls: avg earnings canonical id', fred.BLS_SERIES.avg_earnings.id === 'CES0500000003');
+    check('bls: >=5 canonical series registered',
+        Object.keys(fred.BLS_SERIES).length >= 5);
+
+    // ── WDI registry shape ────────────────────────────────────────────
+    check('wb: GDP current USD indicator', fred.WDI_INDICATORS.gdp_usd.id === 'NY.GDP.MKTP.CD');
+    check('wb: GDP growth indicator', fred.WDI_INDICATORS.gdp_growth.id === 'NY.GDP.MKTP.KD.ZG');
+    check('wb: inflation indicator', fred.WDI_INDICATORS.cpi_yoy.id === 'FP.CPI.TOTL.ZG');
+
+    // ── ECB key registry shape ────────────────────────────────────────
+    check('ecb: EURUSD key present', fred.ECB_KEYS.eurusd.key === 'EXR/M.USD.EUR.SP00.A');
+    check('ecb: HICP key present', fred.ECB_KEYS.hicp_yoy.key.startsWith('ICP/'));
+
+    // ── ECB CSV parsing ───────────────────────────────────────────────
+    const csvMonthly = `TIME_PERIOD,OBS_VALUE,extra
+2026-01,1.0850,x
+2026-02,1.0912,x
+2026-03,1.0788,x`;
+    const parsed1 = fred.parseECBCsv(csvMonthly);
+    check('ecb csv: parses 3 monthly obs', parsed1.length === 3);
+    check('ecb csv: first row dated 2026-01-01', parsed1[0].date === '2026-01-01');
+    check('ecb csv: values parsed as numbers',
+        parsed1[0].value === 1.0850 && parsed1[1].value === 1.0912);
+    check('ecb csv: output chronologically sorted',
+        parsed1[0].date < parsed1[1].date && parsed1[1].date < parsed1[2].date);
+
+    const csvQuarterly = `TIME_PERIOD,OBS_VALUE
+2025-Q1,2.1
+2025-Q2,2.3
+2025-Q4,2.6`;
+    const parsed2 = fred.parseECBCsv(csvQuarterly);
+    check('ecb csv: Q1 → Jan 1', parsed2[0].date === '2025-01-01');
+    check('ecb csv: Q2 → Apr 1', parsed2[1].date === '2025-04-01');
+    check('ecb csv: Q4 → Oct 1', parsed2[2].date === '2025-10-01');
+
+    const csvDaily = `TIME_PERIOD,OBS_VALUE
+2026-04-22,3.25
+2026-04-23,3.27`;
+    const parsed3 = fred.parseECBCsv(csvDaily);
+    check('ecb csv: daily date passes through', parsed3[0].date === '2026-04-22');
+
+    const csvEmpty = fred.parseECBCsv('');
+    check('ecb csv: empty input → []', csvEmpty.length === 0);
+
+    const csvMalformed = fred.parseECBCsv('no header, no data');
+    check('ecb csv: missing required columns → []', csvMalformed.length === 0);
+
+    const csvWithBlanks = `TIME_PERIOD,OBS_VALUE
+2026-01,1.0
+2026-02,
+2026-03,1.1`;
+    const parsed4 = fred.parseECBCsv(csvWithBlanks);
+    check('ecb csv: blank OBS_VALUE rows dropped', parsed4.length === 2);
+
+    // ── BLS network layer (via fetch mock) ────────────────────────────
+    const origFetch = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any, init?: any) => {
+            const u = String(url);
+            if (u.includes('api.bls.gov')) {
+                // Verify correct POST body shape
+                const body = JSON.parse(init?.body ?? '{}');
+                if (!Array.isArray(body.seriesid)) {
+                    return new Response(JSON.stringify({ status: 'REQUEST_NOT_PROCESSED', message: ['bad shape'] }), { status: 200 });
+                }
+                return new Response(JSON.stringify({
+                    status: 'REQUEST_SUCCEEDED',
+                    Results: {
+                        series: [
+                            {
+                                seriesID: 'CUUR0000SA0',
+                                data: [
+                                    { year: '2026', period: 'M03', periodName: 'March', value: '310.2' },
+                                    { year: '2026', period: 'M02', periodName: 'February', value: '309.5' },
+                                    { year: '2026', period: 'M01', periodName: 'January', value: '308.8' },
+                                ],
+                            },
+                        ],
+                    },
+                }), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const bls = await fred.fetchBLSSeries(['CUUR0000SA0']);
+        check('bls fetch: one series returned', bls.length === 1);
+        check('bls fetch: observations chronologically sorted',
+            bls[0].observations[0].date < bls[0].observations[2].date);
+        check('bls fetch: latest observation parsed',
+            bls[0].observations[bls[0].observations.length - 1].value === 310.2);
+
+        // Error propagation
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw = false;
+        try { await fred.fetchBLSSeries(['X']); } catch { threw = true; }
+        check('bls fetch: HTTP error propagates', threw);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+
+    // ── World Bank network layer ──────────────────────────────────────
+    const origFetch2 = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('api.worldbank.org')) {
+                // Verify URL shape
+                if (!u.includes('/country/USA/indicator/NY.GDP.MKTP.KD.ZG')) {
+                    return new Response(JSON.stringify([{}, []]), { status: 200 });
+                }
+                return new Response(JSON.stringify([
+                    { page: 1, pages: 1, per_page: 60, total: 3 },
+                    [
+                        { indicator: { id: 'NY.GDP.MKTP.KD.ZG', value: 'GDP growth' },
+                          country: { id: 'US', value: 'United States' },
+                          countryiso3code: 'USA', date: '2024', value: 2.8 },
+                        { indicator: { id: 'NY.GDP.MKTP.KD.ZG' },
+                          country: { id: 'US' },
+                          countryiso3code: 'USA', date: '2023', value: 2.9 },
+                        { indicator: { id: 'NY.GDP.MKTP.KD.ZG' },
+                          country: { id: 'US' },
+                          countryiso3code: 'USA', date: '2022', value: null },
+                    ],
+                ]), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const wb = await fred.fetchWorldBankIndicator('USA', 'NY.GDP.MKTP.KD.ZG');
+        check('wb fetch: null-value rows filtered', wb.length === 2);
+        check('wb fetch: dates converted to YYYY-01-01',
+            wb.every(o => /^\d{4}-01-01$/.test(o.date)));
+        check('wb fetch: chronologically sorted',
+            wb[0].date < wb[1].date);
+        check('wb fetch: country code propagated',
+            wb[0].country === 'USA');
+    } finally {
+        globalThis.fetch = origFetch2;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);

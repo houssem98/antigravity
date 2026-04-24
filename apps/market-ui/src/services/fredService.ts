@@ -9,7 +9,9 @@
  */
 
 const FRED_BASE = 'https://api.stlouisfed.org/fred';
-const FRED_API_KEY = import.meta.env.VITE_FRED_API_KEY || 'abcdefghijklmnopqrstuvwxyz123456'; // public demo key
+// FRED API key: use a real key in .env (VITE_FRED_API_KEY) for production rate limits.
+// The public demo key works but is heavily rate-limited (max ~120 req/min shared).
+const FRED_API_KEY = import.meta.env.VITE_FRED_API_KEY || 'abcdefghijklmnopqrstuvwxyz123456';
 
 // ─── Key macro series ────────────────────────────────────────────────────────
 
@@ -145,4 +147,294 @@ export async function getMacroSummaryText(): Promise<string> {
     } catch {
         return '';  // never fail — macro is supplementary, not required
     }
+}
+
+// ─── FRED ALFRED vintages (plan §6.7) ──────────────────────────────────────
+// Point-in-time observations — what a series LOOKED LIKE on a specific
+// vintage date. Critical for backtesting and honest historical analysis,
+// since most macro series are revised after initial release.
+
+export async function fetchFREDVintage(
+    seriesId: string,
+    vintageDate: string,   // YYYY-MM-DD — the date the data was "as-of"
+    limit = 12,
+): Promise<FREDObservation[]> {
+    const url = new URL(`${FRED_BASE}/series/observations`);
+    url.searchParams.set('series_id', seriesId);
+    url.searchParams.set('api_key', FRED_API_KEY);
+    url.searchParams.set('file_type', 'json');
+    url.searchParams.set('sort_order', 'desc');
+    url.searchParams.set('limit', String(limit));
+    // ALFRED vintage params — returns data as it was known on vintageDate.
+    url.searchParams.set('realtime_start', vintageDate);
+    url.searchParams.set('realtime_end', vintageDate);
+
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`FRED ALFRED ${seriesId}: HTTP ${res.status}`);
+    const data = await res.json();
+    return (data.observations ?? [])
+        .filter((o: any) => o.value !== '.' && o.value !== '')
+        .map((o: any) => ({ date: o.date, value: parseFloat(o.value) }))
+        .reverse();
+}
+
+// ─── BLS (Bureau of Labor Statistics) — free public API ────────────────────
+// v2 API: https://api.bls.gov/publicAPI/v2/timeseries/data/
+// CPI, PPI, employment, productivity, wages. 50 queries/day without a key,
+// 500/day with a free registration key (BLS_API_KEY env var).
+
+export const BLS_BASE = 'https://api.bls.gov/publicAPI/v2/timeseries/data/';
+const BLS_API_KEY = import.meta.env.VITE_BLS_API_KEY || '';
+
+export interface BLSObservation {
+    date: string;           // YYYY-MM-01 for monthly series (period is M01-M12)
+    value: number | null;
+    period: string;         // M01, M02, Q01, …
+    periodName: string;
+}
+
+export interface BLSSeries {
+    seriesId: string;
+    observations: BLSObservation[];
+    catalog?: {
+        seriesTitle?: string;
+        survey?: string;
+    };
+}
+
+// Canonical BLS series ids worth surfacing:
+//   CUUR0000SA0       — CPI-U All Items
+//   CWUR0000SA0       — CPI-W All Items
+//   WPSFD4131         — Final-demand PPI
+//   LNS14000000       — Unemployment rate (seasonally adjusted)
+//   LNS12000000       — Employment level
+//   CES0500000003     — Average hourly earnings, total private
+//   PRS85006092       — Labor productivity, nonfarm business
+export const BLS_SERIES: Record<string, { id: string; label: string; unit: string }> = {
+    cpi_u:         { id: 'CUUR0000SA0',    label: 'CPI-U All Items',              unit: 'Index 1982-84=100' },
+    cpi_w:         { id: 'CWUR0000SA0',    label: 'CPI-W All Items',              unit: 'Index 1982-84=100' },
+    ppi_fd:        { id: 'WPSFD4131',      label: 'Final-demand PPI',             unit: 'Index' },
+    unemp_rate:    { id: 'LNS14000000',    label: 'Unemployment rate (SA)',       unit: '%' },
+    employment:    { id: 'LNS12000000',    label: 'Civilian employment level',    unit: 'Thousands' },
+    avg_earnings:  { id: 'CES0500000003',  label: 'Avg hourly earnings (private)', unit: '$' },
+    productivity:  { id: 'PRS85006092',    label: 'Nonfarm productivity',         unit: '% annual rate' },
+};
+
+// Parse a BLS period label into a YYYY-MM-DD we can sort chronologically.
+// Monthly periods look like "M01" (Jan) through "M12"; quarterly "Q01"–"Q04";
+// annual "A01". We anchor to the first day of that period.
+export function blsPeriodToDate(year: string, period: string): string {
+    const y = year.padStart(4, '0');
+    if (/^M\d{2}$/.test(period)) {
+        const month = period.slice(1).padStart(2, '0');
+        return `${y}-${month}-01`;
+    }
+    if (/^Q\d{2}$/.test(period)) {
+        const q = parseInt(period.slice(1), 10);
+        const month = (q - 1) * 3 + 1;
+        return `${y}-${String(month).padStart(2, '0')}-01`;
+    }
+    return `${y}-01-01`;
+}
+
+export async function fetchBLSSeries(
+    seriesIds: string[],
+    opts: { startYear?: string; endYear?: string } = {},
+): Promise<BLSSeries[]> {
+    const now = new Date();
+    const body: Record<string, unknown> = {
+        seriesid: seriesIds,
+        startyear: opts.startYear ?? String(now.getFullYear() - 2),
+        endyear: opts.endYear ?? String(now.getFullYear()),
+        catalog: false,
+    };
+    if (BLS_API_KEY) body.registrationkey = BLS_API_KEY;
+
+    const res = await fetch(BLS_BASE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`BLS: HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.status !== 'REQUEST_SUCCEEDED') {
+        throw new Error(`BLS: ${data.status} — ${(data.message ?? []).join(' ')}`);
+    }
+
+    const out: BLSSeries[] = [];
+    for (const s of data.Results?.series ?? []) {
+        const observations: BLSObservation[] = (s.data ?? [])
+            .map((row: any) => ({
+                date: blsPeriodToDate(row.year, row.period),
+                value: row.value === '' || row.value == null ? null : parseFloat(row.value),
+                period: row.period,
+                periodName: row.periodName,
+            }))
+            .filter((o: BLSObservation) => o.value !== null)
+            .sort((a: BLSObservation, b: BLSObservation) => a.date.localeCompare(b.date));
+        out.push({ seriesId: s.seriesID, observations });
+    }
+    return out;
+}
+
+// ─── World Bank Open Data — WDI indicators, fully open ─────────────────────
+
+export const WORLD_BANK_BASE = 'https://api.worldbank.org/v2';
+
+export interface WorldBankObservation {
+    date: string;     // YYYY-MM-01 (annual series are dated 01-01)
+    value: number | null;
+    country: string;  // ISO3
+    indicator: string;
+}
+
+// Commonly useful WDI indicators:
+//   NY.GDP.MKTP.CD            — GDP current USD
+//   NY.GDP.MKTP.KD.ZG         — GDP growth annual %
+//   FP.CPI.TOTL.ZG            — Inflation CPI annual %
+//   SL.UEM.TOTL.ZS            — Unemployment %
+//   GC.DOD.TOTL.GD.ZS         — Central gov debt % of GDP
+export const WDI_INDICATORS: Record<string, { id: string; label: string; unit: string }> = {
+    gdp_usd:      { id: 'NY.GDP.MKTP.CD',      label: 'GDP (current USD)',       unit: 'USD' },
+    gdp_growth:   { id: 'NY.GDP.MKTP.KD.ZG',   label: 'Real GDP growth',         unit: '% YoY' },
+    cpi_yoy:      { id: 'FP.CPI.TOTL.ZG',      label: 'CPI inflation',           unit: '% YoY' },
+    unemployment: { id: 'SL.UEM.TOTL.ZS',      label: 'Unemployment rate',       unit: '%' },
+    govt_debt:    { id: 'GC.DOD.TOTL.GD.ZS',   label: 'Central govt debt',       unit: '% of GDP' },
+};
+
+export async function fetchWorldBankIndicator(
+    country: string,     // ISO3 or "all" for cross-country
+    indicator: string,
+    opts: { startYear?: number; endYear?: number; perPage?: number } = {},
+): Promise<WorldBankObservation[]> {
+    const now = new Date().getFullYear();
+    const date = `${opts.startYear ?? now - 10}:${opts.endYear ?? now}`;
+    const url = new URL(`${WORLD_BANK_BASE}/country/${country}/indicator/${indicator}`);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('date', date);
+    url.searchParams.set('per_page', String(opts.perPage ?? 60));
+
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`World Bank ${indicator}: HTTP ${res.status}`);
+    const data = await res.json();
+    // WB API returns [metadata, rows[]]
+    const rows = Array.isArray(data) && data.length >= 2 ? data[1] : [];
+    return (rows || [])
+        .filter((r: any) => r && r.value !== null)
+        .map((r: any) => ({
+            date: `${r.date}-01-01`,
+            value: typeof r.value === 'number' ? r.value : parseFloat(r.value),
+            country: r.countryiso3code || r.country?.id || '',
+            indicator: r.indicator?.id || indicator,
+        }))
+        .sort((a: WorldBankObservation, b: WorldBankObservation) => a.date.localeCompare(b.date));
+}
+
+// ─── ECB Statistical Data Warehouse — no key, no SDMX wrangling ────────────
+// Uses the CSV-data endpoint to avoid SDMX-XML parsing. Dataflows worth
+// surfacing for a G10 research desk:
+//   EXR/M.USD.EUR.SP00.A   — EUR/USD monthly avg
+//   FM/D.U2.EUR.MMSR.SRT.ALL.TTR.VOL   — €STR proxy; daily
+//   ICP/M.U2.N.000000.4.ANR            — HICP headline inflation YoY
+//   MIR/M.U2.B.A2A.A.R.A.2240.EUR.N    — bank lending rate
+//
+// We take the simplest path: `?format=csvdata&lastNObservations=N`. CSV
+// columns are fixed by ECB so we can parse without a full SDMX codec.
+
+export const ECB_BASE = 'https://data-api.ecb.europa.eu/service/data';
+
+export interface ECBObservation {
+    date: string;    // YYYY-MM-01 or YYYY-QN → anchored to first day
+    value: number | null;
+}
+
+export const ECB_KEYS: Record<string, { key: string; label: string; unit: string }> = {
+    eurusd:       { key: 'EXR/M.USD.EUR.SP00.A', label: 'EUR/USD (monthly avg)', unit: 'rate' },
+    hicp_yoy:     { key: 'ICP/M.U2.N.000000.4.ANR', label: 'Euro-area HICP YoY', unit: '%' },
+    // MRO = Main Refinancing Operations rate; key may evolve, kept as example.
+    mro_rate:     { key: 'FM/D.U2.EUR.4F.KR.MRR_FR.LEV', label: 'ECB MRO rate', unit: '%' },
+};
+
+// Parse a 2-line-plus CSV from ECB (`TIME_PERIOD,OBS_VALUE` columns included
+// in every response). Return chronologically-ordered observations.
+export function parseECBCsv(csv: string): ECBObservation[] {
+    const lines = csv.trim().split(/\r?\n/);
+    if (lines.length < 2) return [];
+    const header = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+    const periodIdx = header.indexOf('TIME_PERIOD');
+    const valueIdx = header.indexOf('OBS_VALUE');
+    if (periodIdx < 0 || valueIdx < 0) return [];
+    const out: ECBObservation[] = [];
+    for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim());
+        const p = cols[periodIdx];
+        const v = cols[valueIdx];
+        if (!p || v === undefined || v === '') continue;
+        let date = `${p}-01-01`;
+        if (/^\d{4}-\d{2}$/.test(p)) date = `${p}-01`;
+        else if (/^\d{4}-Q[1-4]$/.test(p)) {
+            const [y, q] = p.split('-Q');
+            const month = (parseInt(q, 10) - 1) * 3 + 1;
+            date = `${y}-${String(month).padStart(2, '0')}-01`;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(p)) date = p;
+        const num = parseFloat(v);
+        if (Number.isFinite(num)) out.push({ date, value: num });
+    }
+    return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export async function fetchECBSeries(
+    key: string,
+    lastN = 12,
+): Promise<ECBObservation[]> {
+    const url = `${ECB_BASE}/${key}?format=csvdata&lastNObservations=${lastN}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`ECB ${key}: HTTP ${res.status}`);
+    const csv = await res.text();
+    return parseECBCsv(csv);
+}
+
+// ─── Unified cross-provider snapshot ────────────────────────────────────────
+// Returns a single prompt-ready text block covering FRED + BLS + WB + ECB.
+// Any provider failure is silent — macro is supplementary, never required.
+
+export async function getUnifiedMacroSummaryText(opts: {
+    country?: string;     // ISO3 for World Bank; default USA
+} = {}): Promise<string> {
+    const country = opts.country ?? 'USA';
+    const [fred, bls, wb, ecb] = await Promise.allSettled([
+        getMacroSummaryText(),
+        fetchBLSSeries([BLS_SERIES.cpi_u.id, BLS_SERIES.unemp_rate.id, BLS_SERIES.avg_earnings.id])
+            .then(seriesArr => {
+                if (!seriesArr.length) return '';
+                const lines = seriesArr.map(s => {
+                    const latest = s.observations[s.observations.length - 1];
+                    const meta = Object.values(BLS_SERIES).find(m => m.id === s.seriesId);
+                    const label = meta?.label ?? s.seriesId;
+                    const unit = meta?.unit ?? '';
+                    return latest ? `• ${label}: ${latest.value} ${unit} as of ${latest.date}` : '';
+                }).filter(Boolean);
+                return lines.length ? `BLS (Bureau of Labor Statistics):\n${lines.join('\n')}` : '';
+            }),
+        Promise.all([
+            fetchWorldBankIndicator(country, WDI_INDICATORS.gdp_growth.id).catch(() => []),
+            fetchWorldBankIndicator(country, WDI_INDICATORS.cpi_yoy.id).catch(() => []),
+        ]).then(([gdp, cpi]) => {
+            const g = gdp[gdp.length - 1];
+            const c = cpi[cpi.length - 1];
+            const parts: string[] = [];
+            if (g) parts.push(`• GDP growth ${country}: ${g.value?.toFixed(2)}% YoY (${g.date.slice(0, 4)})`);
+            if (c) parts.push(`• CPI inflation ${country}: ${c.value?.toFixed(2)}% YoY (${c.date.slice(0, 4)})`);
+            return parts.length ? `World Bank WDI:\n${parts.join('\n')}` : '';
+        }),
+        fetchECBSeries(ECB_KEYS.eurusd.key, 4).then(obs => {
+            const latest = obs[obs.length - 1];
+            return latest ? `ECB:\n• EUR/USD: ${latest.value} as of ${latest.date}` : '';
+        }),
+    ]);
+
+    const blocks = [fred, bls, wb, ecb]
+        .map(r => r.status === 'fulfilled' ? r.value : '')
+        .filter(s => typeof s === 'string' && s.trim().length > 0);
+    return blocks.join('\n\n');
 }
