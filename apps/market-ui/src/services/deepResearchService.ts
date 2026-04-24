@@ -170,6 +170,146 @@ export const REPORT_TEMPLATES: Record<TemplateKey, ReportTemplate> = {
     },
 };
 
+// ─── Pre-built Agentic Workflows (plan §7 Phase 3) ─────────────────────────
+// One-click research presets for common institutional tasks. Each workflow:
+//   1. Pins the report template (no template drift from intent inference)
+//   2. Injects guaranteed research angles into the blueprint, merged with
+//      whatever the Chief Analyst generated from the raw query
+//   3. Injects must-track key metrics (so e.g. "M&A Screen" always reports
+//      EV/EBITDA and precedent-transaction multiples)
+//   4. Appends a workflow-specific directive to the Chief Analyst prompt so
+//      the generated blueprint frames the research with the right lens
+//
+// Workflows reuse existing templates to avoid cascading TemplateKey changes.
+// The differentiation is in the angle/metric injection + the prompt suffix.
+
+export type WorkflowId =
+    | 'earnings_reaction'
+    | 'swot_analysis'
+    | 'company_profile'
+    | 'ma_screen'
+    | 'channel_check';
+
+export interface WorkflowPreset {
+    id: WorkflowId;
+    label: string;
+    description: string;
+    template: TemplateKey;
+    injectAngles: string[];
+    injectMetrics: string[];
+    systemSuffix: string;
+}
+
+export const WORKFLOW_PRESETS: Record<WorkflowId, WorkflowPreset> = {
+    earnings_reaction: {
+        id: 'earnings_reaction',
+        label: 'Earnings Reaction',
+        description: 'Print vs consensus, stock reaction, guidance revisions, and buyside pushback.',
+        template: 'earnings_recap',
+        injectAngles: [
+            'Print vs consensus delta on revenue, EPS, segment revenue',
+            'Stock reaction magnitude and options-implied move context',
+            'Forward guidance revisions and management tone shift',
+            'Buyside pushback themes and sellside rating-change catalysts',
+        ],
+        injectMetrics: ['revenue', 'EPS', 'operating margin', 'guidance', 'consensus', 'segment revenue'],
+        systemSuffix: 'Frame this as an EARNINGS REACTION workflow: start from the reported print, contrast against consensus, and trace how the guidance and stock reaction reshape the investment thesis.',
+    },
+    swot_analysis: {
+        id: 'swot_analysis',
+        label: 'SWOT Analysis',
+        description: 'Strengths, Weaknesses, Opportunities, Threats — framed for investment decisions.',
+        template: 'investment_memo',
+        injectAngles: [
+            'Structural strengths: moats, scale advantages, proprietary assets',
+            'Structural weaknesses: cost disadvantages, strategic blind spots',
+            'Growth opportunities: adjacent markets, product expansion, M&A',
+            'Competitive and regulatory threats with probability weighting',
+        ],
+        injectMetrics: ['market share', 'gross margin', 'ROIC', 'revenue growth', 'capex intensity'],
+        systemSuffix: 'Frame this as a SWOT workflow: organize findings into Strengths / Weaknesses / Opportunities / Threats. Each bucket should have 3–5 specific, evidenced claims with probability-weighted impact.',
+    },
+    company_profile: {
+        id: 'company_profile',
+        label: 'Company Profile',
+        description: 'Comprehensive institutional primer: business, financials, management, valuation.',
+        template: 'company_primer',
+        injectAngles: [
+            'Business segments, revenue mix, and geographic footprint',
+            'Historical revenue / margin / FCF trajectory (5-year)',
+            'Management team track record and capital-allocation history',
+            'Valuation framework: peer multiples, DCF sensitivities, SOTP where applicable',
+        ],
+        injectMetrics: ['revenue', 'EBITDA margin', 'FCF', 'ROIC', 'EV/EBITDA', 'P/E', 'debt/EBITDA'],
+        systemSuffix: 'Frame this as a COMPANY PROFILE workflow: produce a comprehensive primer suitable for an analyst new to the name. Cover business, financials, management, competitive position, and valuation in equal depth.',
+    },
+    ma_screen: {
+        id: 'ma_screen',
+        label: 'M&A Screen',
+        description: 'Identify plausible acquirers or targets; synergies and precedent-transaction multiples.',
+        template: 'thematic',
+        injectAngles: [
+            'Strategic rationale: who benefits most from owning or selling this asset',
+            'Likely acquirer profile: strategic vs PE, geographic fit, antitrust posture',
+            'Potential target profile: undervalued peers with asset synergies',
+            'Precedent transactions: EV/EBITDA and EV/Sales multiples for comparable deals',
+            'Deal feasibility: balance-sheet capacity, regulatory risk, financing backdrop',
+        ],
+        injectMetrics: ['EV/EBITDA', 'EV/Sales', 'debt/EBITDA', 'synergy potential', 'control premium'],
+        systemSuffix: 'Frame this as an M&A SCREEN workflow: focus on strategic fit, feasibility, and precedent-transaction multiples. Produce a ranked list of plausible acquirers or targets with named rationale per candidate.',
+    },
+    channel_check: {
+        id: 'channel_check',
+        label: 'Channel Check',
+        description: 'Synthesize competitive dynamics from interviews, transcripts, and primary-source commentary.',
+        template: 'thematic',
+        injectAngles: [
+            'Competitive dynamics from customer / reseller / supplier commentary',
+            'Pricing trends, discounting, and channel inventory signals',
+            'Product traction vs competitive substitutes',
+            'Go-to-market effectiveness and sales-force productivity signals',
+            'Churn, renewal, and satisfaction qualitative signals',
+        ],
+        injectMetrics: ['net retention', 'gross retention', 'CAC payback', 'win rate', 'pricing'],
+        systemSuffix: 'Frame this as a CHANNEL CHECK workflow: weight interview-style sources (earnings transcripts, expert networks, industry-conference commentary) above generic news. Aggregate the qualitative signal into quantitative directional calls (accelerating / decelerating / stable).',
+    },
+};
+
+export function dedupeMerge(a: string[], b: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const v of [...a, ...b]) {
+        const k = v.trim().toLowerCase();
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        out.push(v.trim());
+    }
+    return out;
+}
+
+// Apply a workflow preset to an already-generated blueprint. Injected
+// angles/metrics are PREPENDED (workflow priorities lead; Chief Analyst's
+// free-form suggestions follow) and deduped case-insensitively.
+export function applyWorkflowToBlueprint(
+    bp: ResearchBlueprint,
+    workflowId: WorkflowId,
+): { blueprint: ResearchBlueprint; anglesInjected: number; metricsInjected: number } {
+    const preset = WORKFLOW_PRESETS[workflowId];
+    const beforeAngles = bp.researchAngles.length;
+    const beforeMetrics = bp.keyMetrics.length;
+    const mergedAngles = dedupeMerge(preset.injectAngles, bp.researchAngles);
+    const mergedMetrics = dedupeMerge(preset.injectMetrics, bp.keyMetrics);
+    return {
+        blueprint: {
+            ...bp,
+            researchAngles: mergedAngles,
+            keyMetrics: mergedMetrics,
+        },
+        anglesInjected: mergedAngles.length - beforeAngles,
+        metricsInjected: mergedMetrics.length - beforeMetrics,
+    };
+}
+
 export function selectTemplate(intent: ResearchBlueprint['intent'], query: string): TemplateKey {
     const q = query.toLowerCase();
     if (/earnings preview|expectations for.*q[1-4]|before earnings/.test(q)) return 'earnings_preview';
@@ -301,6 +441,13 @@ export interface ResearchReport {
             stale: number;       // ≤3 years
             archival: number;    // >3 years
             undated: number;
+        };
+        workflow?: {
+            id: WorkflowId;
+            label: string;
+            template: TemplateKey;
+            anglesInjected: number;
+            metricsInjected: number;
         };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
@@ -658,11 +805,13 @@ async function callLLM(
 
 async function buildResearchBlueprint(
     query: string,
-    model?: ResearchModelId
+    model?: ResearchModelId,
+    workflowId?: WorkflowId,
 ): Promise<ResearchBlueprint> {
+    const workflowSuffix = workflowId ? `\n\nWORKFLOW DIRECTIVE: ${WORKFLOW_PRESETS[workflowId].systemSuffix}` : '';
     const prompt = `You are the Chief Research Strategist at a top-tier institutional asset manager (Goldman Sachs Asset Management, Bridgewater, Two Sigma).
 
-A client has submitted this research request: "${query}"
+A client has submitted this research request: "${query}"${workflowSuffix}
 
 Produce a comprehensive research blueprint. Think step-by-step:
 1. What is the core research intent?
@@ -2904,6 +3053,7 @@ export interface MethodologyInputs {
     injectionDefense?: InjectionDefenseStats;
     readers?: ReaderStats;
     recency?: RecencyDistribution;
+    workflow?: { id: WorkflowId; label: string; template: TemplateKey; anglesInjected: number; metricsInjected: number };
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -2991,6 +3141,14 @@ export function buildMethodologySection(m: MethodologyInputs): string {
             `**Self-revision:** reviewer examined ${m.revisions.issuesBefore} flagged issue${m.revisions.issuesBefore === 1 ? '' : 's'} but produced no accepted surgical edits — original draft retained`,
         );
     }
+    if (m.workflow) {
+        const w = m.workflow;
+        const parts: string[] = [];
+        if (w.anglesInjected > 0) parts.push(`${w.anglesInjected} preset angle${w.anglesInjected === 1 ? '' : 's'} added`);
+        if (w.metricsInjected > 0) parts.push(`${w.metricsInjected} preset metric${w.metricsInjected === 1 ? '' : 's'} added`);
+        const tail = parts.length > 0 ? ` — ${parts.join(', ')}` : ' — all preset angles/metrics already inferred by the Chief Analyst';
+        bullets.push(`**Workflow:** ${w.label} (pinned template: ${w.template})${tail}`);
+    }
     if (m.recency && m.recency.total > 0) {
         const rc = m.recency;
         const parts: string[] = [];
@@ -3057,6 +3215,7 @@ export const performDeepResearch = async (
     budget: ResearchBudget = DEFAULT_BUDGET,
     signal?: AbortSignal,
     onBlueprintReady?: BlueprintReviewCallback,
+    workflow?: WorkflowId,
 ): Promise<ResearchReport> => {
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
@@ -3083,7 +3242,23 @@ export const performDeepResearch = async (
     // ── Stage 1: Blueprint (0–10%) ─────────────────────────────────────────
     onProgress({ stage: 'planning', message: 'Chief Analyst building research blueprint…', progress: 3 });
 
-    let blueprint = await buildResearchBlueprint(query, driverModel);
+    let blueprint = await buildResearchBlueprint(query, driverModel, workflow);
+
+    // Apply workflow preset — prepend guaranteed angles + metrics and record
+    // how many fresh ones were injected vs already present in the Chief
+    // Analyst's draft. Template is pinned later (after selectTemplate).
+    let workflowStats: { id: WorkflowId; label: string; template: TemplateKey; anglesInjected: number; metricsInjected: number } | null = null;
+    if (workflow) {
+        const applied = applyWorkflowToBlueprint(blueprint, workflow);
+        blueprint = applied.blueprint;
+        workflowStats = {
+            id: workflow,
+            label: WORKFLOW_PRESETS[workflow].label,
+            template: WORKFLOW_PRESETS[workflow].template,
+            anglesInjected: applied.anglesInjected,
+            metricsInjected: applied.metricsInjected,
+        };
+    }
 
     // ── Stage 1b: Human-in-the-loop plan approval (optional) ──────────────
     // Plan §6.1 P0: before firing 12+ web queries + SEC targets, offer the
@@ -3225,7 +3400,13 @@ export const performDeepResearch = async (
     // expand each template section with retrieved data. Fanout mode runs one
     // LLM call per section in parallel (plan §6.1 P0); falls back to the
     // monolith Writer if budget is tight or too many sections fail.
-    const templateKey = selectTemplate(blueprint.intent, query);
+    // Workflow (when set) pins the template — skips intent-based selection
+    // so e.g. "SWOT Analysis" always produces an investment_memo regardless
+    // of whether the blueprint inferred the intent as company_analysis or
+    // thematic.
+    const templateKey: TemplateKey = workflow
+        ? WORKFLOW_PRESETS[workflow].template
+        : selectTemplate(blueprint.intent, query);
     const template = REPORT_TEMPLATES[templateKey];
 
     const sectionCount = template.sections.length;
@@ -3423,6 +3604,7 @@ export const performDeepResearch = async (
         injectionDefense: injectionStats.scanned > 0 ? injectionStats : undefined,
         readers: readerStats.totalReaders > 0 ? readerStats : undefined,
         recency: recency.total > 0 ? recency : undefined,
+        workflow: workflowStats ?? undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -3451,12 +3633,15 @@ export const performDeepResearch = async (
     const readerTail = readerStats.totalReaders > 0
         ? ` · ${readerStats.succeeded}/${readerStats.totalReaders} readers`
         : '';
+    const workflowTail = workflowStats
+        ? ` · ${workflowStats.label} workflow`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${workflowTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -3538,6 +3723,7 @@ export const performDeepResearch = async (
             } : undefined,
             readers: readerStats.totalReaders > 0 ? { ...readerStats } : undefined,
             recency: recency.total > 0 ? { ...recency } : undefined,
+            workflow: workflowStats ?? undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };

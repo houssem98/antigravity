@@ -68,6 +68,10 @@ import {
 } from './tavilyService';
 import {
     summarizeRecency,
+    WORKFLOW_PRESETS,
+    applyWorkflowToBlueprint,
+    dedupeMerge,
+    type WorkflowId,
 } from './deepResearchService';
 import {
     scoreReport,
@@ -2774,6 +2778,158 @@ console.log('\n[55] Methodology includes recency line');
     });
     check('methodology: recency line absent when total=0',
         !/\*\*Source recency:\*\*/.test(mdZero));
+}
+
+// ─── 56. WORKFLOW_PRESETS registry contract ────────────────────────────────
+console.log('\n[56] WORKFLOW_PRESETS registry');
+
+{
+    const validTemplates = new Set([
+        'investment_memo', 'earnings_preview', 'earnings_recap',
+        'thematic', 'company_primer', 'comparative',
+    ]);
+    const workflowIds: WorkflowId[] = [
+        'earnings_reaction', 'swot_analysis', 'company_profile', 'ma_screen', 'channel_check',
+    ];
+
+    check('workflows: 5 presets registered',
+        Object.keys(WORKFLOW_PRESETS).length === 5);
+
+    for (const id of workflowIds) {
+        const p = WORKFLOW_PRESETS[id];
+        check(`workflow ${id}: exists`, p !== undefined);
+        check(`workflow ${id}: id matches key`, p.id === id);
+        check(`workflow ${id}: label non-empty`, typeof p.label === 'string' && p.label.length > 0);
+        check(`workflow ${id}: description non-empty`, typeof p.description === 'string' && p.description.length > 10);
+        check(`workflow ${id}: template is valid TemplateKey`, validTemplates.has(p.template));
+        check(`workflow ${id}: injectAngles has ≥3 entries`, p.injectAngles.length >= 3);
+        check(`workflow ${id}: injectMetrics has ≥3 entries`, p.injectMetrics.length >= 3);
+        check(`workflow ${id}: systemSuffix non-empty`, p.systemSuffix.length > 20);
+    }
+
+    // Every workflow ID must be unique (registry is a map so this is tautological,
+    // but defend against someone accidentally reusing an id literal):
+    const ids = Object.values(WORKFLOW_PRESETS).map(p => p.id);
+    const unique = new Set(ids);
+    check('workflows: all preset ids unique', unique.size === ids.length);
+}
+
+// ─── 57. dedupeMerge ─────────────────────────────────────────────────────
+console.log('\n[57] dedupeMerge');
+
+{
+    check('dedupeMerge: basic concat', JSON.stringify(dedupeMerge(['a', 'b'], ['c'])) === JSON.stringify(['a', 'b', 'c']));
+    check('dedupeMerge: case-insensitive dedup preserves FIRST case',
+        JSON.stringify(dedupeMerge(['Revenue'], ['revenue', 'EPS'])) === JSON.stringify(['Revenue', 'EPS']));
+    check('dedupeMerge: trims whitespace',
+        JSON.stringify(dedupeMerge(['  a  '], ['b'])) === JSON.stringify(['a', 'b']));
+    check('dedupeMerge: skips empty strings',
+        JSON.stringify(dedupeMerge(['', 'a'], ['', 'b'])) === JSON.stringify(['a', 'b']));
+    check('dedupeMerge: preserves order (a before b)',
+        JSON.stringify(dedupeMerge(['x', 'y'], ['y', 'z'])) === JSON.stringify(['x', 'y', 'z']));
+    check('dedupeMerge: empty inputs → empty',
+        JSON.stringify(dedupeMerge([], [])) === JSON.stringify([]));
+}
+
+// ─── 58. applyWorkflowToBlueprint: injection + counting ────────────────
+console.log('\n[58] applyWorkflowToBlueprint');
+
+{
+    const baseBp: any = {
+        intent: 'company_analysis',
+        targetEntities: ['Apple'],
+        tickers: ['AAPL'],
+        keyMetrics: ['revenue', 'existing-metric'],
+        subtopics: [],
+        searchQueries: [],
+        secTargets: [],
+        timeframe: 'FY24',
+        investmentHorizon: '12mo',
+        researchAngles: ['existing angle 1', 'existing angle 2'],
+    };
+
+    // SWOT injects 4 angles + 5 metrics. "revenue" (base) and "revenue growth"
+    // (SWOT preset) are DIFFERENT strings → no collision. All 5 preset
+    // metrics are therefore fresh injections.
+    const swot = applyWorkflowToBlueprint(baseBp, 'swot_analysis');
+    check('apply swot: anglesInjected = 4 (all fresh)', swot.anglesInjected === 4);
+    check('apply swot: metricsInjected = 5 (revenue ≠ "revenue growth")',
+        swot.metricsInjected === WORKFLOW_PRESETS.swot_analysis.injectMetrics.length);
+    check('apply swot: preset angles prepended before existing',
+        swot.blueprint.researchAngles[0] === WORKFLOW_PRESETS.swot_analysis.injectAngles[0]);
+    check('apply swot: existing angles still present',
+        swot.blueprint.researchAngles.includes('existing angle 1'));
+    // Collision path: use a preset whose injectMetrics contains a case-variant
+    // of an existing metric. company_profile injects "revenue" — which
+    // collides with the base "revenue" (case-insensitive). So we see 1 fewer
+    // fresh injection than the preset length.
+    const cp = applyWorkflowToBlueprint(baseBp, 'company_profile');
+    check('apply company_profile: case-insensitive dedup drops 1 (revenue)',
+        cp.metricsInjected === WORKFLOW_PRESETS.company_profile.injectMetrics.length - 1);
+    check('apply company_profile: only one "revenue" in final metrics',
+        cp.blueprint.keyMetrics.filter(m => m.toLowerCase() === 'revenue').length === 1);
+
+    // Earnings_reaction template matches preset
+    const er = applyWorkflowToBlueprint(baseBp, 'earnings_reaction');
+    check('apply earnings_reaction: blueprint intent preserved',
+        er.blueprint.intent === baseBp.intent);
+    check('apply earnings_reaction: tickers preserved',
+        er.blueprint.tickers[0] === 'AAPL');
+
+    // Applying when blueprint already contains ALL workflow angles → anglesInjected = 0
+    const fullBp: any = {
+        ...baseBp,
+        researchAngles: [...WORKFLOW_PRESETS.channel_check.injectAngles],
+        keyMetrics: [...WORKFLOW_PRESETS.channel_check.injectMetrics],
+    };
+    const idempotent = applyWorkflowToBlueprint(fullBp, 'channel_check');
+    check('apply channel_check idempotent: 0 angles injected when all present',
+        idempotent.anglesInjected === 0);
+    check('apply channel_check idempotent: 0 metrics injected when all present',
+        idempotent.metricsInjected === 0);
+}
+
+// ─── 59. Methodology surfaces workflow ────────────────────────────────────
+console.log('\n[59] Methodology includes workflow line');
+
+{
+    const mdWorkflow = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        workflow: { id: 'swot_analysis', label: 'SWOT Analysis', template: 'investment_memo', anglesInjected: 4, metricsInjected: 3 },
+    });
+    check('methodology: workflow line present',
+        /\*\*Workflow:\*\*/.test(mdWorkflow) && /SWOT Analysis/.test(mdWorkflow));
+    check('methodology: pinned template rendered',
+        /pinned template: investment_memo/.test(mdWorkflow));
+    check('methodology: injection counts rendered',
+        /4 preset angles added/.test(mdWorkflow) && /3 preset metrics added/.test(mdWorkflow));
+
+    // Zero injections → "all preset already inferred"
+    const mdZero = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        workflow: { id: 'earnings_reaction', label: 'Earnings Reaction', template: 'earnings_recap', anglesInjected: 0, metricsInjected: 0 },
+    });
+    check('methodology: zero-injection wording',
+        /all preset angles\/metrics already inferred/.test(mdZero));
+
+    // Absent → no bullet
+    const mdAbsent = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: workflow bullet absent when field missing',
+        !/\*\*Workflow:\*\*/.test(mdAbsent));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────
