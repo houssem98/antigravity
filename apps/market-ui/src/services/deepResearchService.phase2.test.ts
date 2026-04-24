@@ -62,8 +62,13 @@ import {
     classifyAuthority,
     authorityWeight,
     weightedAuthorityScore,
+    classifyRecency,
+    recencyWeight,
     type TavilySearchResult,
 } from './tavilyService';
+import {
+    summarizeRecency,
+} from './deepResearchService';
 import {
     scoreReport,
     summarize,
@@ -2604,6 +2609,171 @@ console.log('\n[51] Methodology includes Reader/Extractor line');
     });
     check('methodology: Reader line absent when field not provided',
         !/\*\*Reader\/Extractor:\*\*/.test(mdAbsent));
+}
+
+// ─── 52. Recency classification + weighting ───────────────────────────────
+console.log('\n[52] Recency classification + weighting');
+
+{
+    // Fix "now" so tests are deterministic regardless of wall clock.
+    const now = Date.parse('2026-04-24T00:00:00Z');
+
+    check('recency: undated when no publishedDate',
+        classifyRecency(undefined, now) === 'undated');
+    check('recency: undated when publishedDate unparseable',
+        classifyRecency('not-a-date', now) === 'undated');
+
+    // 30 days ago = fresh
+    const fresh = new Date(now - 30 * 86400000).toISOString();
+    check('recency: 30 days ago → fresh', classifyRecency(fresh, now) === 'fresh');
+
+    // 90 days ago = fresh boundary
+    const freshEdge = new Date(now - 90 * 86400000).toISOString();
+    check('recency: 90 days ago → fresh (inclusive boundary)',
+        classifyRecency(freshEdge, now) === 'fresh');
+
+    // 91 days ago = recent
+    const recent = new Date(now - 91 * 86400000).toISOString();
+    check('recency: 91 days ago → recent', classifyRecency(recent, now) === 'recent');
+
+    // 365 days ago = recent boundary
+    const recentEdge = new Date(now - 365 * 86400000).toISOString();
+    check('recency: 365 days ago → recent (inclusive boundary)',
+        classifyRecency(recentEdge, now) === 'recent');
+
+    // 2 years = stale
+    const stale = new Date(now - 2 * 365 * 86400000).toISOString();
+    check('recency: 2 years ago → stale', classifyRecency(stale, now) === 'stale');
+
+    // 1095 days = stale boundary
+    const staleEdge = new Date(now - 1095 * 86400000).toISOString();
+    check('recency: 1095 days ago → stale (inclusive boundary)',
+        classifyRecency(staleEdge, now) === 'stale');
+
+    // 4 years = archival
+    const archival = new Date(now - 4 * 365 * 86400000).toISOString();
+    check('recency: 4 years ago → archival', classifyRecency(archival, now) === 'archival');
+
+    // Future date → treated as fresh (age <= 0 clamps to fresh branch)
+    const future = new Date(now + 30 * 86400000).toISOString();
+    check('recency: future date → fresh (not undated)',
+        classifyRecency(future, now) === 'fresh');
+
+    // Weight monotonicity: fresh > recent > stale > archival; undated sits between
+    check('recencyWeight: fresh > recent', recencyWeight('fresh') > recencyWeight('recent'));
+    check('recencyWeight: recent > stale', recencyWeight('recent') > recencyWeight('stale'));
+    check('recencyWeight: stale > archival', recencyWeight('stale') > recencyWeight('archival'));
+    check('recencyWeight: undated between recent and stale',
+        recencyWeight('undated') > recencyWeight('stale')
+        && recencyWeight('undated') < recencyWeight('recent'));
+}
+
+// ─── 53. weightedAuthorityScore blends recency ────────────────────────────
+console.log('\n[53] weightedAuthorityScore blends recency');
+
+{
+    const now = Date.parse('2026-04-24T00:00:00Z');
+    const freshDate = new Date(now - 10 * 86400000).toISOString();
+    const archivalDate = new Date(now - 5 * 365 * 86400000).toISOString();
+
+    // Same URL, same Tavily score, different publishedDates → fresher wins
+    const a: TavilySearchResult = { title: 'a', url: 'https://reuters.com/x', content: '', score: 0.7, publishedDate: freshDate };
+    const b: TavilySearchResult = { title: 'b', url: 'https://reuters.com/y', content: '', score: 0.7, publishedDate: archivalDate };
+    check('weightedAuthorityScore: fresh > archival for same domain+score',
+        weightedAuthorityScore(a, now) > weightedAuthorityScore(b, now));
+
+    // A fresh premium-news source should still be beatable by a stale primary
+    const freshPremium: TavilySearchResult = { title: 'a', url: 'https://reuters.com/x', content: '', score: 0.7, publishedDate: freshDate };
+    const stalePrimary: TavilySearchResult = { title: 'b', url: 'https://sec.gov/x', content: '', score: 0.7, publishedDate: new Date(now - 2 * 365 * 86400000).toISOString() };
+    check('weightedAuthorityScore: stale SEC can still beat fresh premium news (authority dominates)',
+        weightedAuthorityScore(stalePrimary, now) > weightedAuthorityScore(freshPremium, now));
+
+    // But fresh SEC crushes stale SEC
+    const freshPrimary: TavilySearchResult = { ...stalePrimary, publishedDate: freshDate };
+    check('weightedAuthorityScore: fresh SEC > stale SEC',
+        weightedAuthorityScore(freshPrimary, now) > weightedAuthorityScore(stalePrimary, now));
+
+    // Undated source with equal Tavily/authority lands between fresh and archival
+    const undated: TavilySearchResult = { title: 'u', url: 'https://reuters.com/z', content: '', score: 0.7 };
+    const sFresh = weightedAuthorityScore(a, now);
+    const sArchival = weightedAuthorityScore(b, now);
+    const sUndated = weightedAuthorityScore(undated, now);
+    check('weightedAuthorityScore: undated is between fresh and archival',
+        sUndated < sFresh && sUndated > sArchival);
+}
+
+// ─── 54. summarizeRecency distribution ────────────────────────────────────
+console.log('\n[54] summarizeRecency distribution');
+
+{
+    const now = Date.parse('2026-04-24T00:00:00Z');
+    const mk = (days: number | undefined): TavilySearchResult => ({
+        title: 't', url: 'https://x.com/a', content: '', score: 0.5,
+        publishedDate: days === undefined ? undefined : new Date(now - days * 86400000).toISOString(),
+    });
+
+    const sources = [
+        mk(10), mk(60),                  // fresh × 2
+        mk(200),                         // recent
+        mk(500), mk(900),                // stale × 2
+        mk(2000),                        // archival
+        mk(undefined), mk(undefined),    // undated × 2
+    ];
+    const dist = summarizeRecency(sources, now);
+    check('summarizeRecency: total matches input', dist.total === sources.length);
+    check('summarizeRecency: fresh = 2', dist.fresh === 2);
+    check('summarizeRecency: recent = 1', dist.recent === 1);
+    check('summarizeRecency: stale = 2', dist.stale === 2);
+    check('summarizeRecency: archival = 1', dist.archival === 1);
+    check('summarizeRecency: undated = 2', dist.undated === 2);
+    const sum = dist.fresh + dist.recent + dist.stale + dist.archival + dist.undated;
+    check('summarizeRecency: bucket sum == total', sum === dist.total);
+
+    const empty = summarizeRecency([], now);
+    check('summarizeRecency: empty input → zeros',
+        empty.total === 0 && empty.fresh === 0 && empty.undated === 0);
+}
+
+// ─── 55. Methodology surfaces recency distribution ────────────────────────
+console.log('\n[55] Methodology includes recency line');
+
+{
+    const mdRecency = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        recency: { total: 10, fresh: 5, recent: 3, stale: 1, archival: 0, undated: 1 },
+    });
+    check('methodology: recency line present',
+        /\*\*Source recency:\*\*/.test(mdRecency) && /10 web sources/.test(mdRecency));
+    check('methodology: fresh count rendered', /5 fresh/.test(mdRecency));
+    check('methodology: archival omitted when zero', !/0 archival/.test(mdRecency));
+    check('methodology: stale rendered', /1 stale/.test(mdRecency));
+
+    // Absent → no bullet
+    const mdAbsent = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: recency line absent when not provided',
+        !/\*\*Source recency:\*\*/.test(mdAbsent));
+
+    // Zero-total → no bullet even when field provided
+    const mdZero = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 0, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        recency: { total: 0, fresh: 0, recent: 0, stale: 0, archival: 0, undated: 0 },
+    });
+    check('methodology: recency line absent when total=0',
+        !/\*\*Source recency:\*\*/.test(mdZero));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

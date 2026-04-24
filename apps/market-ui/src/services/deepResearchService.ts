@@ -13,7 +13,9 @@ import {
     searchMultipleQueriesParallel,
     classifyAuthority,
     authorityWeight,
+    classifyRecency,
     type TavilySearchResult,
+    type RecencyBucket,
 } from './tavilyService';
 import { queryGravityRAG, formatRAGSourcesForPrompt, formatRAGStructuredData, type GravityRAGResult } from './gravitySearchService';
 import { searchFilings, type SECFiling } from './secEdgarService';
@@ -291,6 +293,14 @@ export interface ResearchReport {
             noRelevantFacts: number;
             cacheHits: number;
             fallbackRounds: number;
+        };
+        recency?: {
+            total: number;
+            fresh: number;       // ≤90 days
+            recent: number;      // ≤365 days
+            stale: number;       // ≤3 years
+            archival: number;    // >3 years
+            undated: number;
         };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
@@ -2893,7 +2903,38 @@ export interface MethodologyInputs {
     revisions?: RevisionResult;
     injectionDefense?: InjectionDefenseStats;
     readers?: ReaderStats;
+    recency?: RecencyDistribution;
     hitl?: { used: boolean; modified: boolean };
+}
+
+// ─── Recency distribution helper ──────────────────────────────────────────
+// Count web sources by freshness bucket. Used for the methodology bullet,
+// the UI badge, and downstream pass/fail thresholds on freshness-sensitive
+// queries (earnings previews should skew "fresh"; company primers can
+// tolerate "recent").
+
+export interface RecencyDistribution {
+    total: number;
+    fresh: number;
+    recent: number;
+    stale: number;
+    archival: number;
+    undated: number;
+}
+
+export function summarizeRecency(
+    sources: TavilySearchResult[],
+    nowMs: number = Date.now(),
+): RecencyDistribution {
+    const out: RecencyDistribution = {
+        total: sources.length,
+        fresh: 0, recent: 0, stale: 0, archival: 0, undated: 0,
+    };
+    for (const s of sources) {
+        const bucket: RecencyBucket = classifyRecency(s.publishedDate, nowMs);
+        out[bucket] += 1;
+    }
+    return out;
 }
 
 export function buildMethodologySection(m: MethodologyInputs): string {
@@ -2949,6 +2990,16 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         bullets.push(
             `**Self-revision:** reviewer examined ${m.revisions.issuesBefore} flagged issue${m.revisions.issuesBefore === 1 ? '' : 's'} but produced no accepted surgical edits — original draft retained`,
         );
+    }
+    if (m.recency && m.recency.total > 0) {
+        const rc = m.recency;
+        const parts: string[] = [];
+        if (rc.fresh > 0) parts.push(`${rc.fresh} fresh (≤90d)`);
+        if (rc.recent > 0) parts.push(`${rc.recent} recent (≤1y)`);
+        if (rc.stale > 0) parts.push(`${rc.stale} stale (1–3y)`);
+        if (rc.archival > 0) parts.push(`${rc.archival} archival (>3y)`);
+        if (rc.undated > 0) parts.push(`${rc.undated} undated`);
+        bullets.push(`**Source recency:** ${rc.total} web source${rc.total === 1 ? '' : 's'} — ${parts.join(' · ')}`);
     }
     if (m.readers && m.readers.totalReaders > 0) {
         const rd = m.readers;
@@ -3266,6 +3317,10 @@ export const performDeepResearch = async (
         sourceAnalysis,
     });
 
+    // Web-source recency distribution — counted once over the final
+    // webSources set so staleness is visible in the methodology footer.
+    const recency = summarizeRecency(webSources);
+
     // Deterministic citation-density sweep — flags factual sentences missing
     // an inline [n]/[RAG-n] tag. Cheap (no LLM), so always run.
     let citationDensity = verifyCitationDensity(markdown);
@@ -3367,6 +3422,7 @@ export const performDeepResearch = async (
         revisions: revisions.used ? revisions : undefined,
         injectionDefense: injectionStats.scanned > 0 ? injectionStats : undefined,
         readers: readerStats.totalReaders > 0 ? readerStats : undefined,
+        recency: recency.total > 0 ? recency : undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -3481,6 +3537,7 @@ export const performDeepResearch = async (
                 patternHits: { ...injectionStats.patternHits },
             } : undefined,
             readers: readerStats.totalReaders > 0 ? { ...readerStats } : undefined,
+            recency: recency.total > 0 ? { ...recency } : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };

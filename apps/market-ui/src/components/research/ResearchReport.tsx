@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.recency || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -545,6 +545,29 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Distilled −{savedPct}%</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.recency && report.metadata.recency.total > 0 && (() => {
+                                const rc = report.metadata.recency!;
+                                const freshRate = rc.total > 0 ? (rc.fresh + rc.recent) / rc.total : 0;
+                                const healthy = freshRate >= 0.6;
+                                const bg = healthy ? 'rgba(16, 185, 129, 0.12)' : 'rgba(234, 179, 8, 0.12)';
+                                const color = healthy ? '#6EE7B7' : '#FDE047';
+                                const border = healthy ? 'rgba(16, 185, 129, 0.3)' : 'rgba(234, 179, 8, 0.3)';
+                                const parts: string[] = [];
+                                if (rc.fresh > 0) parts.push(`${rc.fresh} fresh (≤90d)`);
+                                if (rc.recent > 0) parts.push(`${rc.recent} recent (≤1y)`);
+                                if (rc.stale > 0) parts.push(`${rc.stale} stale (1–3y)`);
+                                if (rc.archival > 0) parts.push(`${rc.archival} archival (>3y)`);
+                                if (rc.undated > 0) parts.push(`${rc.undated} undated`);
+                                const tip = `Source recency across ${rc.total} web sources: ${parts.join(', ')}. Recency is blended into the ranking score — a 2022 aggregator post cannot outrank a 2026 Reuters wire on freshness-sensitive queries.`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>{rc.fresh + rc.recent}/{rc.total} recent</span>
                                     </div>
                                 );
                             })()}

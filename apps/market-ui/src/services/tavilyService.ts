@@ -90,13 +90,52 @@ export function authorityWeight(tier: SourceAuthority): number {
     return AUTHORITY_WEIGHT[tier];
 }
 
-// Blended score: 40% Tavily semantic + 60% domain-authority prior.
-// Authority-heavy because Tavily often ranks well-SEO'd aggregators above
-// primary SEC pages, and primary sources are what compliance wants cited.
-export function weightedAuthorityScore(r: TavilySearchResult): number {
+// ─── Source Recency (plan §6.4 freshness-adjusted ranking) ─────────────────
+// A 2020 Reuters article and a 2026 Reuters article are NOT interchangeable
+// for equity research. Market conditions, management, product lines, and
+// consensus move too fast. We bucket each source by its publishedDate and
+// apply a recency multiplier on top of the authority score.
+//
+// Bucketing is intentionally generous at the short end (≤90 days = fresh)
+// because most quarterly coverage cycles are ~90 days; a ≥90-day-old
+// earnings article has usually been superseded by the next quarter's print.
+
+export type RecencyBucket = 'fresh' | 'recent' | 'stale' | 'archival' | 'undated';
+
+export function classifyRecency(publishedDate: string | undefined, nowMs: number = Date.now()): RecencyBucket {
+    if (!publishedDate) return 'undated';
+    const ts = Date.parse(publishedDate);
+    if (!Number.isFinite(ts)) return 'undated';
+    const ageDays = (nowMs - ts) / (1000 * 60 * 60 * 24);
+    if (ageDays < 0 || ageDays <= 90) return 'fresh';      // last quarter
+    if (ageDays <= 365) return 'recent';                   // last year
+    if (ageDays <= 1095) return 'stale';                   // 1–3 years
+    return 'archival';                                     // >3 years
+}
+
+// Multiplier applied on top of the authority score. Undated sits between
+// "recent" and "stale" — you can't prove it's fresh, but you can't prove
+// it's archival either; default to mildly penalized.
+const RECENCY_WEIGHT: Record<RecencyBucket, number> = {
+    fresh:    1.00,
+    recent:   0.85,
+    stale:    0.55,
+    archival: 0.30,
+    undated:  0.70,
+};
+
+export function recencyWeight(bucket: RecencyBucket): number {
+    return RECENCY_WEIGHT[bucket];
+}
+
+// Blended score: 35% Tavily semantic + 45% domain-authority prior + 20%
+// recency. Recency gets a meaningful but not dominant slice so that a
+// pristine 2022 SEC 10-K still outranks a 2026 aggregator blog post.
+export function weightedAuthorityScore(r: TavilySearchResult, nowMs: number = Date.now()): number {
     const tavily = typeof r.score === 'number' ? r.score : 0.5;
     const auth = authorityWeight(classifyAuthority(r.url));
-    return 0.4 * tavily + 0.6 * auth;
+    const rec = recencyWeight(classifyRecency(r.publishedDate, nowMs));
+    return 0.35 * tavily + 0.45 * auth + 0.20 * rec;
 }
 
 async function postTavily(query: string, maxResults: number): Promise<TavilySearchResponse> {
