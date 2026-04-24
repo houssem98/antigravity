@@ -77,6 +77,10 @@ import {
     storeCachedReport,
     _clearOutputCache_FOR_TESTS,
     CACHE_TTL_MS,
+    extractKeyTokens,
+    extractCitedSentences,
+    buildCitationIndex,
+    verifyEntailment,
     type WorkflowId,
 } from './deepResearchService';
 import {
@@ -3187,6 +3191,179 @@ console.log('\n[62] Output cache');
     _clearOutputCache_FOR_TESTS();
     const afterClear = lookupCachedReport('Apple Q4 earnings', 'gemini-2.5-pro' as any, 'earnings_reaction');
     check('cache: clear helper wipes all entries', afterClear === null);
+}
+
+// ─── 63. extractKeyTokens ────────────────────────────────────────────────
+console.log('\n[63] extractKeyTokens');
+
+{
+    const t1 = extractKeyTokens('Apple reported Q4 revenue of $94.9B, up 6% YoY.');
+    check('keyTokens: captures dollar amount', t1.some(t => t.includes('94.9')));
+    check('keyTokens: captures percent', t1.some(t => t.includes('6%')));
+    check('keyTokens: captures proper noun', t1.includes('apple'));
+    check('keyTokens: captures content word ≥5 chars', t1.includes('revenue'));
+
+    const t2 = extractKeyTokens('The company reported a modest gain.');
+    check('keyTokens: filters stop-words (company, reported)',
+        !t2.includes('company') && !t2.includes('reported'));
+    check('keyTokens: short words excluded (gain=4 chars)',
+        !t2.includes('gain'));
+    check('keyTokens: content words still kept (modest=6 chars, not in stop-words)',
+        t2.includes('modest'));
+
+    const t3 = extractKeyTokens('In 2026, NVDA projected Q1 revenue of $38 billion.');
+    check('keyTokens: numbers with units captured',
+        t3.some(t => t.includes('38')) && t3.some(t => t.includes('2026')));
+    check('keyTokens: NVDA captured as proper noun', t3.includes('nvda'));
+}
+
+// ─── 64. extractCitedSentences ────────────────────────────────────────────
+console.log('\n[64] extractCitedSentences');
+
+{
+    const md = `# Title
+
+## Thesis
+
+Apple reported revenue of $94.9B [1]. Services grew 12% [2]. The iPhone segment remained stable.
+
+Margins expanded [1][3]. Another uncited sentence here.
+
+\`\`\`
+code block [5] should be ignored
+\`\`\`
+
+Growth is strong [RAG-1].`;
+
+    const cited = extractCitedSentences(md);
+    check('cited: extracts sentences with [N] tags',
+        cited.length === 4);
+    check('cited: parses numeric citation ids',
+        cited[0].citationIds.includes('1'));
+    check('cited: dedupes citation ids per sentence',
+        cited.find(c => c.sentence.includes('Margins'))?.citationIds.length === 2);
+    check('cited: skips code blocks', !cited.some(c => c.sentence.includes('code block')));
+    check('cited: skips uncited sentences', !cited.some(c => c.sentence.includes('uncited sentence')));
+    check('cited: parses RAG-N ids',
+        cited.some(c => c.citationIds.includes('RAG-1')));
+    check('cited: truncates overlong sentences',
+        cited.every(c => c.sentence.length <= 161));
+}
+
+// ─── 65. buildCitationIndex ──────────────────────────────────────────────
+console.log('\n[65] buildCitationIndex');
+
+{
+    const webSources: any[] = [
+        { title: 'Source One', url: 'https://a.com', content: 'Apple revenue content' },
+        { title: 'Source Two', url: 'https://b.com', content: 'NVDA content' },
+    ];
+    const ragResult: any = {
+        available: true,
+        sources: [
+            { title: 'SEC filing', text: 'RAG body one' },
+            { title: 'SEC filing 2', text: 'RAG body two' },
+        ],
+    };
+
+    const idx = buildCitationIndex(webSources, ragResult);
+    check('index: web source [1] indexed', idx.has('1'));
+    check('index: web source [2] indexed', idx.has('2'));
+    check('index: web content lowercased',
+        (idx.get('1') || '').includes('apple revenue content'));
+    check('index: RAG-1 indexed', idx.has('RAG-1'));
+    check('index: RAG-2 indexed', idx.has('RAG-2'));
+    check('index: orphan id not present', !idx.has('99'));
+}
+
+// ─── 66. verifyEntailment ─────────────────────────────────────────────────
+console.log('\n[66] verifyEntailment');
+
+{
+    const webSources: any[] = [
+        { title: 'Apple Q4 earnings transcript', url: 'https://ir.apple.com', content: 'Apple reported Q4 revenue of $94.9B, up 6% YoY' },
+        { title: 'Competitor note', url: 'https://x.com', content: 'Samsung shipped 60M units' },
+    ];
+
+    // Case A: healthy entailment — cited sentence's key tokens appear in cited source
+    const mdHealthy = 'Apple reported Q4 revenue of $94.9B [1]. Samsung shipped strong volume [2].';
+    const rHealthy = verifyEntailment(mdHealthy, webSources);
+    check('entailment healthy: total=2', rHealthy.total === 2);
+    check('entailment healthy: entails=2', rHealthy.entails === 2);
+    check('entailment healthy: mismatch=0', rHealthy.mismatch === 0);
+    check('entailment healthy: rate=1', rHealthy.entailmentRate === 1);
+
+    // Case B: mis-attribution — sentence cites [1] but facts are really from [2]
+    const mdMismatch = 'Samsung shipped 60M units [1].';   // cites Apple source but says Samsung
+    const rMismatch = verifyEntailment(mdMismatch, webSources);
+    check('entailment mismatch: flagged', rMismatch.mismatch === 1);
+    check('entailment mismatch: flaggedSamples contains the mis-attribution',
+        rMismatch.flaggedSamples[0].verdict === 'mismatch');
+    check('entailment mismatch: rate < 1', rMismatch.entailmentRate === 0);
+
+    // Case C: orphan — cites [5] but no such source exists
+    const mdOrphan = 'Apple revenue grew [5].';
+    const rOrphan = verifyEntailment(mdOrphan, webSources);
+    check('entailment orphan: flagged', rOrphan.orphan === 1);
+    check('entailment orphan: flaggedSamples contains the orphan',
+        rOrphan.flaggedSamples[0].verdict === 'orphan');
+
+    // Case D: multiple citations on one sentence — each pair scored separately
+    const mdMulti = 'Apple revenue grew in Q4 [1][2].';   // [1] is Apple source (entails), [2] is Samsung source (mismatch)
+    const rMulti = verifyEntailment(mdMulti, webSources);
+    check('entailment multi: 2 pairs checked', rMulti.total === 2);
+    check('entailment multi: 1 entails + 1 mismatch',
+        rMulti.entails === 1 && rMulti.mismatch === 1);
+
+    // Case E: RAG citation
+    const ragResult: any = {
+        available: true,
+        sources: [{ title: 'Apple 10-K', text: 'revenue 94.9B services growth iphone' }],
+    };
+    const mdRag = 'Services growth was strong [RAG-1].';
+    const rRag = verifyEntailment(mdRag, webSources, ragResult);
+    check('entailment RAG: RAG citation resolved', rRag.entails === 1 && rRag.mismatch === 0);
+
+    // Case F: no cited sentences → empty result
+    const mdUncited = 'No citations here at all, just prose.';
+    const rUncited = verifyEntailment(mdUncited, webSources);
+    check('entailment uncited: total=0', rUncited.total === 0);
+    check('entailment uncited: rate=1 by convention', rUncited.entailmentRate === 1);
+}
+
+// ─── 67. Methodology surfaces entailment ──────────────────────────────────
+console.log('\n[67] Methodology includes entailment line');
+
+{
+    const mdEnt = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        entailment: {
+            total: 12, entails: 10, uncertain: 1, mismatch: 1, orphan: 0,
+            entailmentRate: 10 / 11,
+            flaggedSamples: [],
+        },
+    });
+    check('methodology: entailment line present',
+        /\*\*Citation attribution \(NLI-lite\):\*\*/.test(mdEnt));
+    check('methodology: entailment rate rendered',
+        /\(91%\)/.test(mdEnt) || /\(90%\)/.test(mdEnt));
+    check('methodology: mismatch count surfaced',
+        /1 likely mis-attributed/.test(mdEnt));
+
+    // Absent
+    const mdAbsent = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 10, secFilings: 1, ragSources: 2,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: entailment line absent when field missing',
+        !/\*\*Citation attribution/.test(mdAbsent));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

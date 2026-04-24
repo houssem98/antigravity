@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.recency || report.metadata.workflow || report.metadata.limitations || report.metadata.cacheHit || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.recency || report.metadata.workflow || report.metadata.entailment || report.metadata.limitations || report.metadata.cacheHit || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -545,6 +545,23 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Distilled −{savedPct}%</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.entailment && report.metadata.entailment.total > 0 && (() => {
+                                const e = report.metadata.entailment!;
+                                const ratePct = Math.round(e.entailmentRate * 100);
+                                const healthy = ratePct >= 85 && (e.mismatch + e.orphan) === 0;
+                                const bg = healthy ? 'rgba(14, 165, 233, 0.12)' : 'rgba(249, 115, 22, 0.12)';
+                                const color = healthy ? '#7DD3FC' : '#FDBA74';
+                                const border = healthy ? 'rgba(14, 165, 233, 0.3)' : 'rgba(249, 115, 22, 0.3)';
+                                const tip = `NLI-lite citation-attribution check: ${e.entails} of ${e.total - e.uncertain} cited sentences had a key token (number, name, or content word) in the specific source they reference. Mismatches: ${e.mismatch} (key tokens absent from cited source), orphans: ${e.orphan} (citation id not in sources index), unjudgeable: ${e.uncertain} (sentence had no extractable key tokens).`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>Entailment {ratePct}%</span>
                                     </div>
                                 );
                             })()}

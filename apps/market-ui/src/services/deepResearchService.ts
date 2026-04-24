@@ -453,6 +453,14 @@ export interface ResearchReport {
             count: number;
             topics: string[];
         };
+        entailment?: {
+            total: number;
+            entails: number;
+            uncertain: number;
+            mismatch: number;
+            orphan: number;
+            entailmentRate: number;
+        };
         cacheHit?: {
             ageMs: number;
             ttlMs: number;
@@ -3120,6 +3128,7 @@ export interface MethodologyInputs {
     readers?: ReaderStats;
     recency?: RecencyDistribution;
     workflow?: { id: WorkflowId; label: string; template: TemplateKey; anglesInjected: number; metricsInjected: number };
+    entailment?: EntailmentResult;
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -3151,6 +3160,166 @@ export function summarizeRecency(
         out[bucket] += 1;
     }
     return out;
+}
+
+// ─── Citation Attribution Verifier (plan §6.2/§6.5 — NLI-lite) ────────────
+// For each CITED sentence in the report, check whether the SPECIFIC source
+// it references actually contains supporting content. Catches:
+//   1. Fabricated citations — sentence cites [3] but [3] isn't about this.
+//   2. Mis-attribution — fact is real but cites the wrong source id.
+//   3. Paraphrase drift — cited source says "+6% YoY" but sentence says "12%".
+//
+// Distinct from auditClaimsWithLLM (which checks against the full evidence
+// blob, so can't detect mis-attribution) and from citationDensity (which
+// only checks that SOME citation is present, not whether it's correct).
+//
+// Implementation is deterministic keyword-overlap: extract key tokens from
+// each sentence (numbers, proper nouns, ≥5-char content words), check if
+// ≥1 appears in the specific cited source's content. Budget: zero LLM
+// calls. Accuracy: good enough to flag obvious fabrications, conservative
+// on paraphrase drift (DeBERTa would do better there).
+
+export interface EntailmentVerdict {
+    sentence: string;        // truncated to 160 chars
+    citationId: string;      // e.g. "3" or "RAG-2"
+    verdict: 'entails' | 'uncertain' | 'mismatch' | 'orphan';
+    reason?: string;
+}
+
+export interface EntailmentResult {
+    total: number;                  // total (sentence, citation) pairs checked
+    entails: number;                // ≥1 key token overlap
+    uncertain: number;              // sentence had no extractable key tokens (can't judge)
+    mismatch: number;               // key tokens present but none in cited source
+    orphan: number;                 // citation id not present in the sources index
+    entailmentRate: number;         // entails / (total - uncertain), 1.0 if nothing to judge
+    flaggedSamples: EntailmentVerdict[];   // mismatches + orphans, up to 20
+}
+
+// Tokens that count as "key" for entailment:
+//   1. Numbers (with optional %, $, B/M/K suffix)
+//   2. 4+ letter Capitalized words (named entities / proper nouns)
+//   3. ≥5-char lowercase content words (after stop-word filter)
+// Trailing `\b` doesn't work after `%` (both `%` and whitespace are non-word
+// chars) — use a negative-lookahead instead so the suffix alternation can
+// terminate cleanly against any non-unit character.
+const NUMBER_RE = /\$?\d[\d.,]*\s*(?:%|[bmk]n?|bn|trillion|billion|million|thousand)?(?![a-z0-9])/gi;
+const PROPER_NOUN_RE = /\b[A-Z][A-Za-z]{3,}\b/g;
+const STOP_WORDS = new Set([
+    'about', 'after', 'again', 'against', 'along', 'among', 'around', 'before', 'being',
+    'below', 'between', 'could', 'during', 'every', 'first', 'further', 'having', 'however',
+    'might', 'other', 'since', 'still', 'their', 'there', 'these', 'those', 'under', 'until',
+    'while', 'would', 'should', 'across', 'through', 'within', 'above', 'where', 'which',
+    'whose', 'which', 'whilst', 'themselves', 'itself', 'report', 'reports', 'reported',
+    'company', 'companies', 'quarter', 'quarterly', 'annual', 'annually',
+]);
+
+export function extractKeyTokens(sentence: string): string[] {
+    const tokens = new Set<string>();
+    // Numbers
+    for (const m of sentence.matchAll(NUMBER_RE)) tokens.add(m[0].replace(/\s+/g, '').toLowerCase());
+    // Proper nouns
+    for (const m of sentence.matchAll(PROPER_NOUN_RE)) tokens.add(m[0].toLowerCase());
+    // Content words (≥5 chars, not stop-words)
+    const words = sentence.toLowerCase().match(/\b[a-z]{5,}\b/g) || [];
+    for (const w of words) if (!STOP_WORDS.has(w)) tokens.add(w);
+    return Array.from(tokens);
+}
+
+// Parse out (sentence, citationIds[]) pairs from a markdown body.
+export function extractCitedSentences(markdown: string): Array<{ sentence: string; citationIds: string[] }> {
+    // Strip headings, tables, code, list bullets — same as the density verifier.
+    const stripped = markdown
+        .replace(/^#+\s.*$/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/\|[^\n]*\|/g, '')
+        .replace(/`[^`]*`/g, '')
+        .replace(/^\s*[-*]\s+/gm, '');
+    const sentences = stripped
+        .split(/(?<=[.!?])\s+(?=[A-Z(])|\n{2,}/)
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length >= 20 && s.length <= 500);
+
+    const out: Array<{ sentence: string; citationIds: string[] }> = [];
+    for (const s of sentences) {
+        const ids: string[] = [];
+        for (const m of s.matchAll(/\[((?:RAG-)?\d+)\]/g)) ids.push(m[1]);
+        if (ids.length > 0) {
+            out.push({
+                sentence: s.length > 160 ? s.slice(0, 157) + '…' : s,
+                citationIds: Array.from(new Set(ids)),
+            });
+        }
+    }
+    return out;
+}
+
+// Build a map from citation id → content. Webs use numeric ids (1, 2, …);
+// RAG passages use "RAG-N" ids.
+export function buildCitationIndex(
+    webSources: TavilySearchResult[],
+    ragResult?: GravityRAGResult,
+): Map<string, string> {
+    const index = new Map<string, string>();
+    webSources.slice(0, 50).forEach((s, i) => {
+        const content = `${s.title} ${s.content}`.toLowerCase();
+        index.set(String(i + 1), content);
+    });
+    if (ragResult?.available) {
+        ragResult.sources.slice(0, 20).forEach((s, i) => {
+            index.set(`RAG-${i + 1}`, (s.text || '').toLowerCase());
+        });
+    }
+    return index;
+}
+
+export function verifyEntailment(
+    markdown: string,
+    webSources: TavilySearchResult[],
+    ragResult?: GravityRAGResult,
+): EntailmentResult {
+    const cited = extractCitedSentences(markdown);
+    const index = buildCitationIndex(webSources, ragResult);
+
+    const flaggedSamples: EntailmentVerdict[] = [];
+    let entails = 0, uncertain = 0, mismatch = 0, orphan = 0;
+
+    for (const { sentence, citationIds } of cited) {
+        const keyTokens = extractKeyTokens(sentence);
+
+        for (const id of citationIds) {
+            const content = index.get(id);
+            if (!content) {
+                orphan += 1;
+                if (flaggedSamples.length < 20) {
+                    flaggedSamples.push({ sentence, citationId: id, verdict: 'orphan',
+                        reason: 'citation id not present in the sources index' });
+                }
+                continue;
+            }
+            if (keyTokens.length === 0) {
+                uncertain += 1;
+                continue;
+            }
+            // Check overlap: ≥1 key token present in the cited source.
+            const hits = keyTokens.filter(t => content.includes(t)).length;
+            if (hits >= 1) {
+                entails += 1;
+            } else {
+                mismatch += 1;
+                if (flaggedSamples.length < 20) {
+                    flaggedSamples.push({ sentence, citationId: id, verdict: 'mismatch',
+                        reason: `none of ${keyTokens.length} key tokens appear in source [${id}]` });
+                }
+            }
+        }
+    }
+
+    const total = entails + uncertain + mismatch + orphan;
+    const judged = entails + mismatch + orphan;   // exclude "uncertain" from rate denominator
+    const entailmentRate = judged > 0 ? entails / judged : 1;
+
+    return { total, entails, uncertain, mismatch, orphan, entailmentRate, flaggedSamples };
 }
 
 // ─── Limitations & Unknowns (plan §10.3 — epistemic honesty) ──────────────
@@ -3338,6 +3507,16 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         if (w.metricsInjected > 0) parts.push(`${w.metricsInjected} preset metric${w.metricsInjected === 1 ? '' : 's'} added`);
         const tail = parts.length > 0 ? ` — ${parts.join(', ')}` : ' — all preset angles/metrics already inferred by the Chief Analyst';
         bullets.push(`**Workflow:** ${w.label} (pinned template: ${w.template})${tail}`);
+    }
+    if (m.entailment && m.entailment.total > 0) {
+        const e = m.entailment;
+        const ratePct = Math.round(e.entailmentRate * 100);
+        const tail: string[] = [];
+        if (e.mismatch > 0) tail.push(`${e.mismatch} likely mis-attributed`);
+        if (e.orphan > 0) tail.push(`${e.orphan} orphaned citation${e.orphan === 1 ? '' : 's'}`);
+        if (e.uncertain > 0) tail.push(`${e.uncertain} unjudgeable`);
+        const tailStr = tail.length > 0 ? ` · ${tail.join(', ')}` : '';
+        bullets.push(`**Citation attribution (NLI-lite):** ${e.entails}/${e.total - e.uncertain} cited sentences had a key token in the specific source referenced (${ratePct}%)${tailStr}`);
     }
     if (m.recency && m.recency.total > 0) {
         const rc = m.recency;
@@ -3713,6 +3892,11 @@ export const performDeepResearch = async (
     // webSources set so staleness is visible in the methodology footer.
     const recency = summarizeRecency(webSources);
 
+    // Citation-attribution verifier (NLI-lite): per cited sentence, check
+    // whether a key token from the sentence appears in the specific source
+    // it references. Deterministic; zero LLM cost.
+    const entailment = verifyEntailment(markdown, webSources, ragResult);
+
     // Deterministic citation-density sweep — flags factual sentences missing
     // an inline [n]/[RAG-n] tag. Cheap (no LLM), so always run.
     let citationDensity = verifyCitationDensity(markdown);
@@ -3816,6 +4000,7 @@ export const performDeepResearch = async (
         readers: readerStats.totalReaders > 0 ? readerStats : undefined,
         recency: recency.total > 0 ? recency : undefined,
         workflow: workflowStats ?? undefined,
+        entailment: entailment.total > 0 ? entailment : undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
 
@@ -3863,12 +4048,15 @@ export const performDeepResearch = async (
     const limitationsTail = limitations.count > 0
         ? ` · ${limitations.count} limitation${limitations.count === 1 ? '' : 's'} flagged`
         : '';
+    const entailTail = entailment.total > 0 && (entailment.mismatch + entailment.orphan) > 0
+        ? ` · ${entailment.mismatch + entailment.orphan} citation mismatch${entailment.mismatch + entailment.orphan === 1 ? '' : 'es'}`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${workflowTail}${limitationsTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${entailTail}${injTail}${workflowTail}${limitationsTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -3951,6 +4139,14 @@ export const performDeepResearch = async (
             readers: readerStats.totalReaders > 0 ? { ...readerStats } : undefined,
             recency: recency.total > 0 ? { ...recency } : undefined,
             workflow: workflowStats ?? undefined,
+            entailment: entailment.total > 0 ? {
+                total: entailment.total,
+                entails: entailment.entails,
+                uncertain: entailment.uncertain,
+                mismatch: entailment.mismatch,
+                orphan: entailment.orphan,
+                entailmentRate: entailment.entailmentRate,
+            } : undefined,
             limitations: limitations.count > 0
                 ? { count: limitations.count, topics: [...limitations.topics] }
                 : undefined,
