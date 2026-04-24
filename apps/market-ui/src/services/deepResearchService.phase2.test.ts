@@ -46,7 +46,17 @@ import {
     newInjectionStats,
     _setActiveInjectionStats_FOR_TESTS,
     _getActiveInjectionStats_FOR_TESTS,
+    buildReaderPrompt,
+    parseReaderResponse,
+    runSingleReader,
+    runReaders,
+    buildExtractorPrompt,
+    extractRoundIntelligence,
+    newReaderStats,
+    _clearReaderCache_FOR_TESTS,
+    READER_FALLBACK_THRESHOLD,
     type SectionFanoutResult,
+    type ReaderResult,
 } from './deepResearchService';
 import {
     classifyAuthority,
@@ -2302,6 +2312,298 @@ console.log('\n[45] summarize / runGolden');
     );
     check('runGolden: progress callback fires N times for N entries',
         progressCalls === 2);
+}
+
+// ─── 46. Reader: prompt shape + response parsing ──────────────────────────
+console.log('\n[46] Reader prompt + response parsing');
+
+{
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue', 'services'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['iPhone revenue', 'Services growth'],
+    };
+    const src = {
+        title: 'Apple Q4 earnings', url: 'https://ir.apple.com/q4',
+        content: 'Apple reported Q4 revenue of $94.9B, up 6% YoY. Services grew 12%.',
+    };
+
+    const p = buildReaderPrompt(src, 'apple q4 earnings', blueprint);
+    check('reader prompt: mentions focus', /Apple/.test(p) && /iPhone revenue/.test(p));
+    check('reader prompt: cites key metrics', /revenue, services/.test(p));
+    check('reader prompt: wraps source in XML-like tags', /<source url=/.test(p) && /<\/source>/.test(p));
+    check('reader prompt: demands 3-6 bullets', /3–6 tight bullet points/.test(p) || /3.{0,2}6 tight bullet points/.test(p));
+    check('reader prompt: defines NO_RELEVANT_FACTS sentinel', /NO_RELEVANT_FACTS/.test(p));
+
+    // parseReaderResponse
+    const r1 = parseReaderResponse('- fact 1\n- fact 2');
+    check('parseReader: normal bullet list returned', r1.summary.length > 0 && !r1.noRelevantFacts);
+
+    const r2 = parseReaderResponse('NO_RELEVANT_FACTS');
+    check('parseReader: sentinel → noRelevantFacts=true',
+        r2.noRelevantFacts === true && r2.summary === '');
+
+    const r3 = parseReaderResponse('NO_RELEVANT_FACTS — nothing here about Apple');
+    check('parseReader: sentinel prefix also recognized',
+        r3.noRelevantFacts === true);
+
+    const r4 = parseReaderResponse('');
+    check('parseReader: empty input → empty summary, not no-facts',
+        r4.summary === '' && r4.noRelevantFacts === false);
+
+    // Clamp oversized output
+    const big = 'x'.repeat(3000);
+    const r5 = parseReaderResponse(big);
+    check('parseReader: clamps oversized output to ≤1801 chars',
+        r5.summary.length <= 1801 && r5.summary.endsWith('…'));
+}
+
+// ─── 47. runSingleReader: cache + failure paths ───────────────────────────
+console.log('\n[47] runSingleReader');
+
+{
+    _clearReaderCache_FOR_TESTS();
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['earnings'],
+    };
+    const src: any = { title: 't', url: 'https://sec.gov/a', content: 'content', score: 0.9 };
+
+    // Happy path: LLM returns bullets
+    let calls = 0;
+    const good = async () => { calls++; return '- Revenue $94.9B\n- Services +12%'; };
+    const r1 = await runSingleReader(src, 'apple earnings', blueprint, { callLLM: good });
+    check('reader: happy path → summary populated', r1.summary.length > 0 && !r1.failed && !r1.noRelevantFacts);
+    check('reader: happy path → cacheHit=false on first call', r1.cacheHit === false);
+
+    // Second call with same url+query → cache hit, no LLM call
+    const r2 = await runSingleReader(src, 'apple earnings', blueprint, { callLLM: good });
+    check('reader: second call with same query → cacheHit=true', r2.cacheHit === true);
+    check('reader: second call → no extra LLM call', calls === 1);
+    check('reader: cached summary matches first', r2.summary === r1.summary);
+
+    // Different query → cache miss
+    const r3 = await runSingleReader(src, 'apple services growth', blueprint, { callLLM: good });
+    check('reader: different query → cache miss', r3.cacheHit === false);
+    check('reader: different query → second LLM call', calls === 2);
+
+    _clearReaderCache_FOR_TESTS();
+
+    // NO_RELEVANT_FACTS sentinel cached and reflected
+    const noFacts = async () => 'NO_RELEVANT_FACTS';
+    const r4 = await runSingleReader(src, 'q', blueprint, { callLLM: noFacts });
+    check('reader: sentinel → noRelevantFacts=true, summary empty',
+        r4.noRelevantFacts === true && r4.summary === '');
+    const r5 = await runSingleReader(src, 'q', blueprint, { callLLM: noFacts });
+    check('reader: sentinel cached, second call is cache hit with noRelevantFacts',
+        r5.cacheHit === true && r5.noRelevantFacts === true);
+
+    _clearReaderCache_FOR_TESTS();
+
+    // LLM throws → failed=true, nothing cached
+    const throwing = async (): Promise<string> => { throw new Error('boom'); };
+    const r6 = await runSingleReader(src, 'q', blueprint, { callLLM: throwing });
+    check('reader: throw → failed=true, empty summary',
+        r6.failed === true && r6.summary === '' && r6.cacheHit === false);
+    // Retry should NOT be a cache hit (failures aren't cached)
+    let retryCalls = 0;
+    const ok = async () => { retryCalls++; return '- recovered'; };
+    const r7 = await runSingleReader(src, 'q', blueprint, { callLLM: ok });
+    check('reader: failed state not cached — retry hits LLM',
+        r7.cacheHit === false && retryCalls === 1 && !r7.failed);
+}
+
+// ─── 48. runReaders: parallel aggregation + stats ─────────────────────────
+console.log('\n[48] runReaders parallel + stats');
+
+{
+    _clearReaderCache_FOR_TESTS();
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['X'], tickers: [],
+        keyMetrics: ['rev'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 't', investmentHorizon: 'i',
+        researchAngles: ['a'],
+    };
+    const sources: any[] = [
+        { title: 't1', url: 'https://a.com/1', content: 'c1', score: 0.9 },
+        { title: 't2', url: 'https://b.com/2', content: 'c2', score: 0.8 },
+        { title: 't3', url: 'https://c.com/3', content: 'c3', score: 0.7 },
+        { title: 't4', url: 'https://d.com/4', content: 'c4', score: 0.6 },
+    ];
+
+    // Mixed responses: one bullets, one no-facts, one empty (failure), one bullets
+    const mixedLLM = async (prompt: string) => {
+        if (prompt.includes('https://a.com/1')) return '- fact A';
+        if (prompt.includes('https://b.com/2')) return 'NO_RELEVANT_FACTS';
+        if (prompt.includes('https://c.com/3')) return '';
+        if (prompt.includes('https://d.com/4')) return '- fact D';
+        return '';
+    };
+
+    const stats = newReaderStats();
+    const results = await runReaders(sources, 'q', blueprint, stats, { callLLM: mixedLLM });
+    check('runReaders: returns one result per source', results.length === 4);
+    check('runReaders: stats.totalReaders = 4', stats.totalReaders === 4);
+    check('runReaders: stats.succeeded = 2', stats.succeeded === 2);
+    check('runReaders: stats.noRelevantFacts = 1', stats.noRelevantFacts === 1);
+    check('runReaders: stats.failed = 1', stats.failed === 1);
+    check('runReaders: stats.cacheHits = 0 on cold cache', stats.cacheHits === 0);
+
+    // Re-run same sources+query → all should hit cache (for non-failed)
+    const stats2 = newReaderStats();
+    const results2 = await runReaders(sources, 'q', blueprint, stats2, { callLLM: mixedLLM });
+    check('runReaders: cached successes appear as cacheHit on second run',
+        results2.filter(r => r.cacheHit).length >= 2);
+    check('runReaders: stats2.cacheHits counted',
+        stats2.cacheHits >= 2);
+}
+
+// ─── 49. buildExtractorPrompt: merges + cites by index ─────────────────────
+console.log('\n[49] Extractor prompt');
+
+{
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['earnings'],
+    };
+    const readers: ReaderResult[] = [
+        { url: 'https://a.com/1', title: 'T1', summary: '- Rev $94.9B', cacheHit: false, failed: false, noRelevantFacts: false },
+        { url: 'https://b.com/2', title: 'T2', summary: '', cacheHit: false, failed: true, noRelevantFacts: false },  // dropped
+        { url: 'https://c.com/3', title: 'T3', summary: '', cacheHit: false, failed: false, noRelevantFacts: true },  // dropped
+        { url: 'https://d.com/4', title: 'T4', summary: '- Services +12%', cacheHit: false, failed: false, noRelevantFacts: false },
+    ];
+    const prompt = buildExtractorPrompt(readers, blueprint, 0);
+    check('extractor prompt: omits failed + no-facts readers', !/T2/.test(prompt) && !/T3/.test(prompt));
+    check('extractor prompt: renumbers usable readers from [1]',
+        /\[1\] url=https:\/\/a\.com\/1/.test(prompt) && /\[2\] url=https:\/\/d\.com\/4/.test(prompt));
+    check('extractor prompt: reports usable count', /2 sources/.test(prompt));
+    check('extractor prompt: demands [N] attribution', /\[N\] tags/.test(prompt));
+    check('extractor prompt: mentions MERGE duplicates rule', /MERGE duplicate facts/.test(prompt));
+    check('extractor prompt: mentions FLAG conflicts rule', /FLAG conflicting numbers/.test(prompt));
+}
+
+// ─── 50. extractRoundIntelligence: Reader → Extractor + fallback ──────────
+console.log('\n[50] extractRoundIntelligence orchestration');
+
+{
+    _clearReaderCache_FOR_TESTS();
+    const blueprint: any = {
+        intent: 'company_analysis', targetEntities: ['Apple'], tickers: ['AAPL'],
+        keyMetrics: ['revenue'], subtopics: [], searchQueries: [],
+        secTargets: [], timeframe: 'FY24', investmentHorizon: '12mo',
+        researchAngles: ['earnings'],
+    };
+    const goodSources: any[] = [
+        { title: 't1', url: 'https://a.com/1', content: 'c1', score: 0.9 },
+        { title: 't2', url: 'https://b.com/2', content: 'c2', score: 0.8 },
+        { title: 't3', url: 'https://c.com/3', content: 'c3', score: 0.7 },
+    ];
+
+    // Happy path: all Readers succeed, Extractor produces synthesis
+    const okReader = async () => '- a fact';
+    const okExtractor = async () => 'MERGED: Rev $94.9B [1][2][3]';
+    const stats = newReaderStats();
+    const r = await extractRoundIntelligence(goodSources, 'q', blueprint, 0, stats, {
+        readerCallLLM: okReader, extractorCallLLM: okExtractor,
+    });
+    check('extract: returns Extractor output when 3+ Readers succeed',
+        r.intelligence === 'MERGED: Rev $94.9B [1][2][3]');
+    check('extract: fellBack=false on healthy round', r.fellBack === false);
+    check('extract: all readers succeeded', stats.succeeded === 3);
+    check('extract: fallbackRounds still 0', stats.fallbackRounds === 0);
+
+    _clearReaderCache_FOR_TESTS();
+
+    // Fallback path: all Readers fail → fallback to monolithic
+    const failReader = async (): Promise<string> => { throw new Error('boom'); };
+    let monolithicHit = 0;
+    const monolithic = async () => { monolithicHit++; return 'monolithic round brief'; };
+    const stats2 = newReaderStats();
+    const r2 = await extractRoundIntelligence(goodSources, 'q', blueprint, 0, stats2, {
+        readerCallLLM: failReader, monolithicCallLLM: monolithic,
+    });
+    check('extract: all Readers fail → fellBack=true',
+        r2.fellBack === true);
+    check('extract: fallback used monolithic LLM once',
+        monolithicHit === 1 && r2.intelligence === 'monolithic round brief');
+    check('extract: stats.fallbackRounds incremented',
+        stats2.fallbackRounds === 1);
+    check('extract: stats.failed = 3', stats2.failed === 3);
+
+    _clearReaderCache_FOR_TESTS();
+
+    // Borderline: 2 succeed, 1 fails → still falls back (below threshold of 3)
+    const spottyReader = async (prompt: string) => {
+        if (prompt.includes('https://a.com/1')) return '- fact';
+        if (prompt.includes('https://b.com/2')) return '- fact';
+        throw new Error('boom');
+    };
+    let spotMonolithic = 0;
+    const stats3 = newReaderStats();
+    const r3 = await extractRoundIntelligence(goodSources, 'q', blueprint, 0, stats3, {
+        readerCallLLM: spottyReader,
+        extractorCallLLM: async () => 'extracted',
+        monolithicCallLLM: async () => { spotMonolithic++; return 'mono fallback'; },
+    });
+    check('extract: 2/3 Readers → below threshold → fallback',
+        r3.fellBack === true && spotMonolithic === 1);
+
+    check('extract: READER_FALLBACK_THRESHOLD exported',
+        READER_FALLBACK_THRESHOLD === 3);
+}
+
+// ─── 51. Methodology surfaces Reader/Extractor stats ───────────────────────
+console.log('\n[51] Methodology includes Reader/Extractor line');
+
+{
+    const mdReaders = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 20, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        readers: {
+            totalReaders: 24, succeeded: 20, failed: 1, noRelevantFacts: 3,
+            cacheHits: 4, fallbackRounds: 0,
+        },
+    });
+    check('methodology: Reader/Extractor line present',
+        /\*\*Reader\/Extractor:\*\*/.test(mdReaders) && /20\/24 per-source Readers/.test(mdReaders));
+    check('methodology: Reader extras rendered (cache + no-facts + failed)',
+        /4 from cache/.test(mdReaders)
+        && /3 returned "no relevant facts"/.test(mdReaders)
+        && /1 failed/.test(mdReaders));
+
+    // Fallback case
+    const mdFallback = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 20, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+        readers: {
+            totalReaders: 24, succeeded: 2, failed: 22, noRelevantFacts: 0,
+            cacheHits: 0, fallbackRounds: 2,
+        },
+    });
+    check('methodology: fallback rounds rendered',
+        /2 rounds fell back to monolithic extractor/.test(mdFallback));
+
+    // Absent → no bullet
+    const mdAbsent = buildMethodologySection({
+        searchQueries: 5, rounds: 2, webSources: 20, secFilings: 2, ragSources: 3,
+        subQuestions: ['a'],
+        verification: { totalClaims: 5, groundedClaims: 5, multiSourceClaims: 3, singleSourceClaims: [], unsupportedClaims: [] },
+        citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+        confidence: 'High',
+    });
+    check('methodology: Reader line absent when field not provided',
+        !/\*\*Reader\/Extractor:\*\*/.test(mdAbsent));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

@@ -284,6 +284,14 @@ export interface ResearchReport {
             flagged: number;
             patternHits: Record<string, number>;
         };
+        readers?: {
+            totalReaders: number;
+            succeeded: number;
+            failed: number;
+            noRelevantFacts: number;
+            cacheHits: number;
+            fallbackRounds: number;
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -917,10 +925,289 @@ export async function distillKnowledgeBase(
     };
 }
 
+// ─── Reader / Extractor sub-agents (plan §6.1) ────────────────────────────
+// Replaces the single monolithic "extract intelligence" LLM call per round
+// with a two-stage pipeline:
+//
+//   Stage A (Reader):    N parallel per-source summarizers. Each Reader
+//                         gets ONE source + the blueprint focus, returns
+//                         a tight 3–6 bullet fact list or the sentinel
+//                         "NO_RELEVANT_FACTS". Cached by url+queryHash so
+//                         repeat runs and cross-session queries benefit.
+//
+//   Stage B (Extractor): cross-source synthesizer. Takes the N Reader
+//                         outputs, merges duplicates, flags conflicts,
+//                         produces the round's intelligence bullet brief.
+//
+// Why this matters:
+//   1. Parallelism — 12 sources in parallel (~2s) vs one mega prompt (~6s)
+//   2. Fault isolation — one noisy source doesn't poison the round
+//   3. Cleaner prompts — each Reader sees 700 chars, not 8400
+//   4. Per-source attribution — Extractor output can cite by source index
+//   5. Matches "every sub-agent returns a cleaned summary" (plan §6.1)
+//
+// Fallback: if fewer than READER_FALLBACK_THRESHOLD Readers succeed, fall
+// back to the monolithic prompt for safety.
+
+export const READER_FALLBACK_THRESHOLD = 3;   // need ≥3 Reader summaries to trust the Extractor
+const READER_NO_FACTS_SENTINEL = 'NO_RELEVANT_FACTS';
+
+export interface ReaderResult {
+    url: string;
+    title: string;
+    summary: string;        // bullets, or "" if failed / no facts
+    cacheHit: boolean;
+    failed: boolean;        // LLM threw or returned empty
+    noRelevantFacts: boolean; // Reader explicitly said source had nothing
+}
+
+export interface ReaderStats {
+    totalReaders: number;      // sum across all rounds
+    succeeded: number;         // produced a non-empty summary
+    failed: number;            // LLM threw or returned empty
+    noRelevantFacts: number;   // Reader said source was irrelevant
+    cacheHits: number;
+    fallbackRounds: number;    // rounds that fell back to monolithic due to Reader attrition
+}
+
+export function newReaderStats(): ReaderStats {
+    return {
+        totalReaders: 0,
+        succeeded: 0,
+        failed: 0,
+        noRelevantFacts: 0,
+        cacheHits: 0,
+        fallbackRounds: 0,
+    };
+}
+
+// Session-scoped Reader cache. Key format: `${url}::${queryHash}`.
+// `queryHash` is a short lowercase prefix of the research query — two
+// different queries should get different Reader summaries for the same
+// URL (different focus extracts different facts).
+const _readerCache = new Map<string, string>();
+
+export function _clearReaderCache_FOR_TESTS(): void {
+    _readerCache.clear();
+}
+
+export function buildReaderPrompt(
+    source: { title: string; content: string; url: string },
+    query: string,
+    blueprint: ResearchBlueprint,
+): string {
+    const focus = [
+        blueprint.targetEntities.join(', '),
+        blueprint.researchAngles.slice(0, 3).join(' | '),
+    ].filter(Boolean).join(' — ');
+    const metrics = blueprint.keyMetrics.slice(0, 6).join(', ') || '(none specified)';
+    const safeTitle = sanitizeAndTrack(source.title);
+    const safeContent = sanitizeAndTrack(source.content).substring(0, 1200);
+    return `You are one of several parallel research readers. Extract ALL specific facts from THIS ONE source that are relevant to the research focus. No interpretation, no narrative — just verifiable facts.
+
+RESEARCH FOCUS: ${focus || query}
+KEY METRICS: ${metrics}
+QUERY: ${query}
+
+SOURCE:
+<source url="${source.url}">
+title: ${safeTitle}
+content: ${safeContent}
+</source>
+
+Rules:
+1. Emit 3–6 tight bullet points, one fact per bullet.
+2. PRESERVE every specific number (revenue, growth %, margins, dates, headcount) verbatim.
+3. PRESERVE direct named quotes with attribution.
+4. Skip marketing language, generic filler, and anything not tied to the focus.
+5. If the source has NO relevant facts for this focus, return exactly: ${READER_NO_FACTS_SENTINEL}
+
+Return ONLY the bullets (or the sentinel). No preamble, no closing commentary.`;
+}
+
+export function parseReaderResponse(raw: string): { summary: string; noRelevantFacts: boolean } {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return { summary: '', noRelevantFacts: false };
+    // Explicit no-facts sentinel
+    if (trimmed === READER_NO_FACTS_SENTINEL || trimmed.toUpperCase().startsWith(READER_NO_FACTS_SENTINEL)) {
+        return { summary: '', noRelevantFacts: true };
+    }
+    // Clamp to a reasonable ceiling to prevent runaway Readers from bloating KB
+    const clamped = trimmed.length > 1800 ? trimmed.slice(0, 1800) + '…' : trimmed;
+    return { summary: clamped, noRelevantFacts: false };
+}
+
+// Fire one Reader for one source. Used by runReaders; exported for tests.
+export async function runSingleReader(
+    source: TavilySearchResult,
+    query: string,
+    blueprint: ResearchBlueprint,
+    options: {
+        model?: ResearchModelId;
+        callLLM?: (prompt: string) => Promise<string>;
+    } = {},
+): Promise<ReaderResult> {
+    const queryHash = (query || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 48);
+    const cacheKey = `${source.url}::${queryHash}`;
+    const cached = _readerCache.get(cacheKey);
+    if (cached !== undefined) {
+        const isNoFacts = cached === READER_NO_FACTS_SENTINEL;
+        return {
+            url: source.url,
+            title: source.title,
+            summary: isNoFacts ? '' : cached,
+            cacheHit: true,
+            failed: false,
+            noRelevantFacts: isNoFacts,
+        };
+    }
+
+    const prompt = buildReaderPrompt(source, query, blueprint);
+    const call = options.callLLM ?? ((p: string) => callDriver(p, 'lite', options.model));
+
+    let raw = '';
+    try {
+        raw = await call(prompt);
+    } catch {
+        return {
+            url: source.url,
+            title: source.title,
+            summary: '',
+            cacheHit: false,
+            failed: true,
+            noRelevantFacts: false,
+        };
+    }
+
+    const { summary, noRelevantFacts } = parseReaderResponse(raw);
+    if (noRelevantFacts) {
+        _readerCache.set(cacheKey, READER_NO_FACTS_SENTINEL);
+        return { url: source.url, title: source.title, summary: '', cacheHit: false, failed: false, noRelevantFacts: true };
+    }
+    if (summary) {
+        _readerCache.set(cacheKey, summary);
+        return { url: source.url, title: source.title, summary, cacheHit: false, failed: false, noRelevantFacts: false };
+    }
+    // Empty non-sentinel response → failed
+    return { url: source.url, title: source.title, summary: '', cacheHit: false, failed: true, noRelevantFacts: false };
+}
+
+// Fire N Readers in parallel. Updates stats in-place on the passed accumulator.
+export async function runReaders(
+    sources: TavilySearchResult[],
+    query: string,
+    blueprint: ResearchBlueprint,
+    stats: ReaderStats,
+    options: {
+        model?: ResearchModelId;
+        callLLM?: (prompt: string) => Promise<string>;
+    } = {},
+): Promise<ReaderResult[]> {
+    const results = await Promise.all(
+        sources.map(s => runSingleReader(s, query, blueprint, options).catch(() => ({
+            url: s.url,
+            title: s.title,
+            summary: '',
+            cacheHit: false,
+            failed: true,
+            noRelevantFacts: false,
+        } as ReaderResult))),
+    );
+    for (const r of results) {
+        stats.totalReaders += 1;
+        if (r.cacheHit) stats.cacheHits += 1;
+        if (r.failed) stats.failed += 1;
+        else if (r.noRelevantFacts) stats.noRelevantFacts += 1;
+        else if (r.summary) stats.succeeded += 1;
+    }
+    return results;
+}
+
+export function buildExtractorPrompt(
+    readers: ReaderResult[],
+    blueprint: ResearchBlueprint,
+    round: number,
+): string {
+    const usable = readers.filter(r => r.summary && !r.failed && !r.noRelevantFacts);
+    const sourceBlock = usable.map((r, i) =>
+        `[${i + 1}] url=${r.url}\n    title="${r.title}"\n    facts:\n${r.summary.split('\n').map(l => '      ' + l.replace(/^\s*[-*]\s*/, '• ')).join('\n')}`
+    ).join('\n\n');
+    return `You are the supervising research analyst. Merge the per-source fact summaries below into the round ${round + 1} intelligence brief.
+
+RESEARCH FOCUS: ${blueprint.targetEntities.join(', ') || blueprint.subtopics[0] || 'see angles'}
+RESEARCH ANGLES: ${blueprint.researchAngles.join(' | ') || '(none)'}
+KEY METRICS: ${blueprint.keyMetrics.join(', ') || '(none specified)'}
+
+PER-SOURCE SUMMARIES (${usable.length} sources):
+${sourceBlock}
+
+Rules:
+1. MERGE duplicate facts that appear across sources (e.g., Q4 revenue figure cited by three sources → one bullet, "$94.9B [1][3][5]").
+2. FLAG conflicting numbers with "(conflicts: source [X] says A, [Y] says B)".
+3. PRESERVE every specific number and named quote verbatim.
+4. GROUP by theme (financials, guidance, competitive, risks) where useful.
+5. Do NOT invent facts not present in the per-source summaries.
+6. Use inline [N] tags referring to the source indices above so downstream consumers can trace attribution.
+
+Return ONLY the merged bullet brief. No preamble, no closing commentary.`;
+}
+
+// Orchestrate the Reader → Extractor flow for one round. Returns the round
+// intelligence string (to append to knowledgeBase) plus updated stats.
+// Falls back to the monolithic prompt if too few Readers succeed.
+export async function extractRoundIntelligence(
+    sources: TavilySearchResult[],
+    query: string,
+    blueprint: ResearchBlueprint,
+    round: number,
+    stats: ReaderStats,
+    options: {
+        model?: ResearchModelId;
+        readerCallLLM?: (prompt: string) => Promise<string>;
+        extractorCallLLM?: (prompt: string) => Promise<string>;
+        monolithicCallLLM?: (prompt: string) => Promise<string>;
+    } = {},
+): Promise<{ intelligence: string; fellBack: boolean; readerResults: ReaderResult[] }> {
+    const sliced = sources.slice(0, 12);
+    const readerResults = await runReaders(sliced, query, blueprint, stats, {
+        model: options.model,
+        callLLM: options.readerCallLLM,
+    });
+    const usable = readerResults.filter(r => r.summary && !r.failed && !r.noRelevantFacts);
+
+    // Too few usable Reader outputs → fall back to the monolithic prompt.
+    if (usable.length < READER_FALLBACK_THRESHOLD) {
+        stats.fallbackRounds += 1;
+        const monolithPrompt = `You are a senior analyst. Extract ALL specific facts, figures, quotes, and data points from these sources relevant to: ${blueprint.targetEntities.join(', ')} — ${blueprint.researchAngles.slice(0, 3).join(' | ')}
+
+Sources:
+${sliced.map((s, i) => `[${i + 1}] ${sanitizeAndTrack(s.title)}\n${sanitizeAndTrack(s.content).substring(0, 700)}`).join('\n\n---\n\n')}
+
+Extract as bullet points. Be specific with numbers, dates, and source attribution. Skip marketing language.`;
+        const call = options.monolithicCallLLM ?? ((p: string) => callDriver(p, 'standard', options.model));
+        const intelligence = await call(monolithPrompt);
+        return { intelligence, fellBack: true, readerResults };
+    }
+
+    const extractorPrompt = buildExtractorPrompt(readerResults, blueprint, round);
+    const call = options.extractorCallLLM ?? ((p: string) => callDriver(p, 'standard', options.model));
+    const intelligence = await call(extractorPrompt);
+    return { intelligence, fellBack: false, readerResults };
+}
+
+// Active stats ref — iterativeSearch reads this to thread Reader stats
+// back out to performDeepResearch for metadata surfacing.
+let _activeReaderStats: ReaderStats | null = null;
+
+export function _setActiveReaderStats_FOR_TESTS(s: ReaderStats | null): void {
+    _activeReaderStats = s;
+}
+
 // ─── Iterative Search: Main loop ──────────────────────────────────────────────
 
 async function iterativeSearch(
     blueprint: ResearchBlueprint,
+    query: string,
     model: ResearchModelId | undefined,
     onProgress: (p: ResearchProgress) => void,
     maxRounds = 4,
@@ -968,17 +1255,26 @@ async function iterativeSearch(
             sourcesFound: allSources.length,
         });
 
-        // Extract intelligence from this round's sources
-        const roundIntelligence = await callDriver(
-            `You are a senior analyst. Extract ALL specific facts, figures, quotes, and data points from these sources relevant to: ${blueprint.targetEntities.join(', ')} — ${blueprint.researchAngles.slice(0, 3).join(' | ')}
-
-Sources:
-${fresh.slice(0, 12).map((s, i) => `[${i + 1}] ${sanitizeAndTrack(s.title)}\n${sanitizeAndTrack(s.content).substring(0, 700)}`).join('\n\n---\n\n')}
-
-Extract as bullet points. Be specific with numbers, dates, and source attribution. Skip marketing language.`,
-            'standard',
-            model,
+        // Extract intelligence via Reader → Extractor sub-agents (plan §6.1).
+        // Falls back to monolithic prompt if too few Readers succeed.
+        const readerStats = _activeReaderStats ?? newReaderStats();
+        onProgress({
+            stage: 'searching',
+            message: `Round ${round + 1}: ${fresh.length} parallel Readers extracting per-source facts…`,
+            progress: 17 + round * 8,
+            sourcesFound: allSources.length,
+        });
+        const { intelligence: roundIntelligence, fellBack } = await extractRoundIntelligence(
+            fresh, query, blueprint, round, readerStats, { model },
         );
+        if (fellBack) {
+            onProgress({
+                stage: 'searching',
+                message: `Round ${round + 1}: Readers degraded — fell back to monolithic extractor`,
+                progress: 18 + round * 8,
+                sourcesFound: allSources.length,
+            });
+        }
 
         knowledgeBase += `\n\n=== ROUND ${round + 1} INTELLIGENCE ===\n${roundIntelligence}`;
 
@@ -2596,6 +2892,7 @@ export interface MethodologyInputs {
     distillation?: DistillationResult;
     revisions?: RevisionResult;
     injectionDefense?: InjectionDefenseStats;
+    readers?: ReaderStats;
     hitl?: { used: boolean; modified: boolean };
 }
 
@@ -2652,6 +2949,15 @@ export function buildMethodologySection(m: MethodologyInputs): string {
         bullets.push(
             `**Self-revision:** reviewer examined ${m.revisions.issuesBefore} flagged issue${m.revisions.issuesBefore === 1 ? '' : 's'} but produced no accepted surgical edits — original draft retained`,
         );
+    }
+    if (m.readers && m.readers.totalReaders > 0) {
+        const rd = m.readers;
+        const parts: string[] = [`${rd.succeeded}/${rd.totalReaders} per-source Readers succeeded`];
+        if (rd.cacheHits > 0) parts.push(`${rd.cacheHits} from cache`);
+        if (rd.noRelevantFacts > 0) parts.push(`${rd.noRelevantFacts} returned "no relevant facts"`);
+        if (rd.failed > 0) parts.push(`${rd.failed} failed`);
+        if (rd.fallbackRounds > 0) parts.push(`${rd.fallbackRounds} round${rd.fallbackRounds === 1 ? '' : 's'} fell back to monolithic extractor`);
+        bullets.push(`**Reader/Extractor:** ${parts.join(' · ')}`);
     }
     if (m.injectionDefense && m.injectionDefense.scanned > 0 && m.injectionDefense.flagged > 0) {
         const ij = m.injectionDefense;
@@ -2715,6 +3021,10 @@ export const performDeepResearch = async (
     // run accumulate here so the final report can surface defense activity.
     const injectionStats = newInjectionStats();
     _activeInjectionStats = injectionStats;
+    // Per-query Reader/Extractor telemetry (plan §6.1). iterativeSearch reads
+    // this to attribute per-round Reader success/failure/cache/fallback.
+    const readerStats = newReaderStats();
+    _activeReaderStats = readerStats;
     throwIfAborted(signal);
 
     const driverModel = await pickDriver('premium', model);
@@ -2768,7 +3078,7 @@ export const performDeepResearch = async (
         ...secAndCompanyArrays
     ] = await Promise.all([
         // Iterative adaptive web search (up to 4 rounds)
-        iterativeSearch(blueprint, driverModel, onProgress, 4),
+        iterativeSearch(blueprint, query, driverModel, onProgress, 4),
 
         // Gravity RAG: agentic retrieval from local databases
         queryGravityRAG(query),
@@ -3056,6 +3366,7 @@ export const performDeepResearch = async (
         distillation,
         revisions: revisions.used ? revisions : undefined,
         injectionDefense: injectionStats.scanned > 0 ? injectionStats : undefined,
+        readers: readerStats.totalReaders > 0 ? readerStats : undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
     const finalMarkdown = markdown + methodologyMd;
@@ -3081,12 +3392,15 @@ export const performDeepResearch = async (
     const injTail = injectionStats.flagged > 0
         ? ` · ${injectionStats.flagged} injection attempt${injectionStats.flagged === 1 ? '' : 's'} blocked`
         : '';
+    const readerTail = readerStats.totalReaders > 0
+        ? ` · ${readerStats.succeeded}/${readerStats.totalReaders} readers`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${ctxTail}${revTail}${injTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -3166,6 +3480,7 @@ export const performDeepResearch = async (
                 flagged: injectionStats.flagged,
                 patternHits: { ...injectionStats.patternHits },
             } : undefined,
+            readers: readerStats.totalReaders > 0 ? { ...readerStats } : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };
@@ -3173,6 +3488,7 @@ export const performDeepResearch = async (
     _activeBudget = null;
     _activeSignal = null;
     _activeInjectionStats = null;
+    _activeReaderStats = null;
     return report;
 };
 

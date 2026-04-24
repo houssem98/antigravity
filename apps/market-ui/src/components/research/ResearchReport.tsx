@@ -393,7 +393,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                     </div>
 
                     {/* Phase-1/2 metadata strip: template, grounding, budget */}
-                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.hitl || report.metadata.budget) && (
+                    {(report.metadata.confidence || report.metadata.template || report.metadata.verification || report.metadata.claimAudit || report.metadata.citationDensity || report.metadata.factInference || report.metadata.sectionFanout || report.metadata.contextualRetrieval || report.metadata.distillation || report.metadata.revisions || report.metadata.injectionDefense || report.metadata.readers || report.metadata.hitl || report.metadata.budget) && (
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                             {report.metadata.confidence && (() => {
                                 const c = report.metadata.confidence;
@@ -545,6 +545,28 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         title={tip}>
                                         <Sparkles className="w-3 h-3" />
                                         <span>Distilled −{savedPct}%</span>
+                                    </div>
+                                );
+                            })()}
+                            {report.metadata.readers && report.metadata.readers.totalReaders > 0 && (() => {
+                                const rd = report.metadata.readers!;
+                                const successRate = rd.totalReaders > 0 ? rd.succeeded / rd.totalReaders : 0;
+                                const healthy = successRate >= 0.6 && rd.fallbackRounds === 0;
+                                const bg = healthy ? 'rgba(59, 130, 246, 0.12)' : 'rgba(249, 115, 22, 0.12)';
+                                const color = healthy ? '#93C5FD' : '#FDBA74';
+                                const border = healthy ? 'rgba(59, 130, 246, 0.3)' : 'rgba(249, 115, 22, 0.3)';
+                                const pieces: string[] = [];
+                                if (rd.cacheHits > 0) pieces.push(`${rd.cacheHits} from cache`);
+                                if (rd.noRelevantFacts > 0) pieces.push(`${rd.noRelevantFacts} reported no relevant facts`);
+                                if (rd.failed > 0) pieces.push(`${rd.failed} failed`);
+                                if (rd.fallbackRounds > 0) pieces.push(`${rd.fallbackRounds} round${rd.fallbackRounds === 1 ? '' : 's'} fell back to monolithic extractor`);
+                                const tip = `Reader/Extractor: ${rd.succeeded} of ${rd.totalReaders} per-source parallel Readers produced usable fact summaries${pieces.length > 0 ? ' (' + pieces.join(', ') + ')' : ''}. Each Reader reads ONE source; the Extractor merges their outputs into the round brief.`;
+                                return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+                                        style={{ background: bg, color, border: `1px solid ${border}` }}
+                                        title={tip}>
+                                        <Sparkles className="w-3 h-3" />
+                                        <span>Readers {rd.succeeded}/{rd.totalReaders}</span>
                                     </div>
                                 );
                             })()}
