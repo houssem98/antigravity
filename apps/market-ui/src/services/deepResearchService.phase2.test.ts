@@ -71,6 +71,7 @@ import {
     WORKFLOW_PRESETS,
     applyWorkflowToBlueprint,
     dedupeMerge,
+    buildLimitationsSection,
     type WorkflowId,
 } from './deepResearchService';
 import {
@@ -2930,6 +2931,201 @@ console.log('\n[59] Methodology includes workflow line');
     });
     check('methodology: workflow bullet absent when field missing',
         !/\*\*Workflow:\*\*/.test(mdAbsent));
+}
+
+// ─── 60. buildLimitationsSection ──────────────────────────────────────────
+console.log('\n[60] buildLimitationsSection');
+
+{
+    const baseMd = `# Report
+
+## Thesis
+
+Apple reported revenue of $94.9B [1]. Services grew 12% [2]. The iPhone segment remained stable.
+
+## Outlook
+
+Margins expected to expand.`;
+
+    const baseBlueprint = {
+        researchAngles: [
+            'iPhone revenue trajectory',
+            'Services growth and margin expansion',
+            'Competitive position versus Samsung',
+            'Emerging markets expansion strategy',   // keyword "emerging" not in report
+        ],
+        subtopics: [],
+    };
+
+    // Case A: all limitations present → full section rendered
+    const full = buildLimitationsSection({
+        markdown: baseMd,
+        blueprint: baseBlueprint,
+        verification: {
+            totalClaims: 5, groundedClaims: 3, multiSourceClaims: 2,
+            singleSourceClaims: [],
+            unsupportedClaims: ['Revenue of $123B (nowhere in sources)', 'CAGR of 18% (not grounded)'],
+        },
+        factInference: {
+            totalForwardLooking: 3, hedgedCount: 1, hedgingRate: 0.33,
+            unhedgedSamples: ['Margins expected to expand.'],
+        },
+        readers: {
+            totalReaders: 24, succeeded: 18, failed: 6, noRelevantFacts: 0,
+            cacheHits: 0, fallbackRounds: 1,
+        },
+        recency: {
+            total: 10, fresh: 1, recent: 2, stale: 3, archival: 3, undated: 1,
+        },
+        confidence: 'Medium',
+    });
+
+    // Body: "Apple reported revenue of $94.9B [1]. Services grew 12% [2]. The iPhone segment remained stable. ## Outlook Margins expected to expand."
+    // Keywords per angle that actually match the body (case-insensitive substring):
+    //   'iPhone revenue trajectory'         → iphone/revenue hit → COVERED
+    //   'Services growth and margin expansion' → services/margin hit → COVERED
+    //   'Competitive position versus Samsung' → none hit → UNDER-EXPLORED
+    //   'Emerging markets expansion strategy' → none hit → UNDER-EXPLORED
+    // So 2 under-explored angles, not 1.
+    check('limitations: section produced when flags present',
+        full.section.length > 0 && /## Limitations & Unknowns/.test(full.section));
+    check('limitations: under-explored angles listed',
+        /Under-explored angles/.test(full.section)
+        && /Emerging markets expansion strategy/.test(full.section));
+    check('limitations: under-explored count correct (2)',
+        /Under-explored angles \(2\)/.test(full.section));
+    check('limitations: covered angle "iPhone revenue trajectory" excluded',
+        !/iPhone revenue trajectory/.test(full.section.split('## Limitations')[1] || full.section));
+    check('limitations: unsupported claims section',
+        /Unsupported numeric claims \(2\)/.test(full.section));
+    check('limitations: unhedged forecasts section',
+        /Unhedged forecasts \(1\)/.test(full.section));
+    check('limitations: retrieval weakness — fallback round',
+        /fell back to monolithic/.test(full.section));
+    check('limitations: retrieval weakness — stale sources',
+        /archival .* or undated/.test(full.section) || /stale .* archival/.test(full.section));
+    check('limitations: medium-confidence calibration footer',
+        /Medium confidence/.test(full.section));
+    // Count: 2 under-explored + 2 unsupported + 1 unhedged + 3 retrieval signals
+    // (fallback + fail-rate ≥25% + stale-rate ≥40%) = 8
+    check('limitations: count aggregates',
+        full.count === 2 + 2 + 1 + 3);
+    check('limitations: topics array populated', full.topics.length >= 4);
+
+    // Case B: clean report → empty section, count=0
+    const clean = buildLimitationsSection({
+        markdown: 'iPhone revenue Services growth Competitive position Samsung Emerging markets',
+        blueprint: baseBlueprint,
+        verification: {
+            totalClaims: 5, groundedClaims: 5, multiSourceClaims: 4,
+            singleSourceClaims: [], unsupportedClaims: [],
+        },
+        factInference: {
+            totalForwardLooking: 0, hedgedCount: 0, hedgingRate: 1,
+            unhedgedSamples: [],
+        },
+        readers: {
+            totalReaders: 12, succeeded: 12, failed: 0, noRelevantFacts: 0,
+            cacheHits: 0, fallbackRounds: 0,
+        },
+        recency: {
+            total: 10, fresh: 8, recent: 2, stale: 0, archival: 0, undated: 0,
+        },
+        confidence: 'High',
+    });
+    check('limitations: clean report → empty section', clean.section === '');
+    check('limitations: clean report → count=0', clean.count === 0);
+    check('limitations: clean report → topics=[]', clean.topics.length === 0);
+
+    // Case C: only retrieval weakness, no claim-level issues
+    const retrievalOnly = buildLimitationsSection({
+        markdown: 'iPhone revenue Services Competitive position Samsung Emerging markets',
+        blueprint: baseBlueprint,
+        verification: {
+            totalClaims: 5, groundedClaims: 5, multiSourceClaims: 4,
+            singleSourceClaims: [], unsupportedClaims: [],
+        },
+        factInference: {
+            totalForwardLooking: 0, hedgedCount: 0, hedgingRate: 1,
+            unhedgedSamples: [],
+        },
+        readers: {
+            totalReaders: 24, succeeded: 12, failed: 12, noRelevantFacts: 0,
+            cacheHits: 0, fallbackRounds: 2,
+        },
+        recency: { total: 10, fresh: 8, recent: 2, stale: 0, archival: 0, undated: 0 },
+        confidence: 'Medium',
+    });
+    check('limitations: retrieval-only → section rendered',
+        /## Limitations & Unknowns/.test(retrievalOnly.section));
+    check('limitations: retrieval-only → no "Unsupported" block',
+        !/Unsupported numeric/.test(retrievalOnly.section));
+    check('limitations: 2 fallback rounds rendered',
+        /2 search rounds fell back/.test(retrievalOnly.section));
+    check('limitations: high fail rate (50%) rendered',
+        /12\/24 per-source Readers failed/.test(retrievalOnly.section));
+
+    // Case D: confidence calibration differs by level
+    const highInp = {
+        markdown: 'iPhone Services Samsung Emerging',
+        blueprint: baseBlueprint,
+        verification: {
+            totalClaims: 5, groundedClaims: 5, multiSourceClaims: 4,
+            singleSourceClaims: [], unsupportedClaims: ['One unsupported claim'],
+        },
+        confidence: 'High' as const,
+    };
+    const hi = buildLimitationsSection(highInp);
+    check('limitations: High-confidence footer', /High-confidence threshold/.test(hi.section));
+
+    const lowInp = { ...highInp, confidence: 'Low' as const };
+    const lo = buildLimitationsSection(lowInp);
+    check('limitations: Low-confidence footer', /Low confidence/.test(lo.section));
+}
+
+// ─── 61. Under-explored angle detection (keyword-based) ───────────────────
+console.log('\n[61] Under-explored angle detection');
+
+{
+    // Short words (<5 chars) shouldn't count — "AI" alone shouldn't mark an
+    // angle covered just because some stray "ai" substring appears.
+    const shortWords = buildLimitationsSection({
+        markdown: 'Growth metrics are stable.',
+        blueprint: {
+            researchAngles: ['AI risk'],   // both words <5 chars
+            subtopics: [],
+        },
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        confidence: 'Medium',
+    });
+    check('limitations: short-word angles skipped (no keywords ≥5 chars)',
+        !/AI risk/.test(shortWords.section));
+
+    // Case-insensitive match
+    const caseInsensitive = buildLimitationsSection({
+        markdown: 'REVENUE growth was strong.',
+        blueprint: {
+            researchAngles: ['revenue trajectory'],   // "revenue" matches caps
+            subtopics: [],
+        },
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        confidence: 'Medium',
+    });
+    check('limitations: case-insensitive keyword match',
+        !/revenue trajectory/.test(caseInsensitive.section));
+
+    // Angle with ONLY very short words → skipped entirely
+    const noneValid = buildLimitationsSection({
+        markdown: 'body',
+        blueprint: {
+            researchAngles: ['go us'],   // nothing ≥5 chars
+            subtopics: [],
+        },
+        verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] },
+        confidence: 'Medium',
+    });
+    check('limitations: angle with only tiny words → not flagged',
+        !/go us/.test(noneValid.section));
 }
 
 // ─── Report ──────────────────────────────────────────────────────────────────

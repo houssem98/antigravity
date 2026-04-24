@@ -449,6 +449,10 @@ export interface ResearchReport {
             anglesInjected: number;
             metricsInjected: number;
         };
+        limitations?: {
+            count: number;
+            topics: string[];
+        };
         hitl?: {
             used: boolean;     // onBlueprintReady was supplied and invoked
             modified: boolean; // user returned an edited blueprint (not just accepted)
@@ -3087,6 +3091,130 @@ export function summarizeRecency(
     return out;
 }
 
+// ─── Limitations & Unknowns (plan §10.3 — epistemic honesty) ──────────────
+// Institutional research reports ALWAYS end with an explicit "here's what
+// we couldn't verify" section. Commercial peers (Perplexity, ChatGPT) just
+// stop when they hit unknowns — which looks decisive but quietly hides
+// shaky claims. Real analyst memos list:
+//   • research angles where the retrieval produced no strong citation
+//   • numeric claims that the verifier could not ground
+//   • forward-looking statements that slipped through without hedging
+//   • signals of retrieval weakness (fallback rounds, stale sources)
+//
+// All of this data is already computed by the existing verifiers, so the
+// Limitations section is a PURE deterministic render — no new LLM call.
+
+export interface LimitationsInputs {
+    markdown: string;                         // to detect unreferenced angles
+    blueprint: Pick<ResearchBlueprint, 'researchAngles' | 'subtopics'>;
+    verification: VerificationResult;
+    factInference?: FactInferenceResult;
+    readers?: ReaderStats;
+    recency?: RecencyDistribution;
+    confidence: Confidence;
+}
+
+export interface LimitationsResult {
+    section: string;        // rendered markdown block, or '' if no limitations
+    count: number;          // total distinct limitation items surfaced
+    topics: string[];       // short labels for each limitation (for metadata badge)
+}
+
+// An angle is "under-explored" when no meaningful keyword from it appears
+// in the final report body. Heuristic only — keywords >4 chars, at least
+// ONE must appear in the markdown for the angle to count as covered.
+function findUnderexploredAngles(angles: string[], markdown: string): string[] {
+    if (!angles.length) return [];
+    const body = markdown.toLowerCase();
+    const out: string[] = [];
+    for (const a of angles) {
+        const keywords = a
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(w => w.length >= 5);
+        if (keywords.length === 0) continue;
+        const anyHit = keywords.some(k => body.includes(k));
+        if (!anyHit) out.push(a);
+    }
+    return out;
+}
+
+export function buildLimitationsSection(inp: LimitationsInputs): LimitationsResult {
+    const parts: string[] = [];
+    const topics: string[] = [];
+    let count = 0;
+
+    // ── 1. Under-explored research angles ──────────────────────────────
+    const angles = [...(inp.blueprint.researchAngles || []), ...(inp.blueprint.subtopics || [])];
+    const underexplored = findUnderexploredAngles(angles, inp.markdown);
+    if (underexplored.length > 0) {
+        parts.push(`**Under-explored angles (${underexplored.length})** — planned research angles that did not surface meaningful citations in the final report:\n${underexplored.slice(0, 6).map(a => `- ${a}`).join('\n')}`);
+        topics.push(`${underexplored.length} under-explored angle${underexplored.length === 1 ? '' : 's'}`);
+        count += underexplored.length;
+    }
+
+    // ── 2. Unsupported numeric claims ──────────────────────────────────
+    const unsupported = inp.verification.unsupportedClaims ?? [];
+    if (unsupported.length > 0) {
+        parts.push(`**Unsupported numeric claims (${unsupported.length})** — numbers present in the report that the source-matching verifier could not ground. Treat as analyst inference, not verified fact:\n${unsupported.slice(0, 6).map(c => `- ${c.length > 140 ? c.slice(0, 137) + '…' : c}`).join('\n')}`);
+        topics.push(`${unsupported.length} unsupported claim${unsupported.length === 1 ? '' : 's'}`);
+        count += unsupported.length;
+    }
+
+    // ── 3. Unhedged forecasts ──────────────────────────────────────────
+    const unhedged = inp.factInference?.unhedgedSamples ?? [];
+    if (unhedged.length > 0) {
+        parts.push(`**Unhedged forecasts (${unhedged.length})** — forward-looking statements presented without a hedge or attribution. The Revisor may have fixed most; anything below remained after surgical edits:\n${unhedged.slice(0, 4).map(s => `- ${s}`).join('\n')}`);
+        topics.push(`${unhedged.length} unhedged forecast${unhedged.length === 1 ? '' : 's'}`);
+        count += unhedged.length;
+    }
+
+    // ── 4. Retrieval weakness signals ──────────────────────────────────
+    const retrievalSignals: string[] = [];
+    if (inp.readers && inp.readers.fallbackRounds > 0) {
+        retrievalSignals.push(`${inp.readers.fallbackRounds} search round${inp.readers.fallbackRounds === 1 ? '' : 's'} fell back to monolithic extraction — parallel Readers degraded, evidence from those rounds is less finely attributed`);
+    }
+    if (inp.readers && inp.readers.totalReaders > 0) {
+        const failRate = inp.readers.failed / inp.readers.totalReaders;
+        if (failRate >= 0.25) {
+            retrievalSignals.push(`${inp.readers.failed}/${inp.readers.totalReaders} per-source Readers failed (${Math.round(failRate * 100)}%) — some source content was not cleanly extracted`);
+        }
+    }
+    if (inp.recency && inp.recency.total > 0) {
+        const staleOrOlder = inp.recency.stale + inp.recency.archival + inp.recency.undated;
+        const oldRate = staleOrOlder / inp.recency.total;
+        if (oldRate >= 0.4) {
+            retrievalSignals.push(`${staleOrOlder}/${inp.recency.total} web sources are stale (>1y), archival (>3y), or undated (${Math.round(oldRate * 100)}%) — market/consensus may have shifted since publication`);
+        }
+    }
+    if (retrievalSignals.length > 0) {
+        parts.push(`**Retrieval weakness signals** — caveats on the source set itself:\n${retrievalSignals.map(s => `- ${s}`).join('\n')}`);
+        topics.push(`${retrievalSignals.length} retrieval signal${retrievalSignals.length === 1 ? '' : 's'}`);
+        count += retrievalSignals.length;
+    }
+
+    if (parts.length === 0) return { section: '', count: 0, topics: [] };
+
+    // ── Confidence calibration footer ──────────────────────────────────
+    const calibration = inp.confidence === 'High'
+        ? 'Despite the limitations above, primary grounding signals cleared the High-confidence threshold. The report is suitable as a citation-grounded first draft.'
+        : inp.confidence === 'Medium'
+            ? 'With the limitations above, the report is at Medium confidence — re-verify the flagged claims and under-explored angles before any publication or investment decision.'
+            : 'With the limitations above, the report is at Low confidence — treat as a research starting point, not a deliverable. Primary-source verification is required on all flagged items.';
+
+    const section = `
+
+---
+
+## Limitations & Unknowns
+
+${parts.join('\n\n')}
+
+${calibration}`;
+
+    return { section, count, topics };
+}
+
 export function buildMethodologySection(m: MethodologyInputs): string {
     const v = m.verification;
     const d = m.citationDensity;
@@ -3607,7 +3735,20 @@ export const performDeepResearch = async (
         workflow: workflowStats ?? undefined,
         hitl: hitl.used ? { used: hitl.used, modified: hitl.modified } : undefined,
     });
-    const finalMarkdown = markdown + methodologyMd;
+
+    // Limitations & Unknowns block — deterministic render of verifier
+    // outputs + blueprint. Always runs; emits nothing when no limitations
+    // found. Sits BETWEEN the report body and the methodology footer so
+    // analysts see it in the natural reading flow, not below the fold.
+    const limitations = buildLimitationsSection({
+        markdown, blueprint,
+        verification, factInference,
+        readers: readerStats.totalReaders > 0 ? readerStats : undefined,
+        recency: recency.total > 0 ? recency : undefined,
+        confidence,
+    });
+
+    const finalMarkdown = markdown + limitations.section + methodologyMd;
 
     const auditTail = claimAudit
         ? ` · ${claimAudit.supported}/${claimAudit.audited} claims supported`
@@ -3636,12 +3777,15 @@ export const performDeepResearch = async (
     const workflowTail = workflowStats
         ? ` · ${workflowStats.label} workflow`
         : '';
+    const limitationsTail = limitations.count > 0
+        ? ` · ${limitations.count} limitation${limitations.count === 1 ? '' : 's'} flagged`
+        : '';
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
     onProgress({
         stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${workflowTail}${hitlTail}`,
+        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${injTail}${workflowTail}${limitationsTail}${hitlTail}`,
         progress: 100,
         sourcesFound: totalSources,
     });
@@ -3724,6 +3868,9 @@ export const performDeepResearch = async (
             readers: readerStats.totalReaders > 0 ? { ...readerStats } : undefined,
             recency: recency.total > 0 ? { ...recency } : undefined,
             workflow: workflowStats ?? undefined,
+            limitations: limitations.count > 0
+                ? { count: limitations.count, topics: [...limitations.topics] }
+                : undefined,
             hitl: hitl.used ? { used: true, modified: hitl.modified, cancelled: false } : undefined,
         },
     };
