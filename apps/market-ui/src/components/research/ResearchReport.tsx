@@ -10,7 +10,14 @@ import {
     Sparkles, TrendingUp, TrendingDown, Minus,
     Clock, Database, Calendar, Shield,
     Brain, HelpCircle, Headphones, FileText, X,
+    Table2,
 } from 'lucide-react';
+import {
+    buildDCFWorkbook,
+    buildCompsWorkbook,
+    buildLBOWorkbook,
+    downloadWorkbook,
+} from '../../services/financialModels';
 import type { ResearchReport as ReportType, Citation, TemplateKey } from '../../services/deepResearchService';
 import PdfPreview from './PdfPreview';
 
@@ -28,6 +35,18 @@ const TEMPLATE_LABELS: Record<TemplateKey, string> = {
     company_primer: 'Company Primer',
     comparative: 'Comparative Analysis',
 };
+
+/* First ticker mentioned in the report title or summary — used to seed the
+   filename of exported Excel models. Match up to 5 A-Z chars surrounded by
+   non-letters so we don't pick up random acronyms inside prose. */
+function firstTickerFrom(report: { title?: string; summary?: string }): string {
+    const sources = [report.title || '', report.summary || ''];
+    for (const s of sources) {
+        const m = s.match(/\b([A-Z]{2,5})\b/);
+        if (m) return m[1];
+    }
+    return '';
+}
 
 /* ─────────────────── Sentiment detector ─────────────────── */
 function detectSentiment(text: string): 'bullish' | 'bearish' | 'neutral' {
@@ -774,6 +793,24 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                     { icon: Share2, label: 'Share', fn: () => { navigator.share?.({ title: cleanTitle, text: report.summary }); setShowShareMenu(false); } },
                                     { icon: FileDown, label: 'Export to PDF', fn: () => { setShowPreview(true); setShowShareMenu(false); } },
                                     { icon: copied ? Check : Copy, label: copied ? 'Copied!' : 'Copy Markdown', fn: () => { handleCopy(); setShowShareMenu(false); } },
+                                    { icon: Table2, label: 'DCF model (.xlsx)', fn: async () => {
+                                        const ticker = firstTickerFrom(report);
+                                        const wb = buildDCFWorkbook({ companyName: cleanTitle, ticker });
+                                        await downloadWorkbook(wb, `${ticker || 'model'}-DCF.xlsx`);
+                                        setShowShareMenu(false);
+                                    } },
+                                    { icon: Table2, label: 'Comps model (.xlsx)', fn: async () => {
+                                        const ticker = firstTickerFrom(report);
+                                        const wb = buildCompsWorkbook({ companyName: cleanTitle, ticker });
+                                        await downloadWorkbook(wb, `${ticker || 'peers'}-Comps.xlsx`);
+                                        setShowShareMenu(false);
+                                    } },
+                                    { icon: Table2, label: 'LBO model (.xlsx)', fn: async () => {
+                                        const ticker = firstTickerFrom(report);
+                                        const wb = buildLBOWorkbook({ companyName: cleanTitle, ticker });
+                                        await downloadWorkbook(wb, `${ticker || 'target'}-LBO.xlsx`);
+                                        setShowShareMenu(false);
+                                    } },
                                 ].map(({ icon: Icon, label, fn }) => (
                                     <button key={label} onClick={fn}
                                         className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] transition-colors hover:bg-white/[0.04]"

@@ -3366,6 +3366,116 @@ console.log('\n[67] Methodology includes entailment line');
         !/\*\*Citation attribution/.test(mdAbsent));
 }
 
+// ─── 68. Financial model Excel templates ──────────────────────────────────
+console.log('\n[68] Financial model templates (DCF / Comps / LBO)');
+
+{
+    // Import lazily so the bundle only pays for exceljs when a test actually
+    // exercises it. All three generators must produce a valid workbook with
+    // the expected sheet structure and key formulas.
+    const fm = await import('./financialModels');
+
+    // ── DCF ───────────────────────────────────────────────────────────
+    const dcf = fm.buildDCFWorkbook({
+        companyName: 'Apple', ticker: 'AAPL',
+        projectionYears: 5, basePrice: 180, sharesOutstanding: 15_500,
+    });
+    const dcfSheets = dcf.worksheets.map(s => s.name);
+    check('dcf: has Inputs/Model/Summary/Notes sheets',
+        dcfSheets.includes('Inputs')
+        && dcfSheets.includes('Model')
+        && dcfSheets.includes('Summary')
+        && dcfSheets.includes('Notes'));
+
+    const dcfInputs = dcf.getWorksheet('Inputs')!;
+    check('dcf: Inputs has header row', dcfInputs.getCell('A1').value === 'Input');
+    // Expect the standard 15-input schema (BaseRevenue through Shares).
+    check('dcf: Inputs has ≥15 rows of inputs', dcfInputs.rowCount >= 16);
+    // BaseRevenue is a named cell ('BaseRevenue' defined on Inputs!B2)
+    check('dcf: BaseRevenue named range defined',
+        !!dcf.definedNames.getRanges('BaseRevenue').ranges.length);
+    check('dcf: WACC named range defined',
+        !!dcf.definedNames.getRanges('WACC').ranges.length);
+    check('dcf: TerminalGrowth named range defined',
+        !!dcf.definedNames.getRanges('TerminalGrowth').ranges.length);
+
+    const dcfModel = dcf.getWorksheet('Model')!;
+    // Revenue Y1 formula should reference BaseRevenue and Growth1
+    const revY1 = dcfModel.getCell('B2').value as any;
+    check('dcf: Revenue Y1 formula references BaseRevenue and Growth1',
+        revY1 && typeof revY1.formula === 'string'
+        && revY1.formula.includes('BaseRevenue') && revY1.formula.includes('Growth1'));
+    // Unlevered FCF row formula — NOPAT + D&A − Capex − ΔWC
+    const fcfY1 = dcfModel.getCell('B8').value as any;
+    check('dcf: Unlevered FCF formula sums 4 components',
+        fcfY1 && typeof fcfY1.formula === 'string'
+        && fcfY1.formula.match(/B4\+B5\+B6\+B7/));
+
+    const dcfSummary = dcf.getWorksheet('Summary')!;
+    // Terminal value formula must reference Gordon growth arithmetic
+    const tv = dcfSummary.getCell('B3').value as any;
+    check('dcf: Terminal value formula uses Gordon growth',
+        tv && typeof tv.formula === 'string'
+        && tv.formula.includes('TerminalGrowth')
+        && tv.formula.includes('WACC'));
+    // Implied-return row appears because basePrice was supplied
+    check('dcf: implied-return row present when basePrice set',
+        dcfSummary.rowCount >= 10);
+
+    // ── Comps ─────────────────────────────────────────────────────────
+    const comps = fm.buildCompsWorkbook({
+        companyName: 'Apple', ticker: 'AAPL',
+        peers: ['MSFT', 'GOOG', 'META'],
+    });
+    const compsSheet = comps.getWorksheet('Comps')!;
+    check('comps: header row includes EV/EBITDA', compsSheet.getCell('K1').value === 'EV / EBITDA');
+    // Target on row 2, three peers on rows 3–5, mean on 6, median on 7
+    check('comps: target row shows ticker', compsSheet.getCell('A2').value === 'AAPL');
+    check('comps: peer rows populated', compsSheet.getCell('A3').value === 'MSFT');
+    check('comps: mean/median rows added',
+        String(compsSheet.getCell('A6').value) === 'Mean (peers)'
+        && String(compsSheet.getCell('A7').value) === 'Median (peers)');
+    // Market cap formula on target row
+    const mcapTarget = compsSheet.getCell('D2').value as any;
+    check('comps: market cap = price × shares on target row',
+        mcapTarget && typeof mcapTarget.formula === 'string'
+        && mcapTarget.formula === 'B2*C2');
+    // Mean formula spans peer rows only
+    const meanEvEbitda = compsSheet.getCell('K6').value as any;
+    check('comps: mean EV/EBITDA uses peer rows 3..5',
+        meanEvEbitda && typeof meanEvEbitda.formula === 'string'
+        && meanEvEbitda.formula === 'AVERAGE(K3:K5)');
+    // Implied-valuation sheet
+    const implied = comps.getWorksheet('Implied')!;
+    check('comps: Implied sheet exists', !!implied);
+    check('comps: Implied EV/Sales row present',
+        String(implied.getCell('A2').value) === 'EV / Sales');
+
+    // ── LBO ───────────────────────────────────────────────────────────
+    const lbo = fm.buildLBOWorkbook({ companyName: 'Target', holdYears: 5 });
+    const lboInputs = lbo.getWorksheet('Inputs')!;
+    check('lbo: EBITDA0 named range', !!lbo.definedNames.getRanges('EBITDA0').ranges.length);
+    check('lbo: EntryMult named range', !!lbo.definedNames.getRanges('EntryMult').ranges.length);
+    check('lbo: InitialDebt named range', !!lbo.definedNames.getRanges('InitialDebt').ranges.length);
+    check('lbo: HoldYears named range', !!lbo.definedNames.getRanges('HoldYears').ranges.length);
+    check('lbo: TTM EBITDA input labeled', lboInputs.getCell('A2').value === 'TTM EBITDA');
+
+    const returns = lbo.getWorksheet('Returns')!;
+    const purchase = returns.getCell('B2').value as any;
+    check('lbo: purchase price = EBITDA0 × EntryMult',
+        purchase && typeof purchase.formula === 'string'
+        && purchase.formula === 'EBITDA0*EntryMult');
+    const moic = returns.getCell('B9').value as any;
+    check('lbo: MoIC = exit equity / sponsor equity',
+        moic && typeof moic.formula === 'string'
+        && moic.formula === 'B8/B4');
+    const irr = returns.getCell('B10').value as any;
+    check('lbo: IRR formula uses HoldYears exponent',
+        irr && typeof irr.formula === 'string'
+        && irr.formula.includes('HoldYears')
+        && irr.formula.includes('B8/B4'));
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
