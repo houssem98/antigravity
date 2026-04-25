@@ -3855,6 +3855,146 @@ console.log('\n[71] api.ts transport (trace context / idempotency / circuit brea
     check('export: RETRYABLE_STATUSES is a Set', api.RETRYABLE_STATUSES instanceof Set);
 }
 
+// ─── 72. Presentation deck planner (planDeckOutline) ──────────────────────
+console.log('\n[72] PowerPoint outline planner');
+
+{
+    const pres = await import('./presentationExport');
+
+    const baseReport: any = {
+        title: '# **Apple Q4 FY26 Earnings Preview**',
+        summary: 'Consensus expects revenue of $94.9B, up 6% YoY.',
+        markdown: [
+            '# Apple Q4 FY26 Earnings Preview',
+            '',
+            'Top-line summary paragraph.',
+            '',
+            '## Consensus Estimates',
+            '',
+            '- Revenue: $94.9B (+6% YoY) [1]',
+            '- EPS: $1.50 (+8% YoY) [2]',
+            '- Services growth: 12% [1][2]',
+            '',
+            '## Segments to Watch',
+            '',
+            'iPhone segment remains the bellwether at ~52% of revenue. Services continues to compound double-digit. Wearables flattish.',
+            '',
+            '## Methodology & Confidence',
+            '',
+            '- Should NOT appear as a section slide; methodology gets its own slide.',
+            '',
+            '## Limitations & Unknowns',
+            '',
+            '- Should be filtered out from section slides too.',
+        ].join('\n'),
+        citations: [
+            { id: 1, title: 'Apple IR Q3 transcript', url: 'https://ir.apple.com/q3', source: 'Web' },
+            { id: 2, title: 'Reuters: AAPL consensus', url: 'https://reuters.com/aapl', source: 'Web' },
+        ],
+        metadata: {
+            sourcesAnalyzed: 28,
+            generatedAt: '2026-04-20T12:00:00Z',
+            estimatedReadTime: 3,
+            modelUsed: 'gemini-2.5-pro',
+            template: 'earnings_preview',
+            confidence: 'High',
+            verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 6, singleSourceClaims: [], unsupportedClaims: [] },
+            citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
+            workflow: { id: 'earnings_reaction', label: 'Earnings Reaction', template: 'earnings_recap', anglesInjected: 4, metricsInjected: 3 },
+            budget: { llmCalls: 18, estimatedTokens: 124000 },
+        },
+    };
+
+    const slides = pres.planDeckOutline(baseReport);
+
+    // First slide is the title slide
+    check('deck: first slide is title', slides[0].kind === 'title');
+    const ts = slides[0] as any;
+    check('deck: title slide cleans markdown formatting',
+        ts.title === 'Apple Q4 FY26 Earnings Preview');
+    check('deck: title slide includes generation date',
+        ts.subtitle.includes('2026-04-20'));
+
+    // Section slides for the 2 H2 headings (excluding methodology + limitations)
+    const sectionSlides = slides.filter(s => s.kind === 'section');
+    check('deck: 2 section slides (Methodology + Limitations excluded)',
+        sectionSlides.length === 2);
+    check('deck: section heading captured',
+        (sectionSlides[0] as any).heading === 'Consensus Estimates');
+    check('deck: section bullets parsed from markdown list',
+        (sectionSlides[0] as any).bullets.length === 3);
+    check('deck: citation tags stripped from bullets',
+        !((sectionSlides[0] as any).bullets[0] as string).includes('[1]'));
+
+    // Prose-only section gets sentence-split bullets
+    check('deck: prose section gets sentence-split bullets',
+        (sectionSlides[1] as any).bullets.length >= 2);
+
+    // Methodology slide present with metadata-derived lines
+    const methSlide = slides.find(s => s.kind === 'methodology') as any;
+    check('deck: methodology slide present', methSlide !== undefined);
+    check('deck: methodology shows confidence',
+        methSlide.lines.some((l: string) => l.includes('Confidence: High')));
+    check('deck: methodology shows numeric grounding',
+        methSlide.lines.some((l: string) => l.includes('9/10 claims')));
+    check('deck: methodology shows workflow',
+        methSlide.lines.some((l: string) => l.includes('Earnings Reaction')));
+
+    // Citations slide
+    const citeSlide = slides.find(s => s.kind === 'citations') as any;
+    check('deck: citations slide present', citeSlide !== undefined);
+    check('deck: citations slide rows match citation count',
+        citeSlide.rows.length === 2);
+    check('deck: citation row preserves id', citeSlide.rows[0].id === 1);
+
+    // Long bullet truncation
+    const longReport: any = {
+        ...baseReport,
+        markdown: [
+            '## Long Section',
+            '- ' + 'A'.repeat(400),
+        ].join('\n'),
+        citations: [],
+        metadata: { ...baseReport.metadata, citationDensity: undefined },
+    };
+    const longSlides = pres.planDeckOutline(longReport);
+    const longSection = longSlides.find(s => s.kind === 'section') as any;
+    check('deck: long bullets truncated with ellipsis',
+        longSection && longSection.bullets[0].length <= 221
+        && longSection.bullets[0].endsWith('…'));
+
+    // Bullet pagination — many bullets split across multiple section slides
+    const bullets = Array.from({ length: 18 }, (_, i) => `- bullet number ${i}`).join('\n');
+    const bigReport: any = {
+        ...baseReport,
+        markdown: `## Mega\n${bullets}\n`,
+        citations: [],
+        metadata: { ...baseReport.metadata, citationDensity: undefined },
+    };
+    const bigSlides = pres.planDeckOutline(bigReport).filter(s => s.kind === 'section');
+    check('deck: bullet pagination splits at 8 per slide',
+        bigSlides.length >= 2 && (bigSlides[0] as any).bullets.length === 8);
+    check('deck: continuation slide labelled "(cont.)"',
+        (bigSlides[1] as any).heading.includes('(cont.)'));
+
+    // Empty/no-section report still produces a title slide + methodology
+    const minimalReport: any = {
+        title: 'Minimal',
+        summary: '',
+        markdown: 'just a paragraph, no headings',
+        citations: [],
+        metadata: { sourcesAnalyzed: 0, generatedAt: '2026-04-25', estimatedReadTime: 1, modelUsed: 'm', template: 'thematic',
+            verification: { totalClaims: 0, groundedClaims: 0, multiSourceClaims: 0, singleSourceClaims: [], unsupportedClaims: [] } },
+    };
+    const minSlides = pres.planDeckOutline(minimalReport);
+    check('deck: minimal report still has title slide',
+        minSlides[0].kind === 'title');
+    check('deck: minimal report has no section slides',
+        minSlides.filter(s => s.kind === 'section').length === 0);
+    check('deck: minimal report still has methodology slide',
+        minSlides.some(s => s.kind === 'methodology'));
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);

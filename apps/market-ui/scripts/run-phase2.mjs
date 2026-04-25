@@ -27,11 +27,12 @@ try {
             '--platform=node',
             '--format=esm',
             '--define:import.meta.env={}',
-            // exceljs uses dynamic require() for node builtins and stream
-            // helpers — esbuild's ESM bundler can't inline those, so we
-            // externalize the package and let Node's runtime CJS loader
-            // resolve it natively.
+            // exceljs and pptxgenjs both use dynamic require() for Node
+            // builtins and stream helpers — esbuild's ESM bundler can't
+            // inline those, so we externalize the packages and let Node's
+            // runtime CJS loader resolve them natively.
             '--external:exceljs',
+            '--external:pptxgenjs',
             `--outfile=${out}`,
         ],
         { stdio: 'inherit', cwd: repoRoot, shell: process.platform === 'win32' },

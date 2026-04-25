@@ -18,6 +18,7 @@ import {
     buildLBOWorkbook,
     downloadWorkbook,
 } from '../../services/financialModels';
+import { exportReportToPptx } from '../../services/presentationExport';
 import type { ResearchReport as ReportType, Citation, TemplateKey } from '../../services/deepResearchService';
 import PdfPreview from './PdfPreview';
 
@@ -809,6 +810,10 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                         const ticker = firstTickerFrom(report);
                                         const wb = buildLBOWorkbook({ companyName: cleanTitle, ticker });
                                         await downloadWorkbook(wb, `${ticker || 'target'}-LBO.xlsx`);
+                                        setShowShareMenu(false);
+                                    } },
+                                    { icon: FileDown, label: 'PowerPoint deck (.pptx)', fn: async () => {
+                                        await exportReportToPptx(report);
                                         setShowShareMenu(false);
                                     } },
                                 ].map(({ icon: Icon, label, fn }) => (
