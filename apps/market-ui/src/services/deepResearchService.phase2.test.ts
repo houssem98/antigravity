@@ -3635,6 +3635,158 @@ console.log('\n[69] Macro expansion (BLS / World Bank / ECB / FRED vintages)');
     }
 }
 
+// ─── 70. SEC enhancements: XBRL concepts / 10-K tagger / 8-K items / CIK ──
+console.log('\n[70] SEC concept-normalization + section taggers + ticker index');
+
+{
+    const sec = await import('./secEdgarService');
+
+    // ── normalizeXBRLTag ─────────────────────────────────────────────
+    check('xbrl: Revenues → revenue_total',
+        sec.normalizeXBRLTag('Revenues') === 'revenue_total');
+    check('xbrl: us-gaap: prefix stripped',
+        sec.normalizeXBRLTag('us-gaap:SalesRevenueNet') === 'revenue_total');
+    check('xbrl: NetIncomeLoss → net_income',
+        sec.normalizeXBRLTag('NetIncomeLoss') === 'net_income');
+    check('xbrl: EarningsPerShareDiluted → eps_diluted',
+        sec.normalizeXBRLTag('EarningsPerShareDiluted') === 'eps_diluted');
+    check('xbrl: case-insensitive match',
+        sec.normalizeXBRLTag('REVENUES') === 'revenue_total');
+    check('xbrl: unknown tag → null',
+        sec.normalizeXBRLTag('SomeCustomCompanyExtension') === null);
+
+    // ── canonicalizeFacts with preference ordering ───────────────────
+    const facts1 = sec.canonicalizeFacts({
+        Revenues: 100, SalesRevenueNet: 99,   // Revenues wins (earlier in list)
+        CostOfRevenue: 60,
+        'us-gaap:OperatingIncomeLoss': 30,
+        'us-gaap:NetIncomeLoss': 20,
+        'us-gaap:NetCashProvidedByUsedInOperatingActivities': 35,
+        'us-gaap:PaymentsToAcquirePropertyPlantAndEquipment': 10,
+    });
+    check('canonicalize: preference ordering (Revenues wins)',
+        facts1.revenue_total === 100);
+    check('canonicalize: us-gaap: prefix recognized',
+        facts1.operating_income === 30 && facts1.net_income === 20);
+    check('canonicalize: FCF derived = OCF - capex',
+        facts1.free_cash_flow === 25);
+
+    const facts2 = sec.canonicalizeFacts({ Assets: 500, Liabilities: 300 });
+    check('canonicalize: single-tag facts ok',
+        facts2.total_assets === 500 && facts2.total_liabilities === 300);
+    check('canonicalize: no FCF when inputs missing',
+        facts2.free_cash_flow === undefined);
+
+    // ── 10-K section tagger ──────────────────────────────────────────
+    const tocBody = 'junk header ' + 'x'.repeat(50);
+    const item1Body = 'Business content about the company. ' + 'y'.repeat(500);
+    const item1aBody = 'Risk factors content. ' + 'z'.repeat(500);
+    const item7Body = 'MD&A content. ' + 'w'.repeat(500);
+    const tenKText = [
+        tocBody,
+        'Item 1. Business',
+        item1Body,
+        'Item 1A. Risk Factors',
+        item1aBody,
+        'Item 7. Management\'s Discussion',
+        item7Body,
+    ].join('\n');
+
+    const sections = sec.tag10KSections(tenKText);
+    check('10-K tagger: 3 sections identified',
+        sections.length === 3);
+    check('10-K tagger: item_1 first',
+        sections[0].item === 'item_1');
+    check('10-K tagger: item_1a next',
+        sections[1].item === 'item_1a');
+    check('10-K tagger: item_7 last',
+        sections[2].item === 'item_7');
+    check('10-K tagger: body content included',
+        sections[0].body.includes('Business content'));
+    check('10-K tagger: startOffset < endOffset',
+        sections.every(s => s.startOffset < s.endOffset));
+
+    // TOC-style text (short stubs between headings) should be filtered out
+    const tocText = 'Item 1. Business\nItem 1A. Risk Factors\nItem 7. MD&A\n(actual content)';
+    const tocSections = sec.tag10KSections(tocText);
+    check('10-K tagger: TOC-style short stubs dropped',
+        tocSections.length <= 1);
+
+    // Item labels exist for all keys
+    check('10-K labels: item_1a labelled Risk Factors',
+        sec.TENK_ITEM_LABELS.item_1a === 'Risk Factors');
+    check('10-K labels: item_7 labelled MD&A',
+        sec.TENK_ITEM_LABELS.item_7 === 'MD&A');
+
+    // ── 8-K item parser ──────────────────────────────────────────────
+    const eightK = `FORM 8-K
+
+Item 2.02 Results of Operations and Financial Condition.
+
+Issuer announces Q4 earnings.
+
+Item 9.01 Financial Statements and Exhibits.
+
+Exhibit 99.1: press release.`;
+    const items = sec.parse8KItems(eightK);
+    check('8-K parser: 2 items identified',
+        items.length === 2);
+    check('8-K parser: earnings item (2.02) captured',
+        items.some(i => i.itemNumber === '2.02' && i.label.includes('Results of Operations')));
+    check('8-K parser: exhibits item (9.01) captured',
+        items.some(i => i.itemNumber === '9.01'));
+    check('8-K parser: deduplicates repeated items',
+        sec.parse8KItems('Item 2.02 first\nItem 2.02 duplicate').length === 1);
+    check('8-K parser: unknown item gets fallback label',
+        sec.parse8KItems('Item 9.99 custom').some(i => i.label.includes('Unknown')));
+
+    // ── CIK / ticker resolution ──────────────────────────────────────
+    check('sec: padCik pads to 10 digits',
+        sec.padCik('320193') === '0000320193');
+    check('sec: padCik strips non-digits',
+        sec.padCik('CIK-320193') === '0000320193');
+    check('sec: padCik already-padded passes through',
+        sec.padCik('0000320193') === '0000320193');
+
+    const tickerJson = {
+        '0': { cik_str: 320193, ticker: 'AAPL', title: 'Apple Inc.' },
+        '1': { cik_str: 789019, ticker: 'MSFT', title: 'Microsoft Corp' },
+        '2': { cik_str: 0, ticker: '',     title: 'invalid row' },
+    };
+    const idx = sec.parseTickerFileJson(tickerJson);
+    check('sec: parses 2 valid rows (invalid row skipped)',
+        idx.size === 2);
+    check('sec: AAPL → CIK 0000320193',
+        idx.get('AAPL')?.cik === '0000320193');
+    check('sec: MSFT title preserved',
+        idx.get('MSFT')?.title === 'Microsoft Corp');
+
+    // ── End-to-end resolver via fetch mock ───────────────────────────
+    const origFetch = globalThis.fetch;
+    sec._clearTickerIndex_FOR_TESTS();
+    try {
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('company_tickers.json')) {
+                return new Response(JSON.stringify(tickerJson), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+        const aapl = await sec.resolveTickerToCik('aapl');
+        check('resolver: ticker lookup (case-insensitive)',
+            aapl?.cik === '0000320193' && aapl?.title === 'Apple Inc.');
+
+        const back = await sec.resolveCikToTicker(789019);
+        check('resolver: reverse CIK → ticker', back?.ticker === 'MSFT');
+
+        const missing = await sec.resolveTickerToCik('NONEXISTENT');
+        check('resolver: unknown ticker → null', missing === null);
+    } finally {
+        globalThis.fetch = origFetch;
+        sec._clearTickerIndex_FOR_TESTS();
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
