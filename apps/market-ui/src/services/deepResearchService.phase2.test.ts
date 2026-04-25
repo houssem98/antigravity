@@ -3787,6 +3787,74 @@ Exhibit 99.1: press release.`;
     }
 }
 
+// ─── 71. Transport hardening: trace context + idempotency + breaker ───────
+console.log('\n[71] api.ts transport (trace context / idempotency / circuit breaker)');
+
+{
+    const api = await import('./api');
+
+    // ── traceparent format ────────────────────────────────────────────
+    const tp = api.newTraceparent();
+    check('traceparent: valid W3C format', api.isValidTraceparent(tp));
+    check('traceparent: rejects all-zero traceId',
+        !api.isValidTraceparent('00-00000000000000000000000000000000-0123456789abcdef-01'));
+    check('traceparent: rejects all-zero spanId',
+        !api.isValidTraceparent('00-deadbeefdeadbeefdeadbeefdeadbeef-0000000000000000-01'));
+    check('traceparent: rejects malformed string',
+        !api.isValidTraceparent('not-a-traceparent'));
+    check('traceparent: trace ids unique on subsequent calls',
+        api.newTraceparent() !== api.newTraceparent());
+
+    // ── idempotency key ───────────────────────────────────────────────
+    const k1 = api.newIdempotencyKey();
+    const k2 = api.newIdempotencyKey();
+    check('idempotency: unique', k1 !== k2);
+    check('idempotency: non-empty', typeof k1 === 'string' && k1.length >= 32);
+
+    // ── backoff delay shape ──────────────────────────────────────────
+    const d1 = api.backoffDelayMs(1, { baseMs: 100, maxMs: 1000 });
+    const d2 = api.backoffDelayMs(2, { baseMs: 100, maxMs: 1000 });
+    const d3 = api.backoffDelayMs(3, { baseMs: 100, maxMs: 1000 });
+    check('backoff: attempt 1 ~ 75–125ms', d1 >= 75 && d1 <= 125);
+    check('backoff: attempt 2 ~ 150–250ms', d2 >= 150 && d2 <= 250);
+    check('backoff: attempt 3 ~ 300–500ms', d3 >= 300 && d3 <= 500);
+    // Many samples — capped at maxMs+25% jitter ceiling
+    let maxObserved = 0;
+    for (let i = 0; i < 20; i++) {
+        const d = api.backoffDelayMs(20, { baseMs: 100, maxMs: 1000 });
+        maxObserved = Math.max(maxObserved, d);
+    }
+    check('backoff: respects maxMs ceiling (with jitter ≤ 1250)',
+        maxObserved <= 1250);
+
+    // ── retryable statuses set ───────────────────────────────────────
+    check('retry: 408 is retryable', api.RETRYABLE_STATUSES.has(408));
+    check('retry: 429 is retryable', api.RETRYABLE_STATUSES.has(429));
+    check('retry: 503 is retryable', api.RETRYABLE_STATUSES.has(503));
+    check('retry: 401 NOT retryable', !api.RETRYABLE_STATUSES.has(401));
+    check('retry: 404 NOT retryable', !api.RETRYABLE_STATUSES.has(404));
+    check('retry: 200 NOT retryable', !api.RETRYABLE_STATUSES.has(200));
+
+    // ── circuit breaker state machine ────────────────────────────────
+    api._resetBreakers_FOR_TESTS();
+    const now = Date.now();
+    check('breaker: closed by default', api.isBreakerOpen('localhost:3002', now) === false);
+
+    // The breaker only flips through actual fetch failures inside authFetch,
+    // which we can't easily exercise without a working auth mock. We only
+    // assert the read-only API here; the open/close behavior is covered by
+    // the contract that recordFailure() trips after threshold consecutive
+    // failures in the fetch path (validated indirectly via the existing
+    // performDeepResearch retry path).
+
+    // ── Symbols exported and stable ──────────────────────────────────
+    check('export: newTraceparent is a function', typeof api.newTraceparent === 'function');
+    check('export: newIdempotencyKey is a function', typeof api.newIdempotencyKey === 'function');
+    check('export: backoffDelayMs is a function', typeof api.backoffDelayMs === 'function');
+    check('export: isBreakerOpen is a function', typeof api.isBreakerOpen === 'function');
+    check('export: RETRYABLE_STATUSES is a Set', api.RETRYABLE_STATUSES instanceof Set);
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
