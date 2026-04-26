@@ -3995,6 +3995,119 @@ console.log('\n[72] PowerPoint outline planner');
         minSlides.some(s => s.kind === 'methodology'));
 }
 
+// ─── 73. Entity graph + canonical resolver (§10 #10) ──────────────────────
+console.log('\n[73] Entity graph + canonical resolver');
+
+{
+    const eg = await import('./entityGraph');
+
+    // ── Suffix normalization ─────────────────────────────────────────
+    check('normalize: strips Inc.', eg.normalizeCompanyName('Apple Inc.') === 'apple');
+    check('normalize: strips Inc',  eg.normalizeCompanyName('Apple Inc')  === 'apple');
+    check('normalize: strips Corporation', eg.normalizeCompanyName('Microsoft Corporation') === 'microsoft');
+    check('normalize: strips Corp.', eg.normalizeCompanyName('Microsoft Corp.') === 'microsoft');
+    check('normalize: handles trailing comma', eg.normalizeCompanyName('Apple, Inc.') === 'apple');
+    check('normalize: stacked suffixes', eg.normalizeCompanyName('Foo Holdings Inc') === 'foo');
+    check('normalize: case-insensitive', eg.normalizeCompanyName('APPLE INC') === 'apple');
+    check('normalize: preserves & and -',
+        eg.normalizeCompanyName('AT&T Inc.') === 'at&t' ||
+        eg.normalizeCompanyName('AT&T Inc.') === 'at & t');
+    check('normalize: empty string → empty', eg.normalizeCompanyName('') === '');
+
+    // ── Ticker normalization ─────────────────────────────────────────
+    check('ticker: lowercase → upper', eg.normalizeTicker('aapl') === 'AAPL');
+    check('ticker: $ prefix stripped', eg.normalizeTicker('$AAPL') === 'AAPL');
+    check('ticker: whitespace trimmed', eg.normalizeTicker('  AAPL  ') === 'AAPL');
+
+    // ── Subsidiary edges registry ────────────────────────────────────
+    check('subsidiaries: Instagram → META',
+        eg.SUBSIDIARY_EDGES['instagram'] === 'META');
+    check('subsidiaries: YouTube → GOOG',
+        eg.SUBSIDIARY_EDGES['youtube'] === 'GOOG');
+    check('subsidiaries: AWS → AMZN', eg.SUBSIDIARY_EDGES['aws'] === 'AMZN');
+    check('subsidiaries: GitHub → MSFT',
+        eg.SUBSIDIARY_EDGES['github'] === 'MSFT');
+
+    // ── Resolver: seed-based tests (no fetch) ────────────────────────
+    eg._clearEntityIndex_FOR_TESTS();
+    eg._seedEntityIndex_FOR_TESTS([
+        { ticker: 'AAPL', cik: '0000320193', title: 'Apple Inc.' },
+        { ticker: 'MSFT', cik: '0000789019', title: 'Microsoft Corp' },
+        { ticker: 'META', cik: '0001326801', title: 'Meta Platforms, Inc.' },
+        { ticker: 'GOOG', cik: '0001652044', title: 'Alphabet Inc.' },
+        { ticker: 'AMZN', cik: '0001018724', title: 'Amazon.com, Inc.' },
+        { ticker: 'TM',   cik: '0001094517', title: 'TOYOTA MOTOR CORP' },
+        { ticker: 'GM',   cik: '0001467858', title: 'General Motors Co' },
+    ]);
+
+    // Direct ticker
+    const r1 = await eg.resolveEntity('AAPL');
+    check('resolve: direct ticker matches',
+        r1?.canonicalTicker === 'AAPL' && r1?.matchType === 'ticker');
+    check('resolve: ticker confidence = 1', r1?.confidence === 1);
+
+    const r2 = await eg.resolveEntity('aapl');
+    check('resolve: lowercase ticker normalizes', r2?.canonicalTicker === 'AAPL');
+
+    const r3 = await eg.resolveEntity('$MSFT');
+    check('resolve: dollar-prefix ticker', r3?.canonicalTicker === 'MSFT');
+
+    // Name match — variant suffixes
+    const r4 = await eg.resolveEntity('Apple Inc');
+    check('resolve: "Apple Inc" → AAPL', r4?.canonicalTicker === 'AAPL');
+
+    const r5 = await eg.resolveEntity('Apple Inc.');
+    check('resolve: "Apple Inc." → AAPL', r5?.canonicalTicker === 'AAPL');
+
+    const r6 = await eg.resolveEntity('Apple, Inc.');
+    check('resolve: "Apple, Inc." → AAPL', r6?.canonicalTicker === 'AAPL');
+
+    const r7 = await eg.resolveEntity('APPLE INC');
+    check('resolve: case-insensitive name match', r7?.canonicalTicker === 'AAPL');
+
+    const r8 = await eg.resolveEntity('Microsoft Corporation');
+    check('resolve: "Microsoft Corporation" → MSFT (suffix variant)',
+        r8?.canonicalTicker === 'MSFT');
+
+    // Subsidiary alias
+    const r9 = await eg.resolveEntity('Instagram');
+    check('resolve: subsidiary alias (Instagram → META)',
+        r9?.canonicalTicker === 'META' && r9?.matchType === 'alias');
+    check('resolve: alias confidence < 1', (r9?.confidence ?? 1) < 1);
+
+    const r10 = await eg.resolveEntity('YouTube');
+    check('resolve: YouTube → GOOG', r10?.canonicalTicker === 'GOOG');
+
+    const r11 = await eg.resolveEntity('AWS');
+    check('resolve: AWS → AMZN (ticker-shaped alias still resolves)',
+        r11?.canonicalTicker === 'AMZN');
+
+    // Unknown returns null
+    const rNone = await eg.resolveEntity('Nonexistent Tickerless Co');
+    check('resolve: unknown → null', rNone === null);
+
+    const rEmpty = await eg.resolveEntity('');
+    check('resolve: empty string → null', rEmpty === null);
+
+    // Batch resolve
+    const batch = await eg.resolveEntities(['AAPL', 'Microsoft', 'YouTube', 'asdf']);
+    check('batch: 4 results returned', batch.length === 4);
+    check('batch: third is alias',  batch[2]?.matchType === 'alias');
+    check('batch: last is null',    batch[3] === null);
+
+    // isSameEntity dedup
+    const same1 = await eg.isSameEntity('AAPL', 'Apple Inc.');
+    check('sameEntity: ticker vs name', same1 === true);
+
+    const same2 = await eg.isSameEntity('Apple', 'Microsoft');
+    check('sameEntity: different companies → false', same2 === false);
+
+    const same3 = await eg.isSameEntity('AAPL', 'apple inc');
+    check('sameEntity: ticker vs case-insensitive name', same3 === true);
+
+    eg._clearEntityIndex_FOR_TESTS();
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
