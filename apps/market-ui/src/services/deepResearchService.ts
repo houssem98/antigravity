@@ -21,6 +21,7 @@ import { queryGravityRAG, formatRAGSourcesForPrompt, formatRAGStructuredData, ty
 import { searchFilings, type SECFiling } from './secEdgarService';
 import { getCompanyOverview, type CompanyOverview } from './marketData';
 import { getMacroSummaryText } from './fredService';
+import { getInnovationSummaryText } from './innovationService';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
 
@@ -3686,11 +3687,25 @@ export const performDeepResearch = async (
     throwIfAborted(signal);
 
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
-    // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro
+    // Innovation gate — only fire patent / trial / FDA fetches when the
+    // blueprint actually touches pharma / biotech / innovation themes.
+    // Saves ~1s latency on earnings / thesis / macro queries that don't
+    // need this signal.
+    const innovationHaystack = [
+        ...blueprint.targetEntities,
+        ...blueprint.subtopics,
+        ...blueprint.researchAngles,
+        ...blueprint.keyMetrics,
+    ].join(' ').toLowerCase();
+    const fireInnovation = blueprint.intent === 'thematic'
+        || /\bpatent|\btrial|\bfda\b|clinical|therap|drug|biotech|pharma|vaccin|oncolog|approval|nct\d+/i.test(innovationHaystack);
+
+    // Fire all data sources in parallel: web search, RAG, SEC, market data, FRED macro, innovation
     let [
         { sources: webSources, knowledgeBase, roundsRun, distillation },
         ragResult,
         macroText,
+        innovationText,
         ...secAndCompanyArrays
     ] = await Promise.all([
         // Iterative adaptive web search (up to 4 rounds)
@@ -3702,6 +3717,15 @@ export const performDeepResearch = async (
         // FRED macro snapshot — free Federal Reserve data (never blocks)
         getMacroSummaryText(),
 
+        // Innovation snapshot — patents + trials + FDA. Only fires for
+        // pharma/biotech/thematic queries. Returns '' when irrelevant.
+        fireInnovation
+            ? getInnovationSummaryText({
+                company: blueprint.targetEntities[0],
+                condition: blueprint.subtopics[0] || blueprint.researchAngles[0],
+            }).catch(() => '')
+            : Promise.resolve(''),
+
         // SEC EDGAR filings (one Promise per company target)
         ...blueprint.secTargets.slice(0, 5).map(company =>
             searchFilings(company, ['10-K', '10-Q', '8-K'], 3).catch(() => [] as SECFiling[])
@@ -3711,7 +3735,7 @@ export const performDeepResearch = async (
         ...blueprint.tickers.slice(0, 4).map(ticker =>
             getCompanyOverview(ticker).catch(() => null)
         ),
-    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number; distillation: DistillationResult }, GravityRAGResult, string, ...(SECFiling[] | CompanyOverview | null)[]];
+    ]) as [{ sources: TavilySearchResult[]; knowledgeBase: string; roundsRun: number; distillation: DistillationResult }, GravityRAGResult, string, string, ...(SECFiling[] | CompanyOverview | null)[]];
 
     // Separate SEC filings from company overviews
     const numSecTargets = blueprint.secTargets.slice(0, 5).length;
@@ -3722,14 +3746,26 @@ export const performDeepResearch = async (
     const ragSourceCount = ragResult.available ? ragResult.sources.length : 0;
     const totalSources = webSources.length + secFilings.length + ragSourceCount;
 
+    // Innovation summary (when fired) folds into macroText so all
+    // downstream consumers (analyzeSources, synthesizers, section
+    // writers) see it without signature changes. The block is
+    // already self-contained markdown with USPTO / ClinicalTrials.gov /
+    // openFDA headers.
+    if (innovationText && innovationText.trim().length > 0) {
+        macroText = macroText
+            ? `${macroText}\n\n${innovationText}`
+            : innovationText;
+    }
+
     const ragStatus = ragResult.available
         ? `${ragSourceCount} RAG passages (${ragResult.latency_ms}ms)`
         : 'RAG unavailable (web-only mode)';
     const macroStatus = macroText ? '· FRED macro ✓' : '';
+    const innovationStatus = innovationText ? '· Innovation ✓' : '';
 
     onProgress({
         stage: 'searching',
-        message: `Retrieved ${webSources.length} web · ${secFilings.length} SEC · ${ragStatus} ${macroStatus}`.trim(),
+        message: `Retrieved ${webSources.length} web · ${secFilings.length} SEC · ${ragStatus} ${macroStatus} ${innovationStatus}`.trim(),
         progress: 45,
         sourcesFound: totalSources,
     });
