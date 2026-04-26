@@ -4557,6 +4557,191 @@ console.log('\n[76] Innovation data service (patents / trials / FDA)');
     }
 }
 
+// ─── 77. Social signals: Reddit + StockTwits ──────────────────────────────
+console.log('\n[77] Social signals (Reddit + StockTwits)');
+
+{
+    const ss = await import('./socialSignalsService');
+
+    // ── Reddit URL builder ───────────────────────────────────────────
+    const u1 = ss.buildRedditSearchUrl({ query: 'AAPL earnings' });
+    check('reddit url: defaults to multi-sub combined path',
+        u1.includes('/r/wallstreetbets+stocks+investing+StockMarket+options/'));
+    check('reddit url: query encoded', /q=AAPL\+earnings/.test(u1));
+    check('reddit url: restrict_sr=1 (in-sub only)', u1.includes('restrict_sr=1'));
+    check('reddit url: default sort=relevance, t=week',
+        u1.includes('sort=relevance') && u1.includes('t=week'));
+
+    const u2 = ss.buildRedditSearchUrl({ query: 'TSLA', subreddits: ['stocks'], limit: 5, sort: 'new', timeframe: 'day' });
+    check('reddit url: single sub omits + delimiter', u2.includes('/r/stocks/'));
+    check('reddit url: limit clamped + sort/timeframe override',
+        u2.includes('limit=5') && u2.includes('sort=new') && u2.includes('t=day'));
+
+    const u3 = ss.buildRedditSearchUrl({ query: 'X', limit: 999 });
+    check('reddit url: limit clamped to max 25', u3.includes('limit=25'));
+
+    // ── Reddit response parser ──────────────────────────────────────
+    const redditJson = {
+        data: {
+            children: [
+                {
+                    data: {
+                        subreddit: 'wallstreetbets',
+                        id: 'abc123',
+                        title: 'AAPL earnings beat estimates',
+                        selftext: 'a'.repeat(700),
+                        author: 'someuser',
+                        score: 1500,
+                        num_comments: 250,
+                        created_utc: 1745452800,   // 2025-04-23
+                        permalink: '/r/wallstreetbets/comments/abc123/aapl/',
+                    },
+                },
+                {
+                    data: {
+                        subreddit: 'stocks',
+                        id: 'def456',
+                        title: 'AAPL discussion',
+                        selftext: '',
+                        author: 'u2',
+                        score: 800,
+                        num_comments: 80,
+                        created_utc: 1745366400,
+                        permalink: '/r/stocks/comments/def456/',
+                    },
+                },
+                { /* malformed — no data → dropped */ },
+                { data: { id: '', title: '' } },   // empty id/title → dropped
+            ],
+        },
+    };
+    const posts = ss.parseRedditResponse(redditJson);
+    check('reddit parse: 2 valid posts (malformed dropped)', posts.length === 2);
+    check('reddit parse: sorted by score desc',
+        posts[0].score === 1500 && posts[1].score === 800);
+    check('reddit parse: selftext clamped to ≤601 chars',
+        posts[0].selftext.length <= 601 && posts[0].selftext.endsWith('…'));
+    check('reddit parse: permalink absolutized',
+        posts[0].permalink.startsWith('https://www.reddit.com/'));
+    check('reddit parse: created_utc → ISO',
+        /^\d{4}-\d{2}-\d{2}T/.test(posts[0].createdAt));
+
+    check('reddit parse: empty/non-object → []', ss.parseRedditResponse(null).length === 0);
+    check('reddit parse: missing children → []', ss.parseRedditResponse({}).length === 0);
+
+    // ── StockTwits parser ──────────────────────────────────────────
+    const stJson = {
+        response: { status: 200 },
+        symbol: { symbol: 'AAPL' },
+        messages: [
+            {
+                id: 1,
+                body: 'AAPL to $300 by year-end',
+                created_at: '2026-04-25T12:00:00Z',
+                user: { username: 'bull1', followers: 5000 },
+                entities: { sentiment: { basic: 'Bullish' } },
+            },
+            {
+                id: 2,
+                body: 'b'.repeat(700),   // body clamping
+                created_at: '2026-04-25T11:00:00Z',
+                user: { username: 'bear1', followers: 1000 },
+                entities: { sentiment: { basic: 'Bearish' } },
+            },
+            {
+                id: 3,
+                body: 'Watching this name',
+                created_at: '2026-04-25T10:00:00Z',
+                user: { username: 'neutral', followers: 100 },
+                entities: { sentiment: { basic: null } },
+            },
+            { /* missing — silently dropped */ },
+        ],
+    };
+    const stream = ss.parseStockTwitsResponse(stJson, 'AAPL');
+    check('st parse: stream returned', stream !== null);
+    check('st parse: 3 valid messages', stream?.messages.length === 3);
+    check('st parse: bullish/bearish/unrated counted',
+        stream?.sentiment.bullish === 1
+        && stream?.sentiment.bearish === 1
+        && stream?.sentiment.unrated === 1);
+    check('st parse: bullishPct over rated only = 0.5',
+        stream?.sentiment.bullishPct === 0.5);
+    check('st parse: body clamped to ≤601 chars',
+        (stream?.messages[1].body.length ?? 0) <= 601);
+    check('st parse: symbol uppercased', stream?.symbol === 'AAPL');
+
+    const stError = ss.parseStockTwitsResponse({ response: { status: 401 } }, 'X');
+    check('st parse: error response → null', stError === null);
+    const stEmpty = ss.parseStockTwitsResponse({}, 'X');
+    check('st parse: missing messages → null', stEmpty === null);
+
+    // ── End-to-end fetch via mock ──────────────────────────────────
+    const origFetch = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any, init?: any) => {
+            const u = String(url);
+            if (u.includes('reddit.com') && u.includes('/search.json')) {
+                // Verify the User-Agent header was sent
+                const ua = (init?.headers as any)?.['User-Agent'] || '';
+                if (!ua.includes('market-ui')) {
+                    return new Response('', { status: 403 });
+                }
+                return new Response(JSON.stringify(redditJson), { status: 200 });
+            }
+            if (u.includes('stocktwits.com')) {
+                return new Response(JSON.stringify(stJson), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const r = await ss.searchReddit({ query: 'AAPL earnings', limit: 5 });
+        check('searchReddit: returns parsed posts', r.length === 2);
+
+        const st = await ss.fetchStockTwitsStream('AAPL');
+        check('fetchStockTwits: returns stream', st !== null && st.symbol === 'AAPL');
+
+        const stEmpty2 = await ss.fetchStockTwitsStream('');
+        check('fetchStockTwits: empty symbol → null', stEmpty2 === null);
+
+        // Unified summary fires both, formats with compliance disclaimer
+        const summary = await ss.getSocialSentimentSummary({ ticker: 'AAPL' });
+        check('summary: header includes compliance disclaimer',
+            summary.text.includes('CONTEXT ONLY')
+            && summary.text.includes('never use as a citation source'));
+        check('summary: includes Reddit DO NOT cite tag',
+            summary.text.includes('REDDIT TOP POSTS') && summary.text.includes('DO NOT cite'));
+        check('summary: includes StockTwits sentiment line',
+            summary.text.includes('STOCKTWITS $AAPL'));
+        check('summary: stats populated',
+            summary.redditPosts === 2 && summary.stockTwitsMessages === 3);
+        check('summary: bullishPct in [0,1]',
+            summary.bullishPct !== null && summary.bullishPct! >= 0 && summary.bullishPct! <= 1);
+
+        // Empty query short-circuits
+        const empty = await ss.getSocialSentimentSummary({ query: '' });
+        check('summary: empty query → empty text + zero counts',
+            empty.text === '' && empty.redditPosts === 0 && empty.stockTwitsMessages === 0);
+
+        // Reddit 429 → empty (not error)
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('reddit.com')) return new Response('', { status: 429 });
+            return new Response('', { status: 500 });
+        };
+        const ratelimited = await ss.searchReddit({ query: 'X' });
+        check('searchReddit: 429 rate-limit → empty (not error)', ratelimited.length === 0);
+
+        // Reddit 500 → throws
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw = false;
+        try { await ss.searchReddit({ query: 'X' }); } catch { threw = true; }
+        check('searchReddit: HTTP 500 throws', threw);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
