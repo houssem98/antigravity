@@ -5093,6 +5093,180 @@ console.log('\n[79] Form 4 (insider) + 13F-HR (institutional holdings)');
         sameDeltas.every(d => d.classification === 'unchanged'));
 }
 
+// ─── 80. CourtListener client (court opinions + RECAP dockets) ───────────
+console.log('\n[80] CourtListener (opinions + dockets)');
+
+{
+    const cl = await import('./courtListenerService');
+
+    // ── Opinion search URL builder ──────────────────────────────────
+    const u1 = cl.buildOpinionSearchUrl({ query: 'SEC v Coinbase' });
+    check('opinions url: search type=o', /type=o/.test(u1));
+    check('opinions url: query encoded', /q=SEC\+v\+Coinbase/.test(u1));
+    check('opinions url: default sort by dateFiled desc',
+        /order_by=dateFiled\+desc/.test(u1));
+
+    const u2 = cl.buildOpinionSearchUrl({
+        query: 'X', court: 'nysd',
+        dateFiledAfter: '2025-01-01', dateFiledBefore: '2026-01-01',
+    });
+    check('opinions url: court restricted',
+        /court=nysd/.test(u2));
+    check('opinions url: filed_after present',
+        /filed_after=2025-01-01/.test(u2));
+    check('opinions url: filed_before present',
+        /filed_before=2026-01-01/.test(u2));
+
+    // ── Docket URL builder ──────────────────────────────────────────
+    const d1 = cl.buildDocketSearchUrl({ query: 'class action' });
+    check('dockets url: search type=r', /type=r/.test(d1));
+
+    const d2 = cl.buildDocketSearchUrl({ query: 'X', natureOfSuit: 'Securities' });
+    check('dockets url: natureOfSuit param', /nature_of_suit=Securities/.test(d2));
+
+    // ── Opinion response parser ─────────────────────────────────────
+    const opinionJson = {
+        count: 2,
+        results: [
+            {
+                id: 9999,
+                caseName: 'Securities and Exchange Commission v. Coinbase Inc.',
+                court_id: 'nysd',
+                court_citation_string: 'S.D.N.Y.',
+                dateFiled: '2026-03-15',
+                citation: ['No. 23-cv-04738'],
+                snippet: 'The Court finds that the staking program <mark>constitutes a security</mark>.',
+                absolute_url: '/opinion/9999/sec-v-coinbase/',
+                docketNumber: '23-cv-04738',
+            },
+            {
+                id: 8888,
+                caseName: 'Apple Inc. v. Epic Games',
+                court_id: 'ca9',
+                court_full: 'Court of Appeals for the Ninth Circuit',
+                dateFiled: '2025-04-25',
+                citation: '67 F.4th 946',
+                snippet: 'Affirmed in part, reversed in part.',
+                absolute_url: 'https://www.courtlistener.com/opinion/8888/apple-v-epic/',
+            },
+            { /* malformed — no id, dropped */ },
+            { id: 0, caseName: 'invalid' },   // id=0 dropped
+        ],
+    };
+
+    const ops = cl.parseOpinionSearchResponse(opinionJson);
+    check('opinions parse: 2 valid (malformed/zero-id dropped)',
+        ops.length === 2);
+    check('opinions parse: caseName captured',
+        ops[0].caseName.includes('Coinbase'));
+    check('opinions parse: court id', ops[0].court === 'nysd');
+    check('opinions parse: citation array → first element',
+        ops[0].citation === 'No. 23-cv-04738');
+    check('opinions parse: citation string passes through',
+        ops[1].citation === '67 F.4th 946');
+    check('opinions parse: snippet HTML stripped',
+        !ops[0].snippet.includes('<mark>')
+        && ops[0].snippet.includes('constitutes a security'));
+    check('opinions parse: relative URL absolutized',
+        ops[0].url === 'https://www.courtlistener.com/opinion/9999/sec-v-coinbase/');
+    check('opinions parse: absolute URL passes through',
+        ops[1].url === 'https://www.courtlistener.com/opinion/8888/apple-v-epic/');
+    check('opinions parse: dateFiled clipped to 10 chars',
+        ops[0].dateFiled === '2026-03-15');
+
+    check('opinions parse: empty input → []',
+        cl.parseOpinionSearchResponse({}).length === 0);
+    check('opinions parse: non-array results → []',
+        cl.parseOpinionSearchResponse({ results: 'nope' }).length === 0);
+
+    // ── Docket response parser ──────────────────────────────────────
+    const docketJson = {
+        results: [
+            {
+                id: 12345,
+                caseName: 'In re Tesla Securities Litigation',
+                court_id: 'nynd',
+                docketNumber: '23-cv-001234',
+                dateFiled: '2025-09-01',
+                dateLastFiling: '2026-04-15',
+                natureOfSuit: '850 - Securities/Commodities',
+                cause: '15:78m(a) Securities Exchange Act',
+                absolute_url: '/docket/12345/in-re-tesla/',
+                party: [
+                    { name: 'In Re Tesla Securities Litigation' },
+                    { name: 'Elon Musk' },
+                ],
+            },
+            null,   // dropped
+        ],
+    };
+    const docks = cl.parseDocketSearchResponse(docketJson);
+    check('dockets parse: 1 valid', docks.length === 1);
+    check('dockets parse: parties array extracted',
+        docks[0].parties.length === 2 && docks[0].parties[1] === 'Elon Musk');
+    check('dockets parse: cause + nature-of-suit captured',
+        docks[0].cause.includes('Securities Exchange Act')
+        && docks[0].natureOfSuit.includes('Securities'));
+    check('dockets parse: dateLastFiling captured',
+        docks[0].dateLastFiling === '2026-04-15');
+    check('dockets parse: relative URL absolutized',
+        docks[0].url.startsWith('https://www.courtlistener.com/docket/'));
+
+    // ── End-to-end via fetch mock ───────────────────────────────────
+    const origFetch = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('/search/') && u.includes('type=o')) {
+                return new Response(JSON.stringify(opinionJson), { status: 200 });
+            }
+            if (u.includes('/search/') && u.includes('type=r')) {
+                return new Response(JSON.stringify(docketJson), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const r = await cl.searchOpinions({ query: 'SEC v Coinbase', limit: 5 });
+        check('searchOpinions: returns parsed results', r.length === 2);
+        check('searchOpinions: clamped to limit',
+            (await cl.searchOpinions({ query: 'x', limit: 1 })).length === 1);
+
+        const d = await cl.searchDockets({ query: 'Tesla securities' });
+        check('searchDockets: returns parsed results', d.length === 1);
+
+        // Empty query short-circuits
+        check('searchOpinions: empty query → []',
+            (await cl.searchOpinions({ query: '' })).length === 0);
+        check('searchDockets: empty query → []',
+            (await cl.searchDockets({ query: '' })).length === 0);
+
+        // Unified summary picks up both source paths
+        const summary = await cl.getLitigationSummaryText({ query: 'SEC v Coinbase' });
+        check('litigation summary: opinions header rendered',
+            summary.includes('COURT OPINIONS'));
+        check('litigation summary: dockets header rendered',
+            summary.includes('ACTIVE / RECENT DOCKETS'));
+        check('litigation summary: case name surfaced',
+            summary.includes('Coinbase'));
+
+        const emptySummary = await cl.getLitigationSummaryText({ query: '' });
+        check('litigation summary: empty query → empty', emptySummary === '');
+
+        // Rate-limit graceful degradation
+        globalThis.fetch = async () => new Response('', { status: 429 });
+        const limited = await cl.searchOpinions({ query: 'X' });
+        check('searchOpinions: 429 → empty (not error)', limited.length === 0);
+
+        // Non-rate-limit error propagates
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw = false;
+        try { await cl.searchOpinions({ query: 'X' }); } catch { threw = true; }
+        check('searchOpinions: 500 throws', threw);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
