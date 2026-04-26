@@ -4742,6 +4742,123 @@ console.log('\n[77] Social signals (Reddit + StockTwits)');
     }
 }
 
+// ─── 78. Query expansion: HyDE + step-back (§6.2) ─────────────────────────
+console.log('\n[78] Query expansion (HyDE + step-back)');
+
+{
+    const qe = await import('./queryExpansion');
+
+    // ── HyDE prompt + parser ─────────────────────────────────────────
+    const hp = qe.buildHyDEPrompt('AAPL Q4 revenue');
+    check('hyde prompt: includes the query', hp.includes('AAPL Q4 revenue'));
+    check('hyde prompt: directs LLM to write hypothetical answer',
+        /SHORT hypothetical answer/i.test(hp));
+    check('hyde prompt: asks for analyst voice', /sell-side note/i.test(hp));
+    check('hyde prompt: forbids meta-commentary',
+        /Never preface|output only/i.test(hp));
+
+    check('hyde parse: passes through clean answer',
+        qe.parseHyDEResponse('Apple Q4 revenue grew 6% YoY to $94.9B.')
+            === 'Apple Q4 revenue grew 6% YoY to $94.9B.');
+    check('hyde parse: strips "Sure, here is" preamble',
+        qe.parseHyDEResponse('Sure, here is the answer: Apple Q4 grew.')
+            === 'Apple Q4 grew.');
+    check('hyde parse: strips "Here\'s" preamble',
+        qe.parseHyDEResponse("Here's a hypothetical answer: Lorem ipsum.")
+            === 'Lorem ipsum.');
+    check('hyde parse: refusal returns empty',
+        qe.parseHyDEResponse('I cannot provide that information.') === '');
+    check('hyde parse: empty input → empty', qe.parseHyDEResponse('') === '');
+    check('hyde parse: clamps oversized output to ≤801 chars',
+        qe.parseHyDEResponse('a'.repeat(2000)).length <= 801
+        && qe.parseHyDEResponse('a'.repeat(2000)).endsWith('…'));
+    check('hyde parse: strips surrounding quotes',
+        qe.parseHyDEResponse('"A clean answer."') === 'A clean answer.');
+
+    // ── Step-back prompt + parser ────────────────────────────────────
+    const sp = qe.buildStepBackPrompt('What was AAPL Q4 2025 iPhone revenue YoY?');
+    check('stepback prompt: contains few-shot examples',
+        /Examples:/i.test(sp) && /Step-back:/i.test(sp));
+    check('stepback prompt: includes the query',
+        sp.includes('What was AAPL Q4 2025 iPhone revenue YoY?'));
+
+    check('stepback parse: passes through abstract version',
+        qe.parseStepBackResponse('Apple iPhone revenue trends over time.')
+            === 'Apple iPhone revenue trends over time.');
+    check('stepback parse: strips "Step-back:" prefix',
+        qe.parseStepBackResponse('Step-back: Apple iPhone revenue trends.')
+            === 'Apple iPhone revenue trends.');
+    check('stepback parse: takes only the first sentence',
+        qe.parseStepBackResponse('Apple iPhone revenue trends. A second sentence is dropped.')
+            === 'Apple iPhone revenue trends.');
+    check('stepback parse: takes only the first paragraph',
+        !qe.parseStepBackResponse('First.\n\nSecond paragraph dropped.')
+            .includes('Second paragraph'));
+    check('stepback parse: refusal returns empty',
+        qe.parseStepBackResponse('I cannot help with that.') === '');
+    check('stepback parse: empty → empty', qe.parseStepBackResponse('') === '');
+    check('stepback parse: clamps oversized output to ≤201 chars',
+        qe.parseStepBackResponse('a'.repeat(500)).length <= 201);
+
+    // ── End-to-end via callLLM mock ─────────────────────────────────
+    const mockHydeAnswer = 'Apple Q4 FY26 revenue is approximately $95B, up 6% YoY, driven by Services and resilient iPhone demand.';
+    const mockStepBack = 'Apple revenue trends across recent quarters.';
+
+    const callLLM = async (prompt: string) => {
+        if (prompt.includes('hypothetical answer')) return mockHydeAnswer;
+        if (prompt.includes('STEP-BACK version')) return mockStepBack;
+        return '';
+    };
+
+    const hyde = await qe.generateHyDE('AAPL Q4 revenue', { callLLM });
+    check('generateHyDE: returns parsed answer', hyde === mockHydeAnswer);
+
+    const stepBack = await qe.generateStepBack('AAPL Q4 2025 iPhone YoY?', { callLLM });
+    check('generateStepBack: returns parsed abstract', stepBack === mockStepBack);
+
+    const empty = await qe.generateHyDE('', { callLLM });
+    check('generateHyDE: empty query → empty', empty === '');
+
+    // Throw without callLLM (avoids accidentally hitting prod LLM)
+    let threw = false;
+    try { await qe.generateHyDE('x'); } catch { threw = true; }
+    check('generateHyDE: throws when callLLM not provided', threw);
+
+    let threw2 = false;
+    try { await qe.generateStepBack('x'); } catch { threw2 = true; }
+    check('generateStepBack: throws when callLLM not provided', threw2);
+
+    // LLM throwing inside generator → silent empty (best-effort)
+    const throwingLLM = async () => { throw new Error('boom'); };
+    const hThrow = await qe.generateHyDE('q', { callLLM: throwingLLM });
+    check('generateHyDE: LLM error → empty (no throw)', hThrow === '');
+    const sThrow = await qe.generateStepBack('q', { callLLM: throwingLLM });
+    check('generateStepBack: LLM error → empty (no throw)', sThrow === '');
+
+    // ── Unified expander ─────────────────────────────────────────────
+    const set = await qe.expandQuery('AAPL Q4 revenue', { callLLM });
+    check('expandQuery: original preserved', set.original === 'AAPL Q4 revenue');
+    check('expandQuery: hyde populated', set.hyde === mockHydeAnswer);
+    check('expandQuery: stepBack populated', set.stepBack === mockStepBack);
+    check('expandQuery: all[] = [original, hyde, stepBack]',
+        set.all.length === 3 && set.all[0] === 'AAPL Q4 revenue');
+
+    // Empty query short-circuits
+    const setEmpty = await qe.expandQuery('', { callLLM });
+    check('expandQuery: empty input → empty all[]',
+        setEmpty.all.length === 0);
+
+    // One generator failing → other still returned
+    const partialLLM = async (prompt: string) => {
+        if (prompt.includes('hypothetical')) throw new Error('boom');
+        return mockStepBack;
+    };
+    const partial = await qe.expandQuery('q', { callLLM: partialLLM });
+    check('expandQuery: hyde failure leaves stepBack intact',
+        partial.hyde === '' && partial.stepBack === mockStepBack
+        && partial.all.length === 2);
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
