@@ -394,6 +394,130 @@ export async function fetchECBSeries(
     return parseECBCsv(csv);
 }
 
+// ─── BEA (Bureau of Economic Analysis) — NIPA / GDP / Regional ─────────────
+// API: https://apps.bea.gov/api/data/?UserID={KEY}&method=GetData&datasetname=NIPA&...
+// Free key via https://apps.bea.gov/API/signup/ (instant). Without a key
+// every call fails — set VITE_BEA_API_KEY before relying on this client.
+//
+// We expose NIPA (the 'big-N' table family — GDP, personal income, PCE)
+// because that's what most equity research touches. Regional (state-level
+// GDP), ITA (trade), and FixedAssets are intentionally out of scope for
+// this commit; they're identical request shape if a caller needs them.
+
+export const BEA_BASE = 'https://apps.bea.gov/api/data/';
+const BEA_API_KEY = import.meta.env.VITE_BEA_API_KEY || '';
+
+export interface BEAObservation {
+    date: string;            // YYYY-MM-01 anchored to first day of period
+    period: string;          // raw TimePeriod from BEA (e.g. "2026Q1" or "2026M03")
+    lineNumber: string;
+    lineDescription: string;
+    value: number | null;
+    unit: string;            // CL_UNIT (e.g. "Level", "Percent")
+    unitMult: number;        // 10^N multiplier; raw number is value × 10^unitMult
+}
+
+// Common NIPA tables worth pinning:
+//   T10101 — GDP, billions of current $    (quarterly)
+//   T10103 — Real GDP, chained 2017 $     (quarterly)
+//   T10105 — GDP price indexes             (quarterly)
+//   T20100 — Personal income & outlays     (monthly)
+//   T20805 — PCE price indexes             (monthly)
+export const BEA_NIPA_TABLES: Record<string, { id: string; label: string; freq: 'Q' | 'M' | 'A' }> = {
+    gdp_nominal:  { id: 'T10101', label: 'GDP (current dollars)',                  freq: 'Q' },
+    gdp_real:     { id: 'T10103', label: 'Real GDP (chained 2017 dollars)',        freq: 'Q' },
+    gdp_pi:       { id: 'T10105', label: 'GDP price indexes',                       freq: 'Q' },
+    personal_inc: { id: 'T20100', label: 'Personal income and outlays',             freq: 'M' },
+    pce_pi:       { id: 'T20805', label: 'PCE price indexes (incl. core PCE)',      freq: 'M' },
+};
+
+// BEA TimePeriod parser. "2026Q1" → 2026-01-01, "2026M03" → 2026-03-01,
+// "2026" → 2026-01-01. Returns null when the format isn't recognized.
+export function parseBEAPeriod(period: string): string | null {
+    if (!period) return null;
+    let m = period.match(/^(\d{4})Q([1-4])$/);
+    if (m) {
+        const month = (parseInt(m[2], 10) - 1) * 3 + 1;
+        return `${m[1]}-${String(month).padStart(2, '0')}-01`;
+    }
+    m = period.match(/^(\d{4})M(\d{2})$/);
+    if (m) {
+        const mn = parseInt(m[2], 10);
+        if (mn < 1 || mn > 12) return null;
+        return `${m[1]}-${String(mn).padStart(2, '0')}-01`;
+    }
+    if (/^\d{4}$/.test(period)) return `${period}-01-01`;
+    return null;
+}
+
+// Defensive parser for BEA's slightly unhinged comma-separated number
+// format ("1,234.5") and occasional special markers ("(D)" = withheld).
+export function parseBEAValue(raw: string | number | null | undefined): number | null {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+    const cleaned = String(raw).replace(/,/g, '').trim();
+    if (!cleaned || cleaned === '(D)' || cleaned === '(NA)' || cleaned === '...') return null;
+    const n = parseFloat(cleaned);
+    return Number.isFinite(n) ? n : null;
+}
+
+export interface FetchBEAOptions {
+    table: string;          // e.g. "T10101"
+    frequency: 'Q' | 'M' | 'A';
+    years?: string;         // "2024,2025,2026" or "ALL"
+    apiKey?: string;        // override for testing
+}
+
+export async function fetchBEANIPATable(opts: FetchBEAOptions): Promise<BEAObservation[]> {
+    const apiKey = opts.apiKey ?? BEA_API_KEY;
+    if (!apiKey) {
+        throw new Error('BEA: no API key set (VITE_BEA_API_KEY required)');
+    }
+    const url = new URL(BEA_BASE);
+    url.searchParams.set('UserID', apiKey);
+    url.searchParams.set('method', 'GetData');
+    url.searchParams.set('datasetname', 'NIPA');
+    url.searchParams.set('TableName', opts.table);
+    url.searchParams.set('Frequency', opts.frequency);
+    url.searchParams.set('Year', opts.years ?? 'ALL');
+    url.searchParams.set('ResultFormat', 'JSON');
+
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`BEA ${opts.table}: HTTP ${res.status}`);
+    const json = await res.json();
+    return parseBEAResponse(json);
+}
+
+// Parse a BEA JSON response → BEAObservation[]. Defensive: any of the
+// shape mismatches BEA serves up (Error block, missing Data array,
+// unexpected null fields) yields an empty list rather than a throw.
+export function parseBEAResponse(json: unknown): BEAObservation[] {
+    if (!json || typeof json !== 'object') return [];
+    const root = (json as any).BEAAPI;
+    if (!root) return [];
+    if (root.Error) return [];
+    const rows = root.Results?.Data;
+    if (!Array.isArray(rows)) return [];
+    const out: BEAObservation[] = [];
+    for (const r of rows as any[]) {
+        const period = String(r.TimePeriod ?? '');
+        const date = parseBEAPeriod(period);
+        if (!date) continue;
+        out.push({
+            date,
+            period,
+            lineNumber: String(r.LineNumber ?? ''),
+            lineDescription: String(r.LineDescription ?? ''),
+            value: parseBEAValue(r.DataValue),
+            unit: String(r.CL_UNIT ?? ''),
+            unitMult: typeof r.UNIT_MULT === 'number' ? r.UNIT_MULT
+                : parseInt(String(r.UNIT_MULT ?? '0'), 10) || 0,
+        });
+    }
+    out.sort((a, b) => a.date.localeCompare(b.date));
+    return out;
+}
+
 // ─── Unified cross-provider snapshot ────────────────────────────────────────
 // Returns a single prompt-ready text block covering FRED + BLS + WB + ECB.
 // Any provider failure is silent — macro is supplementary, never required.

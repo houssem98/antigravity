@@ -4227,6 +4227,125 @@ console.log('\n[74] DefiLlama + CoinPaprika clients');
     }
 }
 
+// ─── 75. BEA macro client (NIPA tables) ────────────────────────────────
+console.log('\n[75] BEA NIPA client');
+
+{
+    const fred = await import('./fredService');
+
+    // ── parseBEAPeriod ─────────────────────────────────────────────
+    check('bea period: Q1 → Jan 1', fred.parseBEAPeriod('2026Q1') === '2026-01-01');
+    check('bea period: Q2 → Apr 1', fred.parseBEAPeriod('2026Q2') === '2026-04-01');
+    check('bea period: Q4 → Oct 1', fred.parseBEAPeriod('2025Q4') === '2025-10-01');
+    check('bea period: M03 → Mar 1', fred.parseBEAPeriod('2026M03') === '2026-03-01');
+    check('bea period: M12 → Dec 1', fred.parseBEAPeriod('2026M12') === '2026-12-01');
+    check('bea period: annual → Jan 1', fred.parseBEAPeriod('2024') === '2024-01-01');
+    check('bea period: invalid month → null', fred.parseBEAPeriod('2026M13') === null);
+    check('bea period: empty → null', fred.parseBEAPeriod('') === null);
+    check('bea period: garbage → null', fred.parseBEAPeriod('xyz') === null);
+
+    // ── parseBEAValue: comma-separated, special markers ────────────
+    check('bea value: comma-separated parses',
+        fred.parseBEAValue('1,234.5') === 1234.5);
+    check('bea value: number passes through',
+        fred.parseBEAValue(123.4) === 123.4);
+    check('bea value: (D) → null',  fred.parseBEAValue('(D)')  === null);
+    check('bea value: (NA) → null', fred.parseBEAValue('(NA)') === null);
+    check('bea value: ... → null',  fred.parseBEAValue('...')  === null);
+    check('bea value: empty → null', fred.parseBEAValue('') === null);
+    check('bea value: null → null',  fred.parseBEAValue(null) === null);
+    check('bea value: undefined → null', fred.parseBEAValue(undefined) === null);
+    check('bea value: garbage → null', fred.parseBEAValue('not-a-number') === null);
+
+    // ── BEA_NIPA_TABLES registry shape ─────────────────────────────
+    check('bea registry: GDP nominal table id',
+        fred.BEA_NIPA_TABLES.gdp_nominal.id === 'T10101');
+    check('bea registry: real GDP table id',
+        fred.BEA_NIPA_TABLES.gdp_real.id === 'T10103');
+    check('bea registry: PCE price index table id',
+        fred.BEA_NIPA_TABLES.pce_pi.id === 'T20805');
+    check('bea registry: GDP frequency = Q',
+        fred.BEA_NIPA_TABLES.gdp_real.freq === 'Q');
+    check('bea registry: PCE frequency = M',
+        fred.BEA_NIPA_TABLES.pce_pi.freq === 'M');
+
+    // ── parseBEAResponse: happy path / error / malformed ──────────
+    const happyJson = {
+        BEAAPI: {
+            Results: {
+                Data: [
+                    { TimePeriod: '2026Q1', LineNumber: '1', LineDescription: 'Gross domestic product',
+                      DataValue: '28,500.5', CL_UNIT: 'Level', UNIT_MULT: 9 },
+                    { TimePeriod: '2025Q4', LineNumber: '1', LineDescription: 'Gross domestic product',
+                      DataValue: '28,200.1', CL_UNIT: 'Level', UNIT_MULT: 9 },
+                    { TimePeriod: 'BAD',   LineNumber: '1', LineDescription: 'noop',
+                      DataValue: '0', CL_UNIT: 'x', UNIT_MULT: 0 },   // unparseable period dropped
+                ],
+            },
+        },
+    };
+    const obs = fred.parseBEAResponse(happyJson);
+    check('bea parse: returns 2 valid rows (BAD period dropped)',
+        obs.length === 2);
+    check('bea parse: chronologically sorted',
+        obs[0].date < obs[1].date);
+    check('bea parse: numeric value parsed', obs[0].value === 28200.1);
+    check('bea parse: unit + multiplier preserved',
+        obs[0].unit === 'Level' && obs[0].unitMult === 9);
+
+    const errorJson = { BEAAPI: { Error: { ErrorCode: '123', ErrorDetail: 'rejected' } } };
+    check('bea parse: error response → empty', fred.parseBEAResponse(errorJson).length === 0);
+
+    check('bea parse: missing root → empty', fred.parseBEAResponse({}).length === 0);
+    check('bea parse: null → empty', fred.parseBEAResponse(null).length === 0);
+    check('bea parse: missing Data array → empty',
+        fred.parseBEAResponse({ BEAAPI: { Results: {} } }).length === 0);
+
+    // ── End-to-end fetch with mock + key requirement ───────────────
+    const origFetch = globalThis.fetch;
+    try {
+        // Without an API key, fetchBEANIPATable should throw a clear error
+        let threw = false;
+        try {
+            await fred.fetchBEANIPATable({ table: 'T10101', frequency: 'Q', apiKey: '' });
+        } catch (e: any) {
+            threw = e?.message?.includes('API key') ?? false;
+        }
+        check('bea fetch: missing API key throws clear error', threw);
+
+        // With key + mock: builds correct query string + parses response
+        let capturedUrl = '';
+        globalThis.fetch = async (url: any) => {
+            capturedUrl = String(url);
+            return new Response(JSON.stringify(happyJson), { status: 200 });
+        };
+        const data = await fred.fetchBEANIPATable({
+            table: 'T10101',
+            frequency: 'Q',
+            years: '2025,2026',
+            apiKey: 'TESTKEY',
+        });
+        check('bea fetch: query includes UserID + table + frequency + years',
+            capturedUrl.includes('UserID=TESTKEY')
+            && capturedUrl.includes('TableName=T10101')
+            && capturedUrl.includes('Frequency=Q')
+            && capturedUrl.includes('Year=2025%2C2026'));
+        check('bea fetch: ResultFormat=JSON',
+            capturedUrl.includes('ResultFormat=JSON'));
+        check('bea fetch: returns 2 parsed observations', data.length === 2);
+
+        // HTTP error propagates
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw2 = false;
+        try {
+            await fred.fetchBEANIPATable({ table: 'T10101', frequency: 'Q', apiKey: 'k' });
+        } catch { threw2 = true; }
+        check('bea fetch: HTTP error propagates', threw2);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
