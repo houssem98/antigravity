@@ -4108,6 +4108,125 @@ console.log('\n[73] Entity graph + canonical resolver');
     eg._clearEntityIndex_FOR_TESTS();
 }
 
+// ─── 74. Free crypto sources: DefiLlama + CoinPaprika ─────────────────────
+console.log('\n[74] DefiLlama + CoinPaprika clients');
+
+{
+    const crypto = await import('./cryptoMarketService');
+
+    // ── DefiLlama: top protocols (sort + filter + clamp) ─────────────
+    const origFetch = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('api.llama.fi/protocols')) {
+                return new Response(JSON.stringify([
+                    { name: 'Aave',     slug: 'aave',     category: 'Lending', chain: 'Ethereum', tvl: 12_000_000_000, change_1d: -1.2, change_7d: 4.5 },
+                    { name: 'Lido',     slug: 'lido',     category: 'Liquid Staking', chain: 'Ethereum', tvl: 30_000_000_000, change_7d: 2.1 },
+                    { name: 'BadProto', slug: 'bad',      category: '', chain: '' /* tvl missing → filtered */ },
+                    { name: 'Maker',    slug: 'makerdao', category: 'CDP', chain: 'Ethereum', tvl: 8_500_000_000 },
+                ]), { status: 200 });
+            }
+            if (u.includes('api.llama.fi/v2/chains')) {
+                return new Response(JSON.stringify([
+                    { name: 'Ethereum', tvl: 60_000_000_000, tokenSymbol: 'ETH', chainId: 1 },
+                    { name: 'Solana',   tvl: 12_000_000_000, tokenSymbol: 'SOL' },
+                    { name: 'Empty', /* no tvl */ },
+                ]), { status: 200 });
+            }
+            if (u.includes('stablecoins.llama.fi/stablecoins')) {
+                return new Response(JSON.stringify({
+                    peggedAssets: [
+                        { name: 'Tether', symbol: 'USDT', pegType: 'peggedUSD',
+                          circulating: { peggedUSD: 110_000_000_000 },
+                          chainCirculating: {
+                            'Ethereum': { current: { peggedUSD: 60_000_000_000 } },
+                            'Tron':     { current: { peggedUSD: 50_000_000_000 } },
+                          } },
+                        { name: 'USD Coin', symbol: 'USDC', pegType: 'peggedUSD',
+                          circulating: { peggedUSD: 35_000_000_000 } },
+                        { name: 'BadStable', symbol: 'BAD', pegType: 'peggedUSD',
+                          /* no circulating.peggedUSD → filtered */ circulating: {} },
+                    ],
+                }), { status: 200 });
+            }
+            if (u.includes('api.coinpaprika.com/v1/global')) {
+                return new Response(JSON.stringify({
+                    market_cap_usd: 4_500_000_000_000,
+                    volume_24h_usd: 200_000_000_000,
+                    bitcoin_dominance_percentage: 52.3,
+                    cryptocurrencies_number: 13_000,
+                }), { status: 200 });
+            }
+            if (u.includes('api.coinpaprika.com/v1/tickers')) {
+                return new Response(JSON.stringify([
+                    { id: 'btc-bitcoin', name: 'Bitcoin', symbol: 'BTC', rank: 1,
+                      quotes: { USD: { price: 95_000, volume_24h: 50_000_000_000, market_cap: 1_900_000_000_000, percent_change_24h: 1.5 } } },
+                    { id: 'eth-ethereum', name: 'Ethereum', symbol: 'ETH', rank: 2,
+                      quotes: { USD: { price: 3_200, volume_24h: 25_000_000_000, market_cap: 380_000_000_000, percent_change_24h: -0.4 } } },
+                ]), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const protos = await crypto.fetchTopDefiProtocols(2);
+        check('defillama: protocols sorted by TVL desc',
+            protos[0].name === 'Lido' && protos[1].name === 'Aave');
+        check('defillama: protocols clamped to limit', protos.length === 2);
+        check('defillama: bad rows (no tvl) filtered',
+            !protos.some(p => p.name === 'BadProto'));
+        check('defillama: change_7d preserved when present',
+            protos[0].change_7d === 2.1);
+
+        const chains = await crypto.fetchChainTvls();
+        check('defillama: chains sorted by TVL', chains[0].name === 'Ethereum');
+        check('defillama: bad chain (no tvl) filtered',
+            !chains.some(c => c.name === 'Empty'));
+        check('defillama: tokenSymbol preserved', chains[0].tokenSymbol === 'ETH');
+
+        const stables = await crypto.fetchStablecoinTotals(2);
+        check('defillama: stablecoins sorted by circulating',
+            stables[0].symbol === 'USDT' && stables[1].symbol === 'USDC');
+        check('defillama: bad stables (no circulating) filtered',
+            !stables.some(s => s.symbol === 'BAD'));
+        check('defillama: chain breakdown preserved when present',
+            stables[0].chainCirculating?.Ethereum === 60_000_000_000);
+
+        const paprika = await crypto.fetchPaprikaGlobal();
+        check('paprika: global stats parsed',
+            paprika?.market_cap_usd === 4_500_000_000_000
+            && paprika?.bitcoin_dominance_percentage === 52.3);
+
+        const tickers = await crypto.fetchPaprikaTopTickers(5);
+        check('paprika: tickers sorted by rank',
+            tickers[0].symbol === 'BTC' && tickers[1].symbol === 'ETH');
+        check('paprika: USD quotes parsed', tickers[0].quotes.USD.price === 95_000);
+        check('paprika: percent_change_24h preserved',
+            tickers[1].quotes.USD.percent_change_24h === -0.4);
+
+        // Cross-source summary text
+        const summary = await crypto.getCryptoSummaryText();
+        check('crypto summary: includes CoinPaprika header',
+            summary.includes('CRYPTO MARKET (CoinPaprika)'));
+        check('crypto summary: includes DefiLlama protocols header',
+            summary.includes('DEFI PROTOCOLS BY TVL'));
+        check('crypto summary: includes chain TVL header',
+            summary.includes('TVL BY CHAIN'));
+        check('crypto summary: includes stablecoins header',
+            summary.includes('STABLECOIN ISSUANCE'));
+        check('crypto summary: BTC dominance rendered',
+            /52\.3%/.test(summary));
+
+        // Error propagation
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw = false;
+        try { await crypto.fetchTopDefiProtocols(1); } catch { threw = true; }
+        check('defillama: HTTP error propagates', threw);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
