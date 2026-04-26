@@ -466,3 +466,277 @@ export async function resolveCikToTicker(cik: string | number): Promise<TickerRe
     }
     return null;
 }
+
+// ─── Form 4 — Insider Transactions (plan §4 build, free) ──────────────────
+// Form 4 is filed within 2 business days of an insider's transaction in
+// company stock. The XML payload at the filing's `.xml` URL contains both
+// the reporting owner's identity (CEO / 10% holder / director) and a
+// table of nonDerivativeTransaction / derivativeTransaction rows with
+// price, shares, transaction code (P=purchase, S=sale, A=grant, M=exercise,
+// F=tax payment), and post-transaction holdings.
+
+export type Form4TransactionCode =
+    | 'P' | 'S' | 'A' | 'M' | 'F' | 'D' | 'G' | 'C' | 'X' | 'J' | 'K' | 'Z'
+    | 'I' | 'L' | 'O' | 'U' | 'V' | 'W' | 'E' | 'H';
+
+export interface Form4Transaction {
+    securityTitle: string;          // "Common Stock" / "Stock Option (Right to Buy)"
+    transactionDate: string;        // YYYY-MM-DD
+    transactionCode: string;        // P / S / A / M / F / etc.
+    sharesAmount: number | null;
+    pricePerShare: number | null;
+    acquiredOrDisposed: 'A' | 'D' | '';
+    sharesOwnedAfter: number | null;
+    isDerivative: boolean;
+}
+
+export interface Form4Filing {
+    issuerCik: string;              // company CIK (10-digit)
+    issuerName: string;
+    issuerTradingSymbol: string;
+    reporterName: string;
+    reporterCik: string;
+    isOfficer: boolean;
+    isDirector: boolean;
+    isTenPercentOwner: boolean;
+    officerTitle: string;
+    transactions: Form4Transaction[];
+}
+
+// Strip XML/HTML tags and decode the most common entity references. We
+// avoid pulling in a full XML parser — Form 4 documents are small and
+// follow a predictable schema, so a regex extractor is sufficient.
+function decodeXmlEntities(s: string): string {
+    return s
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+}
+
+function extractTagText(xml: string, tag: string): string {
+    const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+    return m ? decodeXmlEntities(m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) : '';
+}
+
+function extractTagNumber(xml: string, tag: string): number | null {
+    const t = extractTagText(xml, tag);
+    if (!t) return null;
+    const n = parseFloat(t.replace(/,/g, ''));
+    return Number.isFinite(n) ? n : null;
+}
+
+function isFlagSet(xml: string, tag: string): boolean {
+    return /(>1<|>true<)/i.test(xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[0] ?? '');
+}
+
+export function parseForm4Xml(xml: string): Form4Filing | null {
+    if (!xml || typeof xml !== 'string') return null;
+    if (!/<ownershipDocument/i.test(xml)) return null;
+
+    const issuerCik = padCik(extractTagText(xml, 'issuerCik'));
+    const issuerName = extractTagText(xml, 'issuerName');
+    const issuerTradingSymbol = extractTagText(xml, 'issuerTradingSymbol');
+    const reporterCik = padCik(extractTagText(xml, 'rptOwnerCik'));
+    const reporterName = extractTagText(xml, 'rptOwnerName');
+
+    // Relationship flags (1 / 0 strings or true/false)
+    const relMatch = xml.match(/<reportingOwnerRelationship>[\s\S]*?<\/reportingOwnerRelationship>/i);
+    const relBlock = relMatch ? relMatch[0] : '';
+    const isOfficer = isFlagSet(relBlock, 'isOfficer');
+    const isDirector = isFlagSet(relBlock, 'isDirector');
+    const isTenPercentOwner = isFlagSet(relBlock, 'isTenPercentOwner');
+    const officerTitle = extractTagText(relBlock, 'officerTitle');
+
+    const transactions: Form4Transaction[] = [];
+
+    // Each transaction lives inside <nonDerivativeTransaction> or
+    // <derivativeTransaction>. Extract per-block so we don't accidentally
+    // pull values across siblings.
+    const blockRe = /<(nonDerivativeTransaction|derivativeTransaction)>[\s\S]*?<\/\1>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = blockRe.exec(xml)) !== null) {
+        const block = m[0];
+        const isDerivative = /derivativeTransaction/i.test(m[1]);
+        transactions.push({
+            securityTitle: extractTagText(block, 'securityTitle'),
+            transactionDate: extractTagText(block, 'transactionDate').slice(0, 10),
+            transactionCode: extractTagText(block, 'transactionCode'),
+            sharesAmount: extractTagNumber(block, 'transactionShares'),
+            pricePerShare: extractTagNumber(block, 'transactionPricePerShare'),
+            acquiredOrDisposed: (extractTagText(block, 'transactionAcquiredDisposedCode') as 'A' | 'D' | '') || '',
+            sharesOwnedAfter: extractTagNumber(block, 'sharesOwnedFollowingTransaction'),
+            isDerivative,
+        });
+    }
+
+    return {
+        issuerCik,
+        issuerName,
+        issuerTradingSymbol,
+        reporterName,
+        reporterCik,
+        isOfficer,
+        isDirector,
+        isTenPercentOwner,
+        officerTitle,
+        transactions,
+    };
+}
+
+// Aggregate signal worth surfacing in research reports: net buy/sell over
+// a list of Form 4 filings, partitioned by transaction code group.
+export interface InsiderActivitySummary {
+    totalFilings: number;
+    netSharesPurchased: number;     // P-code shares minus S-code shares
+    purchaseValue: number;          // sum of (shares × price) for P-code
+    saleValue: number;              // sum of (shares × price) for S-code
+    distinctReporters: number;
+    officerCount: number;
+    directorCount: number;
+    tenPercentCount: number;
+}
+
+export function summarizeInsiderActivity(filings: Form4Filing[]): InsiderActivitySummary {
+    const out: InsiderActivitySummary = {
+        totalFilings: filings.length,
+        netSharesPurchased: 0,
+        purchaseValue: 0,
+        saleValue: 0,
+        distinctReporters: 0,
+        officerCount: 0,
+        directorCount: 0,
+        tenPercentCount: 0,
+    };
+    const reporters = new Set<string>();
+    for (const f of filings) {
+        if (f.reporterCik) reporters.add(f.reporterCik);
+        if (f.isOfficer) out.officerCount += 1;
+        if (f.isDirector) out.directorCount += 1;
+        if (f.isTenPercentOwner) out.tenPercentCount += 1;
+        for (const t of f.transactions) {
+            const shares = t.sharesAmount ?? 0;
+            const price = t.pricePerShare ?? 0;
+            if (t.transactionCode === 'P') {
+                out.netSharesPurchased += shares;
+                out.purchaseValue += shares * price;
+            } else if (t.transactionCode === 'S') {
+                out.netSharesPurchased -= shares;
+                out.saleValue += shares * price;
+            }
+        }
+    }
+    out.distinctReporters = reporters.size;
+    return out;
+}
+
+// ─── Form 13F-HR — Institutional Holdings (plan §4 build, free) ───────────
+// 13F is filed quarterly by institutional investment managers with $100M+
+// in 13(f)-reportable assets. The key file is the "infoTable" XML: rows
+// of {nameOfIssuer, cusip, value, sshPrnamt, putCall, ...}. Used for
+// tracking who owns what and how positions change quarter-over-quarter.
+
+export type Form13FInvestmentDiscretion = 'SOLE' | 'DEFINED' | 'OTHER' | '';
+
+export interface Form13FHolding {
+    nameOfIssuer: string;
+    titleOfClass: string;       // e.g. "COM" (common) / "CL A"
+    cusip: string;
+    value: number;              // USD, in thousands per SEC convention
+    sharesOrPrincipalAmount: number;
+    sharesOrPrincipalAmountType: 'SH' | 'PRN' | string;
+    putCall: 'PUT' | 'CALL' | '';
+    investmentDiscretion: Form13FInvestmentDiscretion;
+}
+
+export function parseForm13FInfoTableXml(xml: string): Form13FHolding[] {
+    if (!xml || typeof xml !== 'string') return [];
+    if (!/<infoTable/i.test(xml)) return [];
+    const out: Form13FHolding[] = [];
+    const rowRe = /<infoTable>[\s\S]*?<\/infoTable>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rowRe.exec(xml)) !== null) {
+        const block = m[0];
+        const cusip = extractTagText(block, 'cusip');
+        const name = extractTagText(block, 'nameOfIssuer');
+        if (!cusip && !name) continue;
+        const putCallRaw = extractTagText(block, 'putCall').toUpperCase();
+        const discRaw = extractTagText(block, 'investmentDiscretion').toUpperCase();
+        const discretion: Form13FInvestmentDiscretion =
+            discRaw === 'SOLE' || discRaw === 'DEFINED' || discRaw === 'OTHER' ? discRaw : '';
+        const sharesType = extractTagText(block, 'sshPrnamtType').toUpperCase();
+        out.push({
+            nameOfIssuer: name,
+            titleOfClass: extractTagText(block, 'titleOfClass'),
+            cusip,
+            value: extractTagNumber(block, 'value') ?? 0,
+            sharesOrPrincipalAmount: extractTagNumber(block, 'sshPrnamt') ?? 0,
+            sharesOrPrincipalAmountType: sharesType || 'SH',
+            putCall: putCallRaw === 'PUT' || putCallRaw === 'CALL' ? putCallRaw : '',
+            investmentDiscretion: discretion,
+        });
+    }
+    return out;
+}
+
+// Top N holdings by USD value. Useful for "what are Berkshire's biggest
+// positions" style queries without paying for an ownership-data vendor.
+export function topHoldings(holdings: Form13FHolding[], n = 20): Form13FHolding[] {
+    return [...holdings]
+        .sort((a, b) => b.value - a.value)
+        .slice(0, Math.max(1, n));
+}
+
+// Holdings delta between two consecutive 13F filings — initiates / exits
+// / increases / decreases. Useful for QoQ position-change analysis.
+export interface HoldingDelta {
+    cusip: string;
+    nameOfIssuer: string;
+    deltaShares: number;
+    deltaValue: number;
+    pctChangeShares: number;        // (new - old) / old; Infinity for new positions
+    classification: 'initiated' | 'exited' | 'increased' | 'decreased' | 'unchanged';
+}
+
+export function diffHoldings(prev: Form13FHolding[], curr: Form13FHolding[]): HoldingDelta[] {
+    const prevByCusip = new Map<string, Form13FHolding>();
+    for (const h of prev) {
+        if (h.cusip) prevByCusip.set(h.cusip, h);
+    }
+    const currByCusip = new Map<string, Form13FHolding>();
+    for (const h of curr) {
+        if (h.cusip) currByCusip.set(h.cusip, h);
+    }
+    const allCusips = new Set<string>([...prevByCusip.keys(), ...currByCusip.keys()]);
+    const deltas: HoldingDelta[] = [];
+    for (const cusip of allCusips) {
+        const p = prevByCusip.get(cusip);
+        const c = currByCusip.get(cusip);
+        const prevShares = p?.sharesOrPrincipalAmount ?? 0;
+        const currShares = c?.sharesOrPrincipalAmount ?? 0;
+        const prevValue = p?.value ?? 0;
+        const currValue = c?.value ?? 0;
+        const deltaShares = currShares - prevShares;
+        const deltaValue = currValue - prevValue;
+        let classification: HoldingDelta['classification'];
+        if (!p && c) classification = 'initiated';
+        else if (p && !c) classification = 'exited';
+        else if (deltaShares > 0) classification = 'increased';
+        else if (deltaShares < 0) classification = 'decreased';
+        else classification = 'unchanged';
+        const pctChangeShares = prevShares > 0
+            ? deltaShares / prevShares
+            : (currShares > 0 ? Infinity : 0);
+        deltas.push({
+            cusip,
+            nameOfIssuer: c?.nameOfIssuer || p?.nameOfIssuer || '',
+            deltaShares,
+            deltaValue,
+            pctChangeShares,
+            classification,
+        });
+    }
+    // Sort by absolute value change desc — biggest moves first.
+    return deltas.sort((a, b) => Math.abs(b.deltaValue) - Math.abs(a.deltaValue));
+}

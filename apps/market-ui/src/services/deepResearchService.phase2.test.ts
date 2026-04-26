@@ -4859,6 +4859,240 @@ console.log('\n[78] Query expansion (HyDE + step-back)');
         && partial.all.length === 2);
 }
 
+// ─── 79. Form 4 + 13F-HR parsers (§4 build, free) ────────────────────────
+console.log('\n[79] Form 4 (insider) + 13F-HR (institutional holdings)');
+
+{
+    const sec = await import('./secEdgarService');
+
+    // ── Form 4 happy path ────────────────────────────────────────────
+    const form4Xml = `<?xml version="1.0"?>
+<ownershipDocument>
+  <issuerCik>0000320193</issuerCik>
+  <issuerName>Apple Inc.</issuerName>
+  <issuerTradingSymbol>AAPL</issuerTradingSymbol>
+  <reportingOwner>
+    <reportingOwnerId>
+      <rptOwnerCik>0001214156</rptOwnerCik>
+      <rptOwnerName>COOK TIMOTHY D</rptOwnerName>
+    </reportingOwnerId>
+    <reportingOwnerRelationship>
+      <isOfficer>1</isOfficer>
+      <isDirector>0</isDirector>
+      <isTenPercentOwner>0</isTenPercentOwner>
+      <officerTitle>Chief Executive Officer</officerTitle>
+    </reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <securityTitle><value>Common Stock</value></securityTitle>
+      <transactionDate><value>2026-04-15</value></transactionDate>
+      <transactionAmounts>
+        <transactionShares><value>50000</value></transactionShares>
+        <transactionPricePerShare><value>185.50</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+      <transactionCoding>
+        <transactionCode>S</transactionCode>
+      </transactionCoding>
+      <postTransactionAmounts>
+        <sharesOwnedFollowingTransaction><value>3265000</value></sharesOwnedFollowingTransaction>
+      </postTransactionAmounts>
+    </nonDerivativeTransaction>
+    <nonDerivativeTransaction>
+      <securityTitle><value>Common Stock</value></securityTitle>
+      <transactionDate><value>2026-04-15</value></transactionDate>
+      <transactionAmounts>
+        <transactionShares><value>10000</value></transactionShares>
+        <transactionPricePerShare><value>0</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+      <transactionCoding>
+        <transactionCode>F</transactionCode>
+      </transactionCoding>
+      <postTransactionAmounts>
+        <sharesOwnedFollowingTransaction><value>3275000</value></sharesOwnedFollowingTransaction>
+      </postTransactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+  <derivativeTable>
+    <derivativeTransaction>
+      <securityTitle><value>Stock Option (Right to Buy)</value></securityTitle>
+      <transactionDate><value>2026-04-10</value></transactionDate>
+      <transactionAmounts>
+        <transactionShares><value>5000</value></transactionShares>
+        <transactionPricePerShare><value>120.00</value></transactionPricePerShare>
+      </transactionAmounts>
+      <transactionCoding>
+        <transactionCode>M</transactionCode>
+      </transactionCoding>
+    </derivativeTransaction>
+  </derivativeTable>
+</ownershipDocument>`;
+
+    const f4 = sec.parseForm4Xml(form4Xml);
+    check('form4: parses ownershipDocument', f4 !== null);
+    check('form4: issuer CIK padded', f4?.issuerCik === '0000320193');
+    check('form4: issuer name + ticker captured',
+        f4?.issuerName === 'Apple Inc.' && f4?.issuerTradingSymbol === 'AAPL');
+    check('form4: reporter name captured',
+        f4?.reporterName === 'COOK TIMOTHY D');
+    check('form4: reporter CIK padded', f4?.reporterCik === '0001214156');
+    check('form4: officer flag set',
+        f4?.isOfficer === true && f4?.isDirector === false);
+    check('form4: officer title captured',
+        f4?.officerTitle === 'Chief Executive Officer');
+    check('form4: 3 transactions parsed (2 non-deriv + 1 deriv)',
+        f4?.transactions.length === 3);
+    check('form4: derivative flag set on option row',
+        f4?.transactions[2].isDerivative === true);
+    check('form4: sale row has price + shares',
+        f4?.transactions[0].sharesAmount === 50000
+        && f4?.transactions[0].pricePerShare === 185.50
+        && f4?.transactions[0].transactionCode === 'S'
+        && f4?.transactions[0].acquiredOrDisposed === 'D');
+    check('form4: sharesOwnedAfter captured',
+        f4?.transactions[0].sharesOwnedAfter === 3265000);
+
+    // Edge cases
+    check('form4: empty input → null', sec.parseForm4Xml('') === null);
+    check('form4: malformed XML (no ownershipDocument) → null',
+        sec.parseForm4Xml('<random>not a form 4</random>') === null);
+
+    // ── Insider activity summary ────────────────────────────────────
+    const purchaseFiling: any = {
+        issuerCik: '0000320193', issuerName: 'AAPL', issuerTradingSymbol: 'AAPL',
+        reporterName: 'CFO Director', reporterCik: '0000111',
+        isOfficer: true, isDirector: false, isTenPercentOwner: false,
+        officerTitle: 'CFO',
+        transactions: [
+            { securityTitle: 'Common Stock', transactionDate: '2026-04-10', transactionCode: 'P',
+              sharesAmount: 1000, pricePerShare: 180, acquiredOrDisposed: 'A',
+              sharesOwnedAfter: 5000, isDerivative: false },
+        ],
+    };
+    const saleFiling: any = {
+        ...purchaseFiling, reporterName: 'Director X', reporterCik: '0000222',
+        isOfficer: false, isDirector: true,
+        transactions: [
+            { securityTitle: 'Common Stock', transactionDate: '2026-04-12', transactionCode: 'S',
+              sharesAmount: 500, pricePerShare: 190, acquiredOrDisposed: 'D',
+              sharesOwnedAfter: 4500, isDerivative: false },
+        ],
+    };
+    const summary = sec.summarizeInsiderActivity([purchaseFiling, saleFiling, purchaseFiling]);
+    check('insider summary: 3 filings counted', summary.totalFilings === 3);
+    check('insider summary: distinct reporters = 2',
+        summary.distinctReporters === 2);
+    check('insider summary: officer count = 2 (purchase × 2)',
+        summary.officerCount === 2);
+    check('insider summary: director count = 1', summary.directorCount === 1);
+    check('insider summary: net shares = 1000+1000-500 = 1500',
+        summary.netSharesPurchased === 1500);
+    check('insider summary: purchase value = 2 × 1000 × 180',
+        summary.purchaseValue === 360000);
+    check('insider summary: sale value = 500 × 190',
+        summary.saleValue === 95000);
+
+    // ── 13F-HR happy path ───────────────────────────────────────────
+    const infoTableXml = `<?xml version="1.0"?>
+<informationTable>
+  <infoTable>
+    <nameOfIssuer>APPLE INC</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>037833100</cusip>
+    <value>15000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>80000000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <putCall>PUT</putCall>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>MICROSOFT CORP</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>594918104</cusip>
+    <value>9500000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>30000000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>OTHER</investmentDiscretion>
+  </infoTable>
+  <infoTable>
+    <nameOfIssuer>NVIDIA CORP</nameOfIssuer>
+    <titleOfClass>COM</titleOfClass>
+    <cusip>67066G104</cusip>
+    <value>22000000</value>
+    <shrsOrPrnAmt>
+      <sshPrnamt>50000000</sshPrnamt>
+      <sshPrnamtType>SH</sshPrnamtType>
+    </shrsOrPrnAmt>
+    <investmentDiscretion>SOLE</investmentDiscretion>
+  </infoTable>
+</informationTable>`;
+
+    const holdings = sec.parseForm13FInfoTableXml(infoTableXml);
+    check('13F: 3 holdings parsed', holdings.length === 3);
+    check('13F: cusip captured', holdings[0].cusip === '037833100');
+    check('13F: value parsed', holdings[0].value === 15000000);
+    check('13F: shares parsed', holdings[0].sharesOrPrincipalAmount === 80000000);
+    check('13F: putCall normalized to PUT', holdings[0].putCall === 'PUT');
+    check('13F: investment discretion captured',
+        holdings[0].investmentDiscretion === 'SOLE'
+        && holdings[1].investmentDiscretion === 'OTHER');
+    check('13F: sharesType defaulted to SH',
+        holdings.every(h => h.sharesOrPrincipalAmountType === 'SH'));
+
+    // Top holdings sorting
+    const top = sec.topHoldings(holdings, 2);
+    check('topHoldings: sorted by value desc + clamped',
+        top.length === 2 && top[0].nameOfIssuer === 'NVIDIA CORP'
+        && top[1].nameOfIssuer === 'APPLE INC');
+
+    // Empty / malformed
+    check('13F: empty input → []',
+        sec.parseForm13FInfoTableXml('').length === 0);
+    check('13F: missing infoTable → []',
+        sec.parseForm13FInfoTableXml('<random>x</random>').length === 0);
+
+    // ── Holdings diff ───────────────────────────────────────────────
+    const prev = [
+        { ...holdings[0], sharesOrPrincipalAmount: 100000000, value: 18000000 },
+        { ...holdings[1] },
+    ];
+    const curr = [
+        { ...holdings[0] },                        // shares decreased 100M → 80M
+        { ...holdings[2] },                        // NVDA initiated
+        // MSFT exited
+    ];
+    const deltas = sec.diffHoldings(prev as any, curr as any);
+    check('diff: 3 deltas (AAPL decreased, NVDA initiated, MSFT exited)',
+        deltas.length === 3);
+
+    const aaplDelta = deltas.find(d => d.cusip === '037833100')!;
+    check('diff: AAPL classified as decreased',
+        aaplDelta.classification === 'decreased' && aaplDelta.deltaShares === -20000000);
+    const msftDelta = deltas.find(d => d.cusip === '594918104')!;
+    check('diff: MSFT exited', msftDelta.classification === 'exited');
+    const nvdaDelta = deltas.find(d => d.cusip === '67066G104')!;
+    check('diff: NVDA initiated', nvdaDelta.classification === 'initiated');
+    check('diff: initiated position has Infinity pct change',
+        nvdaDelta.pctChangeShares === Infinity);
+    check('diff: sorted by absolute value change desc',
+        Math.abs(deltas[0].deltaValue) >= Math.abs(deltas[1].deltaValue));
+
+    // Empty diff
+    const emptyDeltas = sec.diffHoldings([], []);
+    check('diff: empty inputs → []', emptyDeltas.length === 0);
+
+    // Unchanged position
+    const sameDeltas = sec.diffHoldings(holdings as any, holdings as any);
+    check('diff: identical inputs → all unchanged',
+        sameDeltas.every(d => d.classification === 'unchanged'));
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
