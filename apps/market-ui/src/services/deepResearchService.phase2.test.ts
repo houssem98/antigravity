@@ -4346,6 +4346,217 @@ console.log('\n[75] BEA NIPA client');
     }
 }
 
+// ─── 76. Innovation: USPTO + ClinicalTrials.gov + openFDA ─────────────────
+console.log('\n[76] Innovation data service (patents / trials / FDA)');
+
+{
+    const inv = await import('./innovationService');
+
+    // ── PatentsView query construction ───────────────────────────────
+    const q1 = inv.buildPatentsViewQuery({ query: 'GLP-1 agonist' });
+    check('patents query: text-phrase wraps title + abstract',
+        /patent_title/.test(q1) && /patent_abstract/.test(q1));
+
+    const q2 = inv.buildPatentsViewQuery({ assignee: 'Eli Lilly' });
+    check('patents query: assignee filter present',
+        /assignee_organization/.test(q2));
+
+    const q3 = inv.buildPatentsViewQuery({ cpc: 'G06N' });
+    check('patents query: CPC prefix uses _begins',
+        /_begins/.test(q3) && /cpc_subclass_id/.test(q3));
+
+    const q4 = inv.buildPatentsViewQuery({ grantedAfter: '2025-01-01' });
+    check('patents query: grant-date filter uses _gte',
+        /_gte/.test(q4) && /2025-01-01/.test(q4));
+
+    const q5 = inv.buildPatentsViewQuery({});
+    check('patents query: empty options → empty object', q5 === '{}');
+
+    const q6 = inv.buildPatentsViewQuery({ assignee: 'X', cpc: 'A61' });
+    check('patents query: multi-condition wraps in _and',
+        /_and/.test(q6));
+
+    // ── PatentsView response parser ─────────────────────────────────
+    const patentsJson = {
+        patents: [
+            {
+                patent_number: '12345678',
+                patent_title: 'Method for X',
+                patent_date: '2026-04-10',
+                patent_abstract: 'A novel approach...',
+                assignees: [
+                    { assignee_organization: 'Apple Inc.' },
+                    { assignee_organization: '' },
+                ],
+                cpc_current: [
+                    { cpc_subclass_id: 'G06N3' },
+                    { cpc_subclass_id: 'G06N3' },   // duplicate dropped
+                    { cpc_subclass_id: 'H04L9' },
+                ],
+            },
+            null,   // bad row dropped
+            { patent_number: '999', patent_title: 'No assignees',
+              patent_date: '2026-01-01', patent_abstract: '', assignees: [], cpc_current: [] },
+        ],
+    };
+    const parsed = inv.parsePatentsViewResponse(patentsJson);
+    check('patents parse: 2 valid rows (null dropped)', parsed.length === 2);
+    check('patents parse: assignee non-empty filter', parsed[0].assignees.length === 1);
+    check('patents parse: CPC duplicates deduped', parsed[0].cpcSubclasses.length === 2);
+    check('patents parse: grant date sliced to YYYY-MM-DD',
+        parsed[0].grantDate === '2026-04-10');
+    check('patents parse: empty input → []',
+        inv.parsePatentsViewResponse({}).length === 0);
+    check('patents parse: non-array patents → []',
+        inv.parsePatentsViewResponse({ patents: 'nope' }).length === 0);
+
+    // ── ClinicalTrials.gov query + parser ────────────────────────────
+    const ctParams = inv.buildClinicalTrialsQuery({
+        condition: 'obesity', sponsor: 'Eli Lilly',
+        status: ['RECRUITING', 'COMPLETED'], phase: 'PHASE3', limit: 5,
+    });
+    check('ct query: condition param', ctParams.get('query.cond') === 'obesity');
+    check('ct query: sponsor param', ctParams.get('query.spons') === 'Eli Lilly');
+    check('ct query: status filter joins with comma',
+        ctParams.get('filter.overallStatus') === 'RECRUITING,COMPLETED');
+    check('ct query: phase via filter.advanced',
+        (ctParams.get('filter.advanced') ?? '').includes('PHASE3'));
+    check('ct query: pageSize honored', ctParams.get('pageSize') === '5');
+    check('ct query: format=json', ctParams.get('format') === 'json');
+
+    const ctParamsClamp = inv.buildClinicalTrialsQuery({ limit: 999 });
+    check('ct query: limit clamped to 100', ctParamsClamp.get('pageSize') === '100');
+
+    const ctJson = {
+        studies: [
+            {
+                protocolSection: {
+                    identificationModule: { nctId: 'NCT01234567', briefTitle: 'GLP-1 RA in T2D' },
+                    statusModule: {
+                        overallStatus: 'RECRUITING',
+                        startDateStruct: { date: '2025-09-15' },
+                        primaryCompletionDateStruct: { date: '2027-03-30' },
+                    },
+                    designModule: { phases: ['PHASE3'], studyType: 'INTERVENTIONAL' },
+                    sponsorCollaboratorsModule: { leadSponsor: { name: 'Eli Lilly' } },
+                    conditionsModule: { conditions: ['Type 2 Diabetes', 'Obesity'] },
+                    armsInterventionsModule: {
+                        interventions: [
+                            { type: 'DRUG', name: 'Tirzepatide' },
+                            { type: 'DRUG', name: 'Placebo' },
+                        ],
+                    },
+                },
+            },
+            { /* missing protocolSection — skipped */ },
+        ],
+    };
+    const trials = inv.parseClinicalTrialsResponse(ctJson);
+    check('ct parse: 1 valid study (missing protocolSection skipped)',
+        trials.length === 1);
+    check('ct parse: nctId captured', trials[0].nctId === 'NCT01234567');
+    check('ct parse: phase joined when multi', trials[0].phase === 'PHASE3');
+    check('ct parse: condition joined', trials[0].condition === 'Type 2 Diabetes, Obesity');
+    check('ct parse: intervention type:name format',
+        trials[0].intervention.includes('DRUG: Tirzepatide')
+        && trials[0].intervention.includes('DRUG: Placebo'));
+    check('ct parse: status / sponsor / dates extracted',
+        trials[0].status === 'RECRUITING'
+        && trials[0].sponsor === 'Eli Lilly'
+        && trials[0].startDate === '2025-09-15'
+        && trials[0].primaryCompletion === '2027-03-30');
+
+    check('ct parse: empty input → []', inv.parseClinicalTrialsResponse({}).length === 0);
+
+    // ── End-to-end via fetch mock ────────────────────────────────────
+    const origFetch = globalThis.fetch;
+    try {
+        globalThis.fetch = async (url: any) => {
+            const u = String(url);
+            if (u.includes('search.patentsview.org')) {
+                return new Response(JSON.stringify(patentsJson), { status: 200 });
+            }
+            if (u.includes('clinicaltrials.gov/api/v2')) {
+                return new Response(JSON.stringify(ctJson), { status: 200 });
+            }
+            if (u.includes('api.fda.gov/drug/event.json')) {
+                if (u.includes('No-Such-Drug')) {
+                    return new Response('', { status: 404 });
+                }
+                return new Response(JSON.stringify({
+                    results: [
+                        { term: 'NAUSEA', count: 12500 },
+                        { term: 'DIARRHOEA', count: 9800 },
+                        { term: 'VOMITING', count: 7200 },
+                    ],
+                }), { status: 200 });
+            }
+            if (u.includes('api.fda.gov/drug/label.json')) {
+                return new Response(JSON.stringify({
+                    results: [{
+                        openfda: {
+                            brand_name: ['Mounjaro'],
+                            generic_name: ['tirzepatide'],
+                            manufacturer_name: ['Eli Lilly'],
+                        },
+                        indications_and_usage: 'Indicated for the treatment of T2D in adults.',
+                        boxed_warning: 'Risk of thyroid C-cell tumors observed in rats.',
+                    }],
+                }), { status: 200 });
+            }
+            return new Response('', { status: 500 });
+        };
+
+        const ps = await inv.searchPatents({ query: 'GLP-1', limit: 3 });
+        check('searchPatents: returns parsed records',
+            ps.length === 2 && ps[0].patentNumber === '12345678');
+
+        const ts = await inv.searchClinicalTrials({ condition: 'obesity' });
+        check('searchClinicalTrials: returns parsed records',
+            ts.length === 1 && ts[0].nctId === 'NCT01234567');
+
+        const ev = await inv.fetchDrugAdverseEvents('Mounjaro', 5);
+        check('fdaEvents: top reactions parsed',
+            ev.length === 3 && ev[0].term === 'NAUSEA' && ev[0].count === 12500);
+        const evNone = await inv.fetchDrugAdverseEvents('No-Such-Drug', 5);
+        check('fdaEvents: 404 → empty array (not error)', evNone.length === 0);
+        const evEmpty = await inv.fetchDrugAdverseEvents('', 5);
+        check('fdaEvents: empty drug name → empty array', evEmpty.length === 0);
+
+        const lab = await inv.fetchDrugLabel('Mounjaro');
+        check('fdaLabel: brand + generic + manufacturer captured',
+            lab?.brandName === 'Mounjaro'
+            && lab?.genericName === 'tirzepatide'
+            && lab?.manufacturer === 'Eli Lilly');
+        check('fdaLabel: indications + boxed warning extracted',
+            (lab?.indications ?? '').includes('T2D')
+            && (lab?.warnings ?? '').includes('thyroid'));
+        const labNone = await inv.fetchDrugLabel('');
+        check('fdaLabel: empty drug name → null', labNone === null);
+
+        // Unified summary picks up all three sources
+        const summary = await inv.getInnovationSummaryText({
+            company: 'Eli Lilly', drug: 'Mounjaro', condition: 'obesity',
+        });
+        check('innovation summary: includes patents header',
+            summary.includes('RECENT PATENTS'));
+        check('innovation summary: includes trials header',
+            summary.includes('ACTIVE CLINICAL TRIALS'));
+        check('innovation summary: includes FAERS header',
+            summary.includes('FAERS ADVERSE-EVENT'));
+        check('innovation summary: report-count rendered',
+            summary.includes('12,500 reports'));
+
+        // HTTP error propagates (non-404)
+        globalThis.fetch = async () => new Response('', { status: 500 });
+        let threw = false;
+        try { await inv.searchPatents({ query: 'x' }); } catch { threw = true; }
+        check('searchPatents: HTTP error propagates', threw);
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
