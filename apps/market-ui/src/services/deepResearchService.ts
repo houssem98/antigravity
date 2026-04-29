@@ -522,13 +522,14 @@ export type BlueprintReviewCallback = (
 // `softStopped = true` so the pipeline can finish the current stage and then
 // assemble a partial report instead of crashing and returning nothing.
 
-// Per-1K-token list prices (input / output). Approximate — actual costs vary
-// by caching, negotiated rates, and batching. Used only for budget telemetry
-// and the optional per-query dollar cap; never used for customer billing.
-export const MODEL_COSTS_USD: Record<string, { input: number; output: number }> = {
-    'claude-opus-4-6':               { input: 0.015,   output: 0.075   },
-    'claude-sonnet-4-6':             { input: 0.003,   output: 0.015   },
-    'claude-haiku-4-5-20251001':     { input: 0.00025, output: 0.00125 },
+// Per-1K-token list prices (input / output / optional cacheRead). Approximate —
+// actual costs vary by caching, negotiated rates, and batching. Used only for
+// budget telemetry and the optional per-query dollar cap; never used for billing.
+// cacheRead = Anthropic prompt-caching read price (~10% of input list price).
+export const MODEL_COSTS_USD: Record<string, { input: number; output: number; cacheRead?: number }> = {
+    'claude-opus-4-6':               { input: 0.015,   output: 0.075,   cacheRead: 0.0015    },
+    'claude-sonnet-4-6':             { input: 0.003,   output: 0.015,   cacheRead: 0.0003    },
+    'claude-haiku-4-5-20251001':     { input: 0.00025, output: 0.00125, cacheRead: 0.000025  },
     'gemini-2.5-pro':                { input: 0.00125, output: 0.010   },
     'gemini-2.5-flash':              { input: 0.0003,  output: 0.0025  },
     'gemini-2.0-flash':              { input: 0.0001,  output: 0.0004  },
@@ -570,16 +571,31 @@ export class BudgetTracker {
 
     get softStopped(): boolean { return this._softStopped; }
 
-    recordCall(promptLen: number, responseLen: number, modelId?: string) {
+    recordCall(
+        promptLen: number,
+        responseLen: number,
+        modelId?: string,
+        cacheStats?: { created: number; read: number },
+    ) {
         this.llmCalls += 1;
         const promptTokens  = Math.ceil(promptLen  / 4);
         const outputTokens  = Math.ceil(responseLen / 4);
         this.estimatedTokens += promptTokens + outputTokens;
         const costs = modelId ? MODEL_COSTS_USD[modelId] : undefined;
         if (costs) {
-            this.estimatedCostUsd +=
-                (promptTokens  / 1000) * costs.input +
-                (outputTokens  / 1000) * costs.output;
+            let inputCost: number;
+            if (cacheStats && costs.cacheRead !== undefined) {
+                // Apply actual Anthropic cache token split: created tokens cost
+                // full input price, read tokens cost cacheRead price (~10%).
+                const remaining = Math.max(0, promptTokens - cacheStats.created - cacheStats.read);
+                inputCost =
+                    (cacheStats.created / 1000) * costs.input +
+                    (cacheStats.read    / 1000) * costs.cacheRead +
+                    (remaining          / 1000) * costs.input;
+            } else {
+                inputCost = (promptTokens / 1000) * costs.input;
+            }
+            this.estimatedCostUsd += inputCost + (outputTokens / 1000) * costs.output;
         }
         // Soft dollar cap — graceful stop, not a hard throw.
         if (
@@ -873,8 +889,9 @@ async function callLLMProxy(
     }
     const data = await res.json();
     const text = data.text ?? '';
-    // Pass model id so BudgetTracker can compute per-call USD cost.
-    _activeBudget?.recordCall(prompt.length, text.length, model);
+    // cacheStats present for Anthropic calls; enables discounted cache-read pricing.
+    const cacheStats = data.cacheStats as { created: number; read: number } | undefined;
+    _activeBudget?.recordCall(prompt.length, text.length, model, cacheStats);
     return text;
 }
 

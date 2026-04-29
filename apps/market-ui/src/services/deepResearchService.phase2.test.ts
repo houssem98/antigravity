@@ -5587,6 +5587,108 @@ console.log('\n[82] ThinkingStep / BudgetTracker USD / checkpoint / StepTracker'
     }
 }
 
+// ─── 83. §6.10 Anthropic prompt-caching cost accounting ──────────────────────
+console.log('\n[83] Prompt caching — MODEL_COSTS_USD cacheRead + BudgetTracker discount');
+
+{
+    // ── cacheRead pricing present for all Anthropic models ───────────────────
+    const anthropicModels = [
+        'claude-opus-4-6',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5-20251001',
+    ] as const;
+
+    for (const id of anthropicModels) {
+        const c = MODEL_COSTS_USD[id];
+        check(`MODEL_COSTS_USD[${id}] has cacheRead field`, typeof c.cacheRead === 'number');
+        check(`MODEL_COSTS_USD[${id}] cacheRead is positive`, (c.cacheRead ?? 0) > 0);
+        // cacheRead must be substantially less than input (Anthropic discount is ~10%)
+        check(`MODEL_COSTS_USD[${id}] cacheRead < input (discount applied)`,
+            (c.cacheRead ?? Infinity) < c.input);
+        // Approximately 10% — allow 5%–20% range to future-proof pricing updates
+        const ratio = (c.cacheRead ?? 0) / c.input;
+        check(`MODEL_COSTS_USD[${id}] cacheRead ~10% of input (5%–20%)`,
+            ratio >= 0.05 && ratio <= 0.20);
+    }
+
+    // Non-Anthropic models intentionally omit cacheRead
+    const nonAnthropicModels = ['gemini-2.5-pro', 'deepseek-chat', 'llama-3.3-70b-versatile'];
+    for (const id of nonAnthropicModels) {
+        check(`MODEL_COSTS_USD[${id}] cacheRead is undefined (no cache pricing)`,
+            MODEL_COSTS_USD[id]?.cacheRead === undefined);
+    }
+
+    // ── BudgetTracker: cacheStats applies discounted pricing ─────────────────
+    const bt = new BudgetTracker(DEFAULT_BUDGET);
+
+    // Call with 4000 chars prompt (~1000 tokens), 2000 chars response (~500 tokens)
+    // cacheStats: { created: 0, read: 800 } → 800 tokens at cacheRead price, 200 at input
+    const promptLen = 4000;
+    const responseLen = 2000;
+    const promptTokens = Math.ceil(promptLen / 4);   // 1000
+    const outputTokens = Math.ceil(responseLen / 4); // 500
+    const model = 'claude-sonnet-4-6';
+    const costs = MODEL_COSTS_USD[model];
+
+    // Expected cost WITHOUT caching (baseline)
+    const nocacheCost =
+        (promptTokens  / 1000) * costs.input +
+        (outputTokens  / 1000) * costs.output;
+
+    // Expected cost WITH caching: 800 read tokens + 200 remaining at full price
+    const readTokens = 800;
+    const remainingInputTokens = Math.max(0, promptTokens - 0 - readTokens); // 200
+    const cachedCost =
+        (readTokens           / 1000) * costs.cacheRead! +
+        (remainingInputTokens / 1000) * costs.input +
+        (outputTokens         / 1000) * costs.output;
+
+    // Sanity: cached cost must be less than no-cache cost (cache saves money)
+    check('cacheStats discount: cached cost < no-cache cost', cachedCost < nocacheCost);
+
+    // BudgetTracker with cacheStats
+    const btCached = new BudgetTracker(DEFAULT_BUDGET);
+    btCached.recordCall(promptLen, responseLen, model, { created: 0, read: readTokens });
+    check('BudgetTracker: cacheStats drives discounted cost',
+        Math.abs(btCached.estimatedCostUsd - cachedCost) < 0.00001);
+
+    // BudgetTracker WITHOUT cacheStats (standard path)
+    const btNocache = new BudgetTracker(DEFAULT_BUDGET);
+    btNocache.recordCall(promptLen, responseLen, model);
+    check('BudgetTracker: no cacheStats → standard input price',
+        Math.abs(btNocache.estimatedCostUsd - nocacheCost) < 0.00001);
+
+    // Verify the discounted tracker is cheaper
+    check('BudgetTracker: discounted tracker < standard tracker',
+        btCached.estimatedCostUsd < btNocache.estimatedCostUsd);
+
+    // ── cacheStats with created (first write) still counts full price ─────────
+    // On first write: created = 1000 tokens, read = 0 — same cost as no-cache
+    const btWrite = new BudgetTracker(DEFAULT_BUDGET);
+    btWrite.recordCall(promptLen, responseLen, model, { created: promptTokens, read: 0 });
+    // created tokens cost full input price; remaining = max(0, 1000-1000-0) = 0
+    const writeExpected =
+        (promptTokens / 1000) * costs.input +
+        (outputTokens / 1000) * costs.output;
+    check('BudgetTracker: created tokens billed at full input price',
+        Math.abs(btWrite.estimatedCostUsd - writeExpected) < 0.00001);
+
+    // ── cacheStats ignored for models without cacheRead entry ────────────────
+    const btNonAnthropic = new BudgetTracker(DEFAULT_BUDGET);
+    btNonAnthropic.recordCall(promptLen, responseLen, 'gemini-2.5-pro', { created: 0, read: 800 });
+    const geminiCosts = MODEL_COSTS_USD['gemini-2.5-pro'];
+    const geminiExpected =
+        (promptTokens / 1000) * geminiCosts.input +
+        (outputTokens / 1000) * geminiCosts.output;
+    check('BudgetTracker: cacheStats ignored when model has no cacheRead',
+        Math.abs(btNonAnthropic.estimatedCostUsd - geminiExpected) < 0.00001);
+
+    // ── snapshot reflects discounted total ────────────────────────────────────
+    const snapDiscounted = btCached.snapshot();
+    check('snapshot.estimatedUsd reflects cache discount', snapDiscounted.estimatedUsd < nocacheCost);
+    check('snapshot.estimatedUsd is a number', typeof snapDiscounted.estimatedUsd === 'number');
+}
+
 // ─── Report ──────────────────────────────────────────────────────────────────
 console.log('\n=== Result ===');
 console.log(`  pass: ${pass}`);
