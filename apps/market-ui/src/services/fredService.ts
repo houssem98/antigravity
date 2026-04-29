@@ -518,6 +518,187 @@ export function parseBEAResponse(json: unknown): BEAObservation[] {
     return out;
 }
 
+// ─── SDMX-JSON: shared parser for IMF + OECD ───────────────────────────────
+// SDMX-JSON is the JSON serialization of the SDMX standard used by both
+// the IMF Statistical Data Warehouse and OECD's data API. The envelope
+// separates `structure` (dimension/observation schemas) from `dataSets`
+// (the actual values keyed by colon-encoded dimension indices). We
+// flatten the structure into per-observation rows that match the same
+// {date, value} shape as our other macro clients.
+//
+// IMF and OECD are technically free (no key required), though both are
+// rate-limited. SDMX-XML is the more common envelope but JSON is enough
+// for our use case and avoids pulling in an XML parser.
+
+export interface SDMXObservation {
+    date: string;            // YYYY-MM-01 anchored or YYYY-Qn → YYYY-mm-01
+    value: number | null;
+    seriesKey: string;       // colon-encoded dimension key (e.g. "0:0:1:2")
+    dimensions: Record<string, string>;   // {FREQ: "M", REF_AREA: "US", INDICATOR: "IFS"}
+}
+
+// Convert a SDMX time-period code into a sortable YYYY-MM-DD anchor.
+// Handles M / Q / Y formats — IMF uses 2026-01, 2026-Q1, 2026; OECD uses
+// 2026-01, 2026-Q1, sometimes 2026-W01 (we drop weekly to keep the row
+// model simple).
+export function parseSDMXPeriod(period: string): string | null {
+    if (!period) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(period)) return period;
+    if (/^\d{4}-\d{2}$/.test(period)) return `${period}-01`;
+    const q = period.match(/^(\d{4})-?Q([1-4])$/);
+    if (q) {
+        const month = (parseInt(q[2], 10) - 1) * 3 + 1;
+        return `${q[1]}-${String(month).padStart(2, '0')}-01`;
+    }
+    if (/^\d{4}$/.test(period)) return `${period}-01-01`;
+    return null;
+}
+
+// Walk an SDMX-JSON envelope and return a flat array of observations.
+// Defensive: any structural mismatch (missing dataSets, dimensions, or
+// observations) yields an empty list rather than throwing.
+export function parseSDMXJson(json: unknown): SDMXObservation[] {
+    if (!json || typeof json !== 'object') return [];
+    const root = json as any;
+
+    // SDMX-JSON v1 has structure.dimensions; some endpoints place it at
+    // root.data.structure (envelope wrapped in `data`). Probe both.
+    const structure = root.structure ?? root.data?.structure;
+    if (!structure) return [];
+    const seriesDims = structure.dimensions?.series;
+    const obsDims = structure.dimensions?.observation;
+    if (!Array.isArray(seriesDims) || !Array.isArray(obsDims)) return [];
+
+    // The TIME_PERIOD dimension is what we anchor each observation to;
+    // its values[] gives an ordered list of period codes (one per
+    // observation index).
+    const timeDim = obsDims.find((d: any) => d?.id === 'TIME_PERIOD' || d?.id === 'TIME');
+    if (!timeDim || !Array.isArray(timeDim.values)) return [];
+    const timeValues: string[] = timeDim.values.map((v: any) => String(v?.id ?? v?.name ?? ''));
+
+    // Build a lookup of seriesDim values so we can map "0:1:2" keys back
+    // to {DIM_ID: VALUE_ID} dictionaries.
+    const seriesDimMeta: Array<{ id: string; values: string[] }> = seriesDims.map((d: any) => ({
+        id: String(d?.id ?? ''),
+        values: Array.isArray(d?.values)
+            ? d.values.map((v: any) => String(v?.id ?? v?.name ?? ''))
+            : [],
+    }));
+
+    const dataSets = root.dataSets ?? root.data?.dataSets;
+    if (!Array.isArray(dataSets) || dataSets.length === 0) return [];
+    const ds = dataSets[0];
+    const seriesMap = ds?.series;
+    if (!seriesMap || typeof seriesMap !== 'object') return [];
+
+    const out: SDMXObservation[] = [];
+    for (const [seriesKey, seriesValRaw] of Object.entries(seriesMap)) {
+        const seriesVal = seriesValRaw as any;
+        const obsMap = seriesVal?.observations;
+        if (!obsMap || typeof obsMap !== 'object') continue;
+
+        // Decode the colon-encoded key back to dimension ids
+        const indices = String(seriesKey).split(':').map(s => parseInt(s, 10));
+        const dimensions: Record<string, string> = {};
+        for (let i = 0; i < indices.length && i < seriesDimMeta.length; i++) {
+            const dim = seriesDimMeta[i];
+            const valId = dim.values[indices[i]];
+            if (valId !== undefined) dimensions[dim.id] = valId;
+        }
+
+        for (const [obsKey, obsValRaw] of Object.entries(obsMap)) {
+            const obsVal = obsValRaw as any;
+            const timeIdx = parseInt(String(obsKey), 10);
+            const periodCode = timeValues[timeIdx];
+            const date = parseSDMXPeriod(periodCode);
+            if (!date) continue;
+            // SDMX observation array: [value, attribute1, attribute2, ...]
+            const raw = Array.isArray(obsVal) ? obsVal[0] : obsVal;
+            const value = typeof raw === 'number'
+                ? (Number.isFinite(raw) ? raw : null)
+                : raw == null ? null : (Number.isFinite(parseFloat(String(raw))) ? parseFloat(String(raw)) : null);
+            out.push({ date, value, seriesKey, dimensions });
+        }
+    }
+    return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ─── IMF Statistical Data Warehouse ───────────────────────────────────────
+// API base: http://dataservices.imf.org/REST/SDMX_JSON.svc/CompactData/{db}/{key}
+// Common databases:
+//   IFS  — International Financial Statistics (rates, prices, FX, balance of payments)
+//   WEO  — World Economic Outlook (annual macro forecasts)
+//   GFSR — Global Financial Stability Report
+//
+// Key shape: dot-separated dimension values, e.g. "M.US.FPOLM_PA" =
+// (Frequency=M, Reference area=US, Indicator=Policy rate).
+
+export const IMF_BASE = 'http://dataservices.imf.org/REST/SDMX_JSON.svc/CompactData';
+
+export interface IMFFetchOptions {
+    database: string;        // 'IFS' / 'WEO' / 'GFSR'
+    key: string;             // e.g. 'M.US.FPOLM_PA'
+    startPeriod?: string;    // YYYY or YYYY-MM
+    endPeriod?: string;
+}
+
+export async function fetchIMFSeries(opts: IMFFetchOptions): Promise<SDMXObservation[]> {
+    const url = new URL(`${IMF_BASE}/${opts.database}/${opts.key}`);
+    if (opts.startPeriod) url.searchParams.set('startPeriod', opts.startPeriod);
+    if (opts.endPeriod) url.searchParams.set('endPeriod', opts.endPeriod);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`IMF ${opts.database}/${opts.key}: HTTP ${res.status}`);
+    const json = await res.json();
+    return parseSDMXJson(json);
+}
+
+// Common IMF series worth surfacing in macro snapshots:
+export const IMF_SERIES: Record<string, { db: string; key: string; label: string }> = {
+    us_policy_rate:    { db: 'IFS', key: 'M.US.FPOLM_PA', label: 'US monetary policy rate (IMF IFS)' },
+    us_cpi:            { db: 'IFS', key: 'M.US.PCPI_IX',  label: 'US CPI (IMF IFS)' },
+    us_unemployment:   { db: 'IFS', key: 'M.US.LUR_PT',   label: 'US unemployment (IMF IFS)' },
+    eurusd_imf:        { db: 'IFS', key: 'M.U2.ENDE_XDC_USD_RATE', label: 'EUR/USD (IMF IFS)' },
+};
+
+// ─── OECD Stats — SDMX-JSON ───────────────────────────────────────────────
+// API: https://stats.oecd.org/SDMX-JSON/data/{datasetId}/{filter}/all
+// Common datasets: KEI (Key Economic Indicators), MEI, QNA (quarterly NA).
+// Filter shape is dot-separated dimension values per the dataset's
+// dimension order. KEI example: USA.LR.IXOB.G = United States, leading
+// indicator, index OECD-base, growth.
+
+export const OECD_BASE = 'https://stats.oecd.org/SDMX-JSON/data';
+
+export interface OECDFetchOptions {
+    datasetId: string;       // 'KEI' / 'MEI' / 'QNA'
+    filter: string;          // dot-separated dimension values
+    startTime?: string;
+    endTime?: string;
+    dimensionAtObservation?: 'TIME_PERIOD' | 'AllDimensions';
+}
+
+export async function fetchOECDSeries(opts: OECDFetchOptions): Promise<SDMXObservation[]> {
+    const url = new URL(`${OECD_BASE}/${opts.datasetId}/${opts.filter}/all`);
+    if (opts.startTime) url.searchParams.set('startTime', opts.startTime);
+    if (opts.endTime) url.searchParams.set('endTime', opts.endTime);
+    if (opts.dimensionAtObservation) {
+        url.searchParams.set('dimensionAtObservation', opts.dimensionAtObservation);
+    }
+    url.searchParams.set('contentType', 'json');
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`OECD ${opts.datasetId}/${opts.filter}: HTTP ${res.status}`);
+    const json = await res.json();
+    return parseSDMXJson(json);
+}
+
+// Common OECD KEI / MEI series:
+export const OECD_SERIES: Record<string, { datasetId: string; filter: string; label: string }> = {
+    us_cli:      { datasetId: 'KEI', filter: 'USA.LR.IXOB.G',  label: 'US Composite Leading Indicator (OECD KEI)' },
+    us_bci:      { datasetId: 'KEI', filter: 'USA.BCI.IXOB.G', label: 'US Business Confidence (OECD KEI)' },
+    eu_cli:      { datasetId: 'KEI', filter: 'EU27_2020.LR.IXOB.G', label: 'EU Composite Leading Indicator (OECD KEI)' },
+    g7_unemp:    { datasetId: 'MEI', filter: 'G7.LRHUTTTT.STSA.M', label: 'G7 unemployment harmonized (OECD MEI)' },
+};
+
 // ─── Unified cross-provider snapshot ────────────────────────────────────────
 // Returns a single prompt-ready text block covering FRED + BLS + WB + ECB.
 // Any provider failure is silent — macro is supplementary, never required.
