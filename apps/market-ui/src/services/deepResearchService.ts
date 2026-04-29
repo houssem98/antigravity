@@ -336,6 +336,27 @@ export interface ResearchProgress {
     progress: number;
     sourcesFound?: number;
     currentSource?: string;
+    // Thinking panel — live step-by-step trace of what the agent is doing.
+    steps?: ThinkingStep[];
+    currentStep?: string;          // id of the currently running step
+    budgetUsed?: { calls: number; tokens: number; estimatedUsd: number };
+}
+
+// ─── Thinking Panel ───────────────────────────────────────────────────────────
+// One ThinkingStep per pipeline stage, streamed via ResearchProgress.steps.
+// Callers render these as a real-time thinking panel (plan §6.1 P0: "stream a
+// thinking panel with step + source-list").
+
+export interface ThinkingStep {
+    id: string;
+    label: string;
+    status: 'pending' | 'running' | 'done' | 'error' | 'skipped';
+    startedAt: number;       // Date.now()
+    durationMs?: number;     // set when status transitions to done|error
+    model?: string;          // model id used for this step
+    sourcesFound?: number;
+    tokensEstimated?: number;
+    detail?: string;         // one-line insight e.g. "12 angles · 5 tickers"
 }
 
 export interface Citation {
@@ -359,7 +380,7 @@ export interface ResearchReport {
         modelUsed?: string;
         intent?: string;
         template?: TemplateKey;
-        budget?: { llmCalls: number; estimatedTokens: number };
+        budget?: { calls: number; tokens: number; estimatedUsd: number };
         verification?: {
             totalClaims: number;
             groundedClaims: number;
@@ -497,32 +518,76 @@ export type BlueprintReviewCallback = (
 ) => Promise<ResearchBlueprint | null | undefined> | ResearchBlueprint | null | undefined;
 
 // ─── Budget Tracking ─────────────────────────────────────────────────────────
-// Hard caps protect against runaway costs on a single query.
+// Hard caps (LLM calls + tokens) throw immediately; the soft dollar cap sets
+// `softStopped = true` so the pipeline can finish the current stage and then
+// assemble a partial report instead of crashing and returning nothing.
+
+// Per-1K-token list prices (input / output). Approximate — actual costs vary
+// by caching, negotiated rates, and batching. Used only for budget telemetry
+// and the optional per-query dollar cap; never used for customer billing.
+export const MODEL_COSTS_USD: Record<string, { input: number; output: number }> = {
+    'claude-opus-4-6':               { input: 0.015,   output: 0.075   },
+    'claude-sonnet-4-6':             { input: 0.003,   output: 0.015   },
+    'claude-haiku-4-5-20251001':     { input: 0.00025, output: 0.00125 },
+    'gemini-2.5-pro':                { input: 0.00125, output: 0.010   },
+    'gemini-2.5-flash':              { input: 0.0003,  output: 0.0025  },
+    'gemini-2.0-flash':              { input: 0.0001,  output: 0.0004  },
+    'gemini-2.0-flash-lite':         { input: 0.000075,output: 0.0003  },
+    'deepseek-chat':                 { input: 0.00027, output: 0.0011  },
+    'deepseek-reasoner':             { input: 0.00055, output: 0.0022  },
+    // Groq — public free tier; placeholder costs to avoid division by zero
+    'openai/gpt-oss-120b':                        { input: 0.002,   output: 0.002   },
+    'qwen/qwen3-32b':                              { input: 0.0006,  output: 0.0006  },
+    'meta-llama/llama-4-scout-17b-16e-instruct':  { input: 0.0001,  output: 0.0001  },
+    'llama-3.3-70b-versatile':                    { input: 0.0006,  output: 0.0006  },
+    'llama-3.1-8b-instant':                       { input: 0.00005, output: 0.00008 },
+};
 
 interface ResearchBudget {
     maxLLMCalls: number;
     maxEstimatedTokens: number;
     maxSearchRounds: number;
+    maxCostUsd?: number;   // soft dollar cap → sets softStopped, never throws
 }
 
 export const DEFAULT_BUDGET: ResearchBudget = {
     maxLLMCalls: 30,
     maxEstimatedTokens: 800_000,
     maxSearchRounds: 4,
+    // maxCostUsd left undefined = no dollar cap by default
 };
 
 export class BudgetTracker {
     llmCalls = 0;
     estimatedTokens = 0;
+    estimatedCostUsd = 0;
     budget: ResearchBudget;
+    private _softStopped = false;
 
     constructor(budget: ResearchBudget) {
         this.budget = budget;
     }
 
-    recordCall(promptLen: number, responseLen: number) {
+    get softStopped(): boolean { return this._softStopped; }
+
+    recordCall(promptLen: number, responseLen: number, modelId?: string) {
         this.llmCalls += 1;
-        this.estimatedTokens += Math.ceil((promptLen + responseLen) / 4);
+        const promptTokens  = Math.ceil(promptLen  / 4);
+        const outputTokens  = Math.ceil(responseLen / 4);
+        this.estimatedTokens += promptTokens + outputTokens;
+        const costs = modelId ? MODEL_COSTS_USD[modelId] : undefined;
+        if (costs) {
+            this.estimatedCostUsd +=
+                (promptTokens  / 1000) * costs.input +
+                (outputTokens  / 1000) * costs.output;
+        }
+        // Soft dollar cap — graceful stop, not a hard throw.
+        if (
+            this.budget.maxCostUsd !== undefined
+            && this.estimatedCostUsd >= this.budget.maxCostUsd
+        ) {
+            this._softStopped = true;
+        }
     }
 
     checkBeforeCall() {
@@ -535,7 +600,11 @@ export class BudgetTracker {
     }
 
     snapshot() {
-        return { llmCalls: this.llmCalls, estimatedTokens: this.estimatedTokens };
+        return {
+            calls: this.llmCalls,
+            tokens: this.estimatedTokens,
+            estimatedUsd: parseFloat(this.estimatedCostUsd.toFixed(4)),
+        };
     }
 }
 
@@ -558,6 +627,57 @@ let _activeSignal: AbortSignal | null = null;
 export function throwIfAborted(signal?: AbortSignal | null) {
     const s = signal ?? _activeSignal;
     if (s?.aborted) throw new ResearchCancelledError();
+}
+
+// ─── Research Checkpoint (localStorage) ──────────────────────────────────────
+// Saves lightweight stage-boundary snapshots (blueprint + knowledge base) so a
+// refreshed or crashed tab can resume — or at minimum surface what was found —
+// instead of starting from zero.  TTL: 30 minutes.
+//
+// Security: checkpoints contain LLM-generated text, not keys or credentials.
+// Key material is never stored here.
+
+export const CHECKPOINT_TTL_MS = 30 * 60 * 1000;
+const CHECKPOINT_KEY_PREFIX = 'drchk::';
+
+export interface ResearchCheckpoint {
+    query: string;
+    blueprint?: ResearchBlueprint;
+    knowledgeBase?: string;
+    roundsRun?: number;
+    stage: 'blueprint' | 'search' | 'synthesizing';
+    savedAt: number;
+}
+
+function _cpKey(query: string): string {
+    const norm = (query || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 60);
+    return `${CHECKPOINT_KEY_PREFIX}${norm}`;
+}
+
+export function saveCheckpoint(query: string, data: Omit<ResearchCheckpoint, 'savedAt'>): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+        localStorage.setItem(_cpKey(query), JSON.stringify({ ...data, savedAt: Date.now() }));
+    } catch { /* storage quota or SSR — ignore */ }
+}
+
+export function loadCheckpoint(query: string): ResearchCheckpoint | null {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(_cpKey(query));
+        if (!raw) return null;
+        const cp = JSON.parse(raw) as ResearchCheckpoint;
+        if (Date.now() - cp.savedAt > CHECKPOINT_TTL_MS) {
+            localStorage.removeItem(_cpKey(query));
+            return null;
+        }
+        return cp;
+    } catch { return null; }
+}
+
+export function clearCheckpoint(query: string): void {
+    if (typeof localStorage === 'undefined') return;
+    try { localStorage.removeItem(_cpKey(query)); } catch { }
 }
 
 // ─── Output Cache (plan §6.13 — query-scoped TTL cache) ───────────────────
@@ -753,7 +873,8 @@ async function callLLMProxy(
     }
     const data = await res.json();
     const text = data.text ?? '';
-    _activeBudget?.recordCall(prompt.length, text.length);
+    // Pass model id so BudgetTracker can compute per-call USD cost.
+    _activeBudget?.recordCall(prompt.length, text.length, model);
     return text;
 }
 
@@ -3576,6 +3697,98 @@ ${bullets.map(b => '- ' + b).join('\n')}
 ${caveat}`;
 }
 
+// ─── StepTracker — thinking-panel state machine ───────────────────────────────
+// Manages the ordered list of ThinkingStep objects and emits enriched
+// ResearchProgress events so callers can render a live "thinking panel" with
+// per-step timing, model, sources, and status badges.
+//
+// Usage inside performDeepResearch:
+//   const st = new StepTracker(onProgress, tracker);
+//   st.start('blueprint', 'Building research blueprint', 'planning', 3, modelId);
+//   // … do work …
+//   st.done('blueprint', '12 angles · 5 tickers');
+//   st.emit('planning', 'Blueprint ready', 10, { sourcesFound: 0 });
+
+export class StepTracker {
+    private _steps: ThinkingStep[] = [];
+    private _onProgress: (p: ResearchProgress) => void;
+    private _tracker: BudgetTracker;
+
+    constructor(onProgress: (p: ResearchProgress) => void, tracker: BudgetTracker) {
+        this._onProgress = onProgress;
+        this._tracker = tracker;
+    }
+
+    start(
+        id: string,
+        label: string,
+        stage: ResearchProgress['stage'],
+        progress: number,
+        model?: string,
+    ): void {
+        // Close any still-running step (safety net for missed done() calls).
+        const now = Date.now();
+        this._steps = this._steps.map(s =>
+            s.status === 'running'
+                ? { ...s, status: 'done' as const, durationMs: now - s.startedAt }
+                : s,
+        );
+        this._steps.push({ id, label, status: 'running', startedAt: now, model });
+        this._emit(stage, `${label}…`, progress);
+    }
+
+    done(id: string, detail?: string, extra?: Partial<ThinkingStep>): void {
+        const now = Date.now();
+        this._steps = this._steps.map(s =>
+            s.id === id
+                ? { ...s, ...extra, status: 'done' as const, durationMs: now - s.startedAt, detail: detail ?? s.detail }
+                : s,
+        );
+    }
+
+    error(id: string, detail?: string): void {
+        const now = Date.now();
+        this._steps = this._steps.map(s =>
+            s.id === id
+                ? { ...s, status: 'error' as const, durationMs: now - s.startedAt, detail }
+                : s,
+        );
+    }
+
+    skip(id: string, label: string): void {
+        this._steps.push({ id, label, status: 'skipped', startedAt: Date.now(), durationMs: 0 });
+    }
+
+    emit(
+        stage: ResearchProgress['stage'],
+        message: string,
+        progress: number,
+        extra?: Partial<ResearchProgress>,
+    ): void {
+        this._emit(stage, message, progress, extra);
+    }
+
+    getSteps(): ThinkingStep[] { return [...this._steps]; }
+
+    private _emit(
+        stage: ResearchProgress['stage'],
+        message: string,
+        progress: number,
+        extra?: Partial<ResearchProgress>,
+    ): void {
+        const snap = this._tracker.snapshot();
+        this._onProgress({
+            stage,
+            message,
+            progress,
+            steps: [...this._steps],
+            currentStep: this._steps.find(s => s.status === 'running')?.id,
+            budgetUsed: snap,
+            ...extra,
+        });
+    }
+}
+
 // ─── Main Export: performDeepResearch ────────────────────────────────────────
 
 export const performDeepResearch = async (
@@ -3628,10 +3841,13 @@ export const performDeepResearch = async (
     _activeReaderStats = readerStats;
     throwIfAborted(signal);
 
+    // Thinking-panel step tracker — wraps onProgress to auto-inject steps[].
+    const st = new StepTracker(onProgress, tracker);
+
     const driverModel = await pickDriver('premium', model);
 
     // ── Stage 1: Blueprint (0–10%) ─────────────────────────────────────────
-    onProgress({ stage: 'planning', message: 'Chief Analyst building research blueprint…', progress: 3 });
+    st.start('blueprint', 'Building research blueprint', 'planning', 3, driverModel);
 
     let blueprint = await buildResearchBlueprint(query, driverModel, workflow);
 
@@ -3659,14 +3875,12 @@ export const performDeepResearch = async (
     const hitl = { used: false, modified: false, cancelled: false };
     if (onBlueprintReady) {
         hitl.used = true;
-        onProgress({
-            stage: 'planning',
-            message: 'Plan ready — awaiting analyst review…',
-            progress: 6,
-        });
+        st.done('blueprint', `${blueprint.targetEntities.length} entities · awaiting review`);
+        st.start('hitl', 'Awaiting analyst blueprint review', 'planning', 6);
         const review = await onBlueprintReady(blueprint);
         if (review === null) {
             hitl.cancelled = true;
+            st.error('hitl', 'Cancelled at plan review');
             throw new ResearchCancelledError('Research cancelled at plan review');
         }
         if (review) {
@@ -3674,19 +3888,25 @@ export const performDeepResearch = async (
             hitl.modified = JSON.stringify(review) !== JSON.stringify(blueprint);
             blueprint = review;
         }
+        st.done('hitl', hitl.modified ? 'Blueprint edited by analyst' : 'Blueprint accepted as-is');
+    } else {
+        st.done('blueprint', `${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`);
     }
 
-    onProgress({
-        stage: 'planning',
-        message: hitl.modified
-            ? `Blueprint (edited): ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`
-            : `Blueprint: ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`,
-        progress: 10,
-    });
+    // Checkpoint after blueprint so a cancelled/crashed run can surface the plan.
+    saveCheckpoint(query, { query, blueprint, stage: 'blueprint' });
+
+    st.emit('planning', hitl.modified
+        ? `Blueprint (edited): ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`
+        : `Blueprint: ${blueprint.intent.replace(/_/g, ' ')} · ${blueprint.targetEntities.length} entities · ${blueprint.searchQueries.length} queries`,
+        10,
+    );
 
     throwIfAborted(signal);
 
     // ── Stage 2: Iterative Search + Parallel Data (10–45%) ───────────────
+    st.start('search', 'Running parallel search + data fetch', 'searching', 11, driverModel);
+
     // Innovation gate — only fire patent / trial / FDA fetches when the
     // blueprint actually touches pharma / biotech / innovation themes.
     // Saves ~1s latency on earnings / thesis / macro queries that don't
@@ -3763,61 +3983,41 @@ export const performDeepResearch = async (
     const macroStatus = macroText ? '· FRED macro ✓' : '';
     const innovationStatus = innovationText ? '· Innovation ✓' : '';
 
-    onProgress({
-        stage: 'searching',
-        message: `Retrieved ${webSources.length} web · ${secFilings.length} SEC · ${ragStatus} ${macroStatus} ${innovationStatus}`.trim(),
-        progress: 45,
-        sourcesFound: totalSources,
-    });
+    st.done('search', `${webSources.length} web · ${secFilings.length} SEC · ${ragStatus}`);
+
+    // Checkpoint after search so a subsequent abort can surface retrieved sources.
+    saveCheckpoint(query, { query, blueprint, knowledgeBase, roundsRun, stage: 'search' });
+
+    st.emit('searching',
+        `Retrieved ${webSources.length} web · ${secFilings.length} SEC · ${ragStatus} ${macroStatus} ${innovationStatus}`.trim(),
+        45,
+        { sourcesFound: totalSources },
+    );
 
     // ── Stage 2b: Contextual Retrieval (45–48%) ───────────────────────────
-    // Before sources flow into Tier-4 evidence blocks or the analyst
-    // synthesis, tag each one with a 40–80 token self-describing context
-    // (source type, entity, recency, relevance). Plan §10.1 — highest-ROI
-    // single retrieval intervention. Budget-aware: falls back to
-    // deterministic URL-based inference if the LLM cap would be exceeded.
-    onProgress({
-        stage: 'analyzing',
-        message: 'Contextualizing sources for retrieval…',
-        progress: 46,
-        sourcesFound: totalSources,
-    });
+    st.start('contextual', 'Contextualizing sources for retrieval', 'analyzing', 46, driverModel);
     throwIfAborted(signal);
     const { enriched: enrichedWebSources, stats: contextualRetrieval } =
         await contextualizeSources(webSources, query, blueprint, { model: driverModel });
     webSources = enrichedWebSources;
+    st.done('contextual', `${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`);
 
     // ── Stage 3: Source Intelligence (48–65%) ─────────────────────────────
-    onProgress({
-        stage: 'analyzing',
-        message: `Analyst team extracting intelligence · ${contextualRetrieval.enriched}/${contextualRetrieval.total} sources tagged`,
-        progress: 48,
-        sourcesFound: totalSources,
-    });
-
+    st.start('analyze', 'Extracting intelligence from sources', 'analyzing', 48, driverModel);
     throwIfAborted(signal);
     const sourceAnalysis = await analyzeSources(webSources, blueprint, driverModel, ragResult, knowledgeBase);
+    st.done('analyze', `${webSources.length} sources processed`);
 
-    onProgress({
-        stage: 'analyzing',
-        message: 'Running adversarial bull/bear analysis in parallel…',
-        progress: 63,
-        sourcesFound: totalSources,
-    });
-
+    st.start('adversarial', 'Running adversarial bull/bear analysis', 'analyzing', 63, driverModel);
     throwIfAborted(signal);
 
     // ── Stage 4: Adversarial Analysis (65–75%) ────────────────────────────
     const { bullCase, bearCase } = await generateAdversarialAnalysis(
         blueprint, sourceAnalysis, driverModel, ragResult
     );
+    st.done('adversarial', 'Bull/bear cases generated');
 
-    onProgress({
-        stage: 'synthesizing',
-        message: 'Senior analyst writing institutional report…',
-        progress: 75,
-        sourcesFound: totalSources,
-    });
+    st.start('write', 'Senior analyst writing institutional report', 'synthesizing', 75, driverModel);
 
     throwIfAborted(signal);
 
@@ -3850,12 +4050,7 @@ export const performDeepResearch = async (
     };
 
     if (canFanout) {
-        onProgress({
-            stage: 'synthesizing',
-            message: `Fanning out to ${sectionCount} parallel section writers…`,
-            progress: 77,
-            sourcesFound: totalSources,
-        });
+        st.emit('synthesizing', `Fanning out to ${sectionCount} parallel section writers…`, 77, { sourcesFound: totalSources });
         try {
             const fan = await synthesizeReportBySections(
                 blueprint,
@@ -3870,12 +4065,8 @@ export const performDeepResearch = async (
                 ragResult,
                 macroText,
                 (done, total, title) => {
-                    onProgress({
-                        stage: 'synthesizing',
-                        message: `Section ${done}/${total} drafted — ${title}`,
-                        progress: 77 + Math.round((done / total) * 15),
-                        sourcesFound: totalSources,
-                    });
+                    st.emit('synthesizing', `Section ${done}/${total} drafted — ${title}`,
+                        77 + Math.round((done / total) * 15), { sourcesFound: totalSources });
                 },
             );
             // Accept the fanout if ≥60% of sections came back. Below that,
@@ -3909,12 +4100,8 @@ export const performDeepResearch = async (
     }
 
     // ── Stage 6: Numeric-Consistency Verifier (96–100%) ───────────────────
-    onProgress({
-        stage: 'synthesizing',
-        message: 'Verifying numeric claims against source evidence…',
-        progress: 97,
-        sourcesFound: totalSources,
-    });
+    st.done('write', `${sectionFanout.used ? sectionFanout.completed + '/' + sectionFanout.planned + ' sections' : 'monolith'} drafted`);
+    st.start('verify', 'Verifying numeric claims and citations', 'synthesizing', 97);
 
     let verification = verifyNumericConsistency(markdown, {
         webSources,
@@ -3948,12 +4135,8 @@ export const performDeepResearch = async (
     // forecast, drop unsupported figure). Each edit is a {find, replace}
     // pair applied only when `find` is unique in the draft. Accepted only
     // if aggregate issue count strictly drops.
-    onProgress({
-        stage: 'synthesizing',
-        message: 'Senior reviewer applying surgical edits…',
-        progress: 98,
-        sourcesFound: totalSources,
-    });
+    st.done('verify', `${verification.groundedClaims}/${verification.totalClaims} claims grounded`);
+    st.start('revisor', 'Senior reviewer applying surgical edits', 'synthesizing', 98, driverModel);
     const revisionOutcome = await reviseReport(
         { markdown, verification, citationDensity, factInference },
         { model: driverModel },
@@ -4090,12 +4273,13 @@ export const performDeepResearch = async (
     const hitlTail = hitl.used
         ? (hitl.modified ? ' · plan edited by analyst' : ' · plan approved by analyst')
         : '';
-    onProgress({
-        stage: 'complete',
-        message: `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${entailTail}${injTail}${workflowTail}${limitationsTail}${hitlTail}`,
-        progress: 100,
-        sourcesFound: totalSources,
-    });
+    st.done('revisor', revisions.accepted ? `${revisions.editsApplied} edits applied` : 'no edits accepted');
+    clearCheckpoint(query);   // run completed cleanly — drop intermediate state
+    st.emit('complete',
+        `Confidence ${confidence} · ${verification.groundedClaims}/${verification.totalClaims} numeric grounded${auditTail}${densityTail}${hedgeTail}${fanoutTail}${readerTail}${ctxTail}${revTail}${entailTail}${injTail}${workflowTail}${limitationsTail}${hitlTail}`,
+        100,
+        { sourcesFound: totalSources },
+    );
 
     // ── Build Citations ────────────────────────────────────────────────────
     const citations: Citation[] = [];

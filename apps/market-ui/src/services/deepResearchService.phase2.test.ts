@@ -57,6 +57,16 @@ import {
     READER_FALLBACK_THRESHOLD,
     type SectionFanoutResult,
     type ReaderResult,
+    type ThinkingStep,
+    type ResearchProgress,
+    MODEL_COSTS_USD,
+    BudgetTracker,
+    DEFAULT_BUDGET,
+    StepTracker,
+    saveCheckpoint,
+    loadCheckpoint,
+    clearCheckpoint,
+    CHECKPOINT_TTL_MS,
 } from './deepResearchService';
 import {
     classifyAuthority,
@@ -3901,7 +3911,7 @@ console.log('\n[72] PowerPoint outline planner');
             verification: { totalClaims: 10, groundedClaims: 9, multiSourceClaims: 6, singleSourceClaims: [], unsupportedClaims: [] },
             citationDensity: { totalFactSentences: 10, citedSentences: 10, density: 1, uncitedSamples: [] },
             workflow: { id: 'earnings_reaction', label: 'Earnings Reaction', template: 'earnings_recap', anglesInjected: 4, metricsInjected: 3 },
-            budget: { llmCalls: 18, estimatedTokens: 124000 },
+            budget: { calls: 18, tokens: 124000, estimatedUsd: 0.085 },
         },
     };
 
@@ -5436,6 +5446,144 @@ console.log('\n[81] SDMX-JSON / IMF / OECD');
         check('fetchOECDSeries: HTTP error propagates', oecdThrew);
     } finally {
         globalThis.fetch = origFetch;
+    }
+}
+
+// ─── 82. ThinkingStep · BudgetTracker USD · checkpoint · StepTracker ─────────
+console.log('\n[82] ThinkingStep / BudgetTracker USD / checkpoint / StepTracker');
+
+{
+    // ── MODEL_COSTS_USD ────────────────────────────────────────────────────
+    check('MODEL_COSTS_USD: claude-opus-4-6 has input cost',
+        MODEL_COSTS_USD['claude-opus-4-6'].input > 0);
+    check('MODEL_COSTS_USD: claude-sonnet-4-6 cheaper than opus (input)',
+        MODEL_COSTS_USD['claude-sonnet-4-6'].input < MODEL_COSTS_USD['claude-opus-4-6'].input);
+    check('MODEL_COSTS_USD: all models have input + output keys', (() => {
+        return Object.values(MODEL_COSTS_USD).every(
+            c => typeof c.input === 'number' && typeof c.output === 'number' && c.input > 0 && c.output > 0,
+        );
+    })());
+
+    // ── BudgetTracker: USD cost tracking ─────────────────────────────────
+    const bt = new BudgetTracker({ maxLLMCalls: 50, maxEstimatedTokens: 1_000_000, maxSearchRounds: 4 });
+    check('BudgetTracker: estimatedCostUsd starts at 0', bt.estimatedCostUsd === 0);
+    check('BudgetTracker: softStopped starts false', bt.softStopped === false);
+
+    // recordCall without modelId — tokens counted, cost stays 0
+    bt.recordCall(400, 800);   // 100 + 200 tokens = 300 tokens
+    check('BudgetTracker: tokens counted without modelId', bt.estimatedTokens === 300);
+    check('BudgetTracker: cost stays 0 when no modelId', bt.estimatedCostUsd === 0);
+
+    // recordCall with known model
+    bt.recordCall(4000, 8000, 'claude-sonnet-4-6');   // 1000 in + 2000 out tokens
+    const expectedCost = (1000 / 1000) * MODEL_COSTS_USD['claude-sonnet-4-6'].input
+        + (2000 / 1000) * MODEL_COSTS_USD['claude-sonnet-4-6'].output;
+    check('BudgetTracker: estimatedCostUsd accumulates correctly',
+        Math.abs(bt.estimatedCostUsd - expectedCost) < 0.0001);
+
+    // snapshot shape
+    const snap = bt.snapshot();
+    check('BudgetTracker: snapshot has calls field', typeof snap.calls === 'number');
+    check('BudgetTracker: snapshot has tokens field', typeof snap.tokens === 'number');
+    check('BudgetTracker: snapshot has estimatedUsd field', typeof snap.estimatedUsd === 'number');
+    check('BudgetTracker: snapshot estimatedUsd is rounded to 4dp',
+        String(snap.estimatedUsd).split('.')[1]?.length <= 4);
+
+    // ── BudgetTracker: soft dollar cap ────────────────────────────────────
+    const btCapped = new BudgetTracker({
+        maxLLMCalls: 100, maxEstimatedTokens: 1_000_000, maxSearchRounds: 4,
+        maxCostUsd: 0.001,   // tiny cap — will be hit on first big call
+    });
+    check('BudgetTracker: softStopped false before cap', btCapped.softStopped === false);
+    btCapped.recordCall(100_000, 100_000, 'claude-opus-4-6');   // big call
+    check('BudgetTracker: softStopped true after cap exceeded', btCapped.softStopped === true);
+    // Hard checks still throw (soft cap doesn't disable them)
+    const btHard = new BudgetTracker({ maxLLMCalls: 1, maxEstimatedTokens: 1_000_000, maxSearchRounds: 4 });
+    btHard.recordCall(100, 100);
+    let hardThrew = false;
+    try { btHard.checkBeforeCall(); } catch { hardThrew = true; }
+    check('BudgetTracker: hard LLM cap still throws', hardThrew);
+
+    // ── ThinkingStep type shape ──────────────────────────────────────────
+    const step: ThinkingStep = {
+        id: 'blueprint', label: 'Building blueprint', status: 'running', startedAt: Date.now(),
+    };
+    check('ThinkingStep: required fields present', step.id === 'blueprint' && step.status === 'running');
+    check('ThinkingStep: optional fields accept values', (() => {
+        const s2: ThinkingStep = { ...step, model: 'claude-sonnet-4-6', detail: 'test', durationMs: 100, sourcesFound: 5 };
+        return s2.model === 'claude-sonnet-4-6' && s2.detail === 'test' && s2.durationMs === 100;
+    })());
+
+    // ── StepTracker ──────────────────────────────────────────────────────
+    const budget2 = new BudgetTracker(DEFAULT_BUDGET);
+    const emitted: ResearchProgress[] = [];
+    const st = new StepTracker((p) => emitted.push(p), budget2);
+
+    st.start('s1', 'Step one', 'planning', 5, 'claude-sonnet-4-6');
+    check('StepTracker: start emits progress', emitted.length === 1);
+    check('StepTracker: emitted progress has steps array', Array.isArray(emitted[0].steps));
+    check('StepTracker: emitted progress has currentStep', emitted[0].currentStep === 's1');
+    check('StepTracker: emitted progress has budgetUsed', typeof emitted[0].budgetUsed?.calls === 'number');
+    check('StepTracker: step status is running', emitted[0].steps![0].status === 'running');
+    check('StepTracker: step model stored', emitted[0].steps![0].model === 'claude-sonnet-4-6');
+
+    st.done('s1', 'detail text');
+    check('StepTracker: getSteps includes done step', st.getSteps()[0].status === 'done');
+    check('StepTracker: done step has detail', st.getSteps()[0].detail === 'detail text');
+    check('StepTracker: done step has durationMs', typeof st.getSteps()[0].durationMs === 'number');
+
+    st.start('s2', 'Step two', 'searching', 20);
+    check('StepTracker: second step added', st.getSteps().length === 2);
+    check('StepTracker: currentStep updates to s2', (() => {
+        st.emit('searching', 'test', 25);
+        return emitted[emitted.length - 1].currentStep === 's2';
+    })());
+
+    st.error('s2', 'something went wrong');
+    check('StepTracker: error step status', st.getSteps()[1].status === 'error');
+
+    st.skip('s3', 'Skipped step');
+    check('StepTracker: skip adds skipped step', st.getSteps()[2].status === 'skipped');
+    check('StepTracker: skipped step durationMs is 0', st.getSteps()[2].durationMs === 0);
+
+    // emit propagates budgetUsed snapshot
+    budget2.recordCall(1000, 1000, 'claude-haiku-4-5-20251001');
+    st.emit('synthesizing', 'final', 99);
+    const last = emitted[emitted.length - 1];
+    check('StepTracker: budgetUsed.calls increments via BudgetTracker', last.budgetUsed!.calls === 1);
+
+    // ── Checkpoint helpers ────────────────────────────────────────────────
+    // Use a fake localStorage shim so the test runs in Node (no browser API).
+    const store: Record<string, string> = {};
+    const origLS = (globalThis as any).localStorage;
+    (globalThis as any).localStorage = {
+        getItem: (k: string) => store[k] ?? null,
+        setItem: (k: string, v: string) => { store[k] = v; },
+        removeItem: (k: string) => { delete store[k]; },
+    };
+    try {
+        const q = 'AAPL deep research test query §82';
+        check('checkpoint: loadCheckpoint returns null when empty', loadCheckpoint(q) === null);
+
+        saveCheckpoint(q, { query: q, stage: 'blueprint' });
+        const cp = loadCheckpoint(q);
+        check('checkpoint: save then load round-trips', cp !== null && cp.stage === 'blueprint');
+        check('checkpoint: savedAt is set', typeof cp?.savedAt === 'number');
+
+        clearCheckpoint(q);
+        check('checkpoint: clear removes entry', loadCheckpoint(q) === null);
+
+        // TTL expiry
+        saveCheckpoint(q, { query: q, stage: 'search' });
+        // Manually backdate the saved entry to expired
+        const key = Object.keys(store)[0];
+        const old = JSON.parse(store[key]);
+        store[key] = JSON.stringify({ ...old, savedAt: Date.now() - CHECKPOINT_TTL_MS - 1 });
+        check('checkpoint: expired entry returns null', loadCheckpoint(q) === null);
+        check('checkpoint: expired entry removed from store', Object.keys(store).length === 0);
+    } finally {
+        if (origLS === undefined) { delete (globalThis as any).localStorage; }
+        else { (globalThis as any).localStorage = origLS; }
     }
 }
 

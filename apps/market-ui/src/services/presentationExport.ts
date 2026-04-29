@@ -112,7 +112,7 @@ export function planDeckOutline(report: Pick<ResearchReport, 'title' | 'summary'
             lines.push(`Workflow: ${meta.workflow.label} (template: ${meta.workflow.template})`);
         }
         if (meta.budget) {
-            lines.push(`LLM calls: ${meta.budget.llmCalls} · ~${Math.round(meta.budget.estimatedTokens / 1000)}k tokens`);
+            lines.push(`LLM calls: ${meta.budget.calls} · ~${Math.round(meta.budget.tokens / 1000)}k tokens · $${meta.budget.estimatedUsd.toFixed(3)}`);
         }
         lines.push(`Sources analyzed: ${meta.sourcesAnalyzed}`);
         if (lines.length > 0) slides.push({ kind: 'methodology', lines });

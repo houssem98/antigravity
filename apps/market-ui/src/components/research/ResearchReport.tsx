@@ -723,7 +723,7 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
                                     style={{ background: 'rgba(255,255,255,0.04)', color: '#6B7280', border: '1px solid rgba(255,255,255,0.08)' }}
                                     title="LLM calls and estimated tokens consumed by this query">
                                     <Brain className="w-3 h-3" />
-                                    <span>{report.metadata.budget.llmCalls} LLM calls · ~{Math.round(report.metadata.budget.estimatedTokens / 1000)}k tokens</span>
+                                    <span>{report.metadata.budget.calls} LLM calls · ~{Math.round(report.metadata.budget.tokens / 1000)}k tokens · ${report.metadata.budget.estimatedUsd.toFixed(3)}</span>
                                 </div>
                             )}
                         </div>
