@@ -24,6 +24,7 @@ cohere>=5.0.0
 
 # ML / Embeddings (optional — gracefully degrade if not available)
 numpy>=1.26.0
+transformers>=4.40.0
 sentence-transformers>=3.0.0
 
 # Kafka (event-driven ingestion pipeline)

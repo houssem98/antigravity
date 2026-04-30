@@ -36,9 +36,12 @@ from app.core.reasoning.prompts import (
 )
 from app.core.reasoning.numeric_verifier import verify_answer_numerics, format_mismatch_report
 from app.core.reasoning.temporal_verifier import verify_temporal_consistency, format_temporal_report
+from app.core.reasoning.nli_judge import FinanceNLIJudge
 from app.core.feedback.routing_feedback import RoutingFeedbackLoop, FeedbackRecord
 from app.llm.base import LLMConfig, LLMMessage
 from app.llm.router import LLMRouter, RoutingDecision
+
+_nli_judge = FinanceNLIJudge()  # shared singleton; T5 loaded once if GPU available
 
 logger = structlog.get_logger()
 
