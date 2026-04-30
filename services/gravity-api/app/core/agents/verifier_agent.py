@@ -18,6 +18,7 @@ Flow:
 from __future__ import annotations
 
 import json
+import re
 import time
 import structlog
 
@@ -25,6 +26,17 @@ from app.llm.base import BaseLLMClient, LLMConfig, LLMMessage
 from app.core.agents.agent_base import BaseAgent, AgentContext
 
 logger = structlog.get_logger()
+
+# Lazy import — NLI models are heavy; only loaded on first citation check
+def _nli_verify(premise: str, hypothesis: str):  # type: ignore[return]
+    try:
+        from app.core.verification.nli_verifier import verify_entailment
+        return verify_entailment(premise, hypothesis)
+    except ImportError:
+        return None
+
+_CITE_RE = re.compile(r"\[(?:RAG-)?\d+(?:,\s*\d+)*\]")
+_SENT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(])")
 
 
 VERIFICATION_SYSTEM = """You are a financial data verification engine.
@@ -141,7 +153,70 @@ class VerifierAgent(BaseAgent):
             ctx.verification_results = {"error": str(e), "total_checked": 0}
             ctx.add_trace(self.name, "error", f"Verification failed: {e}")
 
+        # ── Step 2: NLI citation entailment (ALCE §2.3) ────────────────────
+        if ctx.final_answer and ctx.final_citations:
+            self._nli_citation_check(ctx)
+
         return ctx
+
+    def _nli_citation_check(self, ctx: AgentContext) -> None:
+        """
+        Run NLI entailment on each cited sentence in the final answer.
+        Appends 'nli_violations' to ctx.verification_results and logs a trace.
+        """
+        # Build chunk_id → text lookup from final_citations
+        chunk_texts: dict[str, str] = {
+            str(c.get("chunk_id", c.get("id", ""))): c.get("text", c.get("content", ""))
+            for c in ctx.final_citations
+            if isinstance(c, dict)
+        }
+        if not chunk_texts:
+            return
+
+        violations: list[dict] = []
+        sentences = [s.strip() for s in _SENT_RE.split(ctx.final_answer.strip()) if s.strip()]
+
+        for sent in sentences:
+            cite_ids: list[int] = []
+            for m in _CITE_RE.finditer(sent):
+                inner = m.group()[1:-1]
+                for part in re.split(r",\s*", inner):
+                    try:
+                        cite_ids.append(int(part.strip().lstrip("RAG-")))
+                    except ValueError:
+                        pass
+
+            if not cite_ids:
+                continue
+
+            passages = [chunk_texts.get(str(cid), "") for cid in cite_ids]
+            premise  = " ".join(p for p in passages if p)
+            if not premise:
+                continue
+
+            hypothesis = _CITE_RE.sub("", sent).strip()
+            result = _nli_verify(premise, hypothesis)
+            if result is None:
+                break   # NLI not available — skip silently
+
+            if not result.entailed:
+                violations.append({
+                    "sentence":    hypothesis[:200],
+                    "citation_ids": cite_ids,
+                    "nli_method":  result.method,
+                    "nli_score":   round(result.score, 3),
+                })
+
+        if not violations:
+            return
+
+        if isinstance(ctx.verification_results, dict):
+            ctx.verification_results["nli_violations"]     = violations
+            ctx.verification_results["nli_violation_count"] = len(violations)
+        ctx.add_trace(
+            self.name, "nli_check",
+            f"{len(violations)} citation entailment violation(s) detected",
+        )
 
     def _format_facts_for_verification(self, facts: list[dict]) -> str:
         """Format numeric facts for the verification prompt."""
