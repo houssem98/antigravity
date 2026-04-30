@@ -27,6 +27,16 @@ numpy>=1.26.0
 transformers>=4.40.0
 sentence-transformers>=3.0.0
 
+# PageIndex — VectifyAI tree-based retrieval (channel 6)
+# pip install litellm pymupdf PyPDF2
+litellm>=1.83.0
+pymupdf>=1.24.0
+PyPDF2>=3.0.1
+
+# TurboQuant — compressed ANN index (channel 7; requires torch)
+# pip install pyturboquant torch
+# pyturboquant  # install from: github.com/jorgebmann/pyturboquant
+
 # Kafka (event-driven ingestion pipeline)
 aiokafka>=0.11.0
 

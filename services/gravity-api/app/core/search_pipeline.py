@@ -587,9 +587,34 @@ class SearchPipeline:
                     logic_summary=logic_result.summary,
                 )
 
-            # ── Stage 7b: LLM Citation Validation (<100ms, parallelized)
+            # ── Stage 7b: NLI Citation Validation + LLM Correction ─────
+            # Step 1: NLI sentence-level entailment (numeric pre-check → T5 → Claude).
+            #         Replaces the fragile keyword_recall < 0.3 hallucination proxy.
+            # Step 2: LLM CitationValidator for claim correction (existing Layer 2).
             validated_answer = full_response
             validation_result = None
+            nli_recall = None
+
+            # NLI entailment check: split answer into sentences, score each
+            try:
+                import re as _re
+                _sentences = [s.strip() for s in _re.split(r'(?<=[.!?])\s+(?=[A-Z])', full_response) if s.strip()]
+                _passage_text = " ".join(p.text for p in top_passages[:10])
+                if _sentences and _passage_text:
+                    _nli_pairs = [(_passage_text, s) for s in _sentences]
+                    _nli_results = await _nli_judge.batch_score(_nli_pairs)
+                    _entailed = sum(r.entails for r in _nli_results)
+                    nli_recall = _entailed / max(len(_nli_results), 1)
+                    logger.info(
+                        "nli_citation_check",
+                        trace_id=trace_id,
+                        sentences=len(_sentences),
+                        entailed=_entailed,
+                        recall=round(nli_recall, 3),
+                        methods=list({r.method for r in _nli_results}),
+                    )
+            except Exception as _nli_err:
+                logger.warning("nli_check_failed", trace_id=trace_id, error=str(_nli_err))
 
             if self.validator:
                 try:
@@ -603,11 +628,13 @@ class SearchPipeline:
                 except Exception as e:
                     logger.warning("validation_failed", trace_id=trace_id, error=str(e))
 
-            # Attach deterministic verification results to validation output
+            # Attach verification results to validation output
             if validation_result is None:
                 validation_result = {}
             validation_result["numeric_mismatches"] = len(numeric_mismatches)
             validation_result["temporal_mismatches"] = len(temporal_mismatches)
+            if nli_recall is not None:
+                validation_result["nli_citation_recall"] = round(nli_recall, 4)
 
             validation_ms = (time.perf_counter() - t4) * 1000
 

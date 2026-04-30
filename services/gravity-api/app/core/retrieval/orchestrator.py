@@ -34,6 +34,8 @@ class RetrievalOrchestrator:
         splade_search=None,
         graph_search=None,
         structured_search=None,
+        page_index_search=None,   # Channel 6: VectifyAI PageIndex (optional)
+        turbo_quant_search=None,  # Channel 7: TurboQuant compressed ANN (optional)
     ):
         self.channels = {}
         if dense_search:
@@ -46,6 +48,10 @@ class RetrievalOrchestrator:
             self.channels["graph"] = graph_search
         if structured_search:
             self.channels["structured"] = structured_search
+        if page_index_search:
+            self.channels["page_index"] = page_index_search
+        if turbo_quant_search:
+            self.channels["turbo_quant"] = turbo_quant_search
 
         logger.info("retrieval_orchestrator_init", channels=list(self.channels.keys()))
 
@@ -114,11 +120,13 @@ class RetrievalOrchestrator:
     # Per-channel timeout budgets (seconds).
     # BM25/dense increased to 8s to handle lazy-client cold-start on first query.
     _CHANNEL_TIMEOUTS: dict[str, float] = {
-        "dense": 8.0,
-        "bm25": 8.0,
-        "splade": 4.0,
-        "graph": 4.0,
-        "structured": 4.0,
+        "dense":       8.0,
+        "bm25":        8.0,
+        "splade":      4.0,
+        "graph":       4.0,
+        "structured":  4.0,
+        "page_index": 30.0,   # PageIndex navigates document trees — allow more time
+        "turbo_quant": 2.0,   # in-memory; fast
     }
 
     async def _safe_search(
@@ -145,6 +153,15 @@ class RetrievalOrchestrator:
                 coro = channel.search(query=query, entities=entities)
             elif name == "structured":
                 coro = channel.search(query=query, entities=entities)
+            elif name == "page_index":
+                coro = channel.search(query=query, filters=filters)
+            elif name == "turbo_quant":
+                # TurboQuantSearch needs the embedder; it uses search_text()
+                from app.embeddings.voyage_embedder import VoyageEmbedder
+                coro = channel.search_text(
+                    query=query, embedder=channel._embedder if hasattr(channel, "_embedder") else None,
+                    filters=filters,
+                )
             else:
                 return []
 

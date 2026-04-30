@@ -24,9 +24,10 @@ class VectorIndexer:
       filing_date, page, chunk_level, company_name, filing_type
     """
 
-    def __init__(self, embedder, splade_encoder=None):
+    def __init__(self, embedder, splade_encoder=None, turbo_quant=None):
         self.embedder = embedder          # VoyageEmbedder or LocalEmbedder
         self.splade = splade_encoder      # SpladeEncoder or None
+        self.turbo_quant = turbo_quant    # TurboQuantSearch or None (optional)
         self.collection = settings.qdrant_collection
 
     async def index_chunks(
@@ -117,6 +118,28 @@ class VectorIndexer:
                 )
             except Exception as e:
                 logger.error("qdrant_upsert_failed", error=str(e), batch_size=len(points))
+                continue
+
+            # ── Mirror to TurboQuant in-memory index ─────────────────────
+            if self.turbo_quant is not None and self.turbo_quant.ready:
+                tq_payloads = [
+                    {
+                        "chunk_id":      p.payload.get("chunk_id"),
+                        "document_id":   p.payload.get("document_id"),
+                        "text":          p.payload.get("text"),
+                        "document_title":p.payload.get("document_title"),
+                        "section":       p.payload.get("section"),
+                        "page":          p.payload.get("page"),
+                        "metadata": {
+                            "ticker":       p.payload.get("ticker"),
+                            "filing_type":  p.payload.get("filing_type"),
+                            "filing_date":  p.payload.get("filing_date"),
+                            "company_name": p.payload.get("company_name"),
+                        },
+                    }
+                    for p in points
+                ]
+                self.turbo_quant.add_vectors(dense_vectors, tq_payloads)
 
         logger.info("vector_indexing_complete", total_indexed=total)
         return total

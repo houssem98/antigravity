@@ -79,6 +79,21 @@ class Settings(BaseSettings):
     raptor_cluster_threshold: float = 0.85  # Cosine similarity for clustering
     raptor_summary_max_tokens: int = 256    # Max tokens for generated summaries
 
+    # ── PageIndex (VectifyAI) — hierarchical tree-based SEC filing retrieval
+    pageindex_api_key: str = ""
+    pageindex_workspace: str = "gravity"
+    pageindex_base_url: str = "https://api.pageindex.ai"
+    pageindex_model: str = "claude-sonnet-4-6"        # LLM for tree navigation
+    pageindex_retrieve_model: str = "claude-haiku-4-5-20251001"  # cheap model for passage fetch
+    pageindex_enabled: bool = False    # set True when PAGEINDEX_API_KEY is present
+    pageindex_top_k: int = 10          # max pages to fetch per document per query
+
+    # ── TurboQuant — compressed in-memory ANN index (7.8× storage reduction)
+    turbo_quant_enabled: bool = False  # set True to activate compressed ANN channel
+    turbo_quant_bits: int = 4          # quantization bits (2–8; 4 = best quality/size trade-off)
+    turbo_quant_index_path: str = "data/turbo_quant.idx"  # disk snapshot path
+    turbo_quant_top_k: int = 50
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
