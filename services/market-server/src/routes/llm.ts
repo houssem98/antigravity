@@ -9,6 +9,10 @@
 // Cache hit savings: ~90% of stable-prefix input tokens at ~10% of list price.
 // Cache stats are returned as cacheStats:{created,read} in the response body
 // so the client BudgetTracker can compute the true cost.
+//
+// §6.10 follow-up: exponential-backoff retry on 429/5xx (max 3 attempts);
+// structured JSON trace span emitted per call for Langfuse ingestion;
+// latencyMs included in response so the client can surface P50/P95.
 
 import { Router } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -30,6 +34,65 @@ function getProviders(): Record<string, ProviderInfo> {
         deepseek:  { name: 'DeepSeek',  keyEnv: 'DEEPSEEK_API_KEY',  available: !!process.env.DEEPSEEK_API_KEY },
         groq:      { name: 'Groq',      keyEnv: 'GROQ_API_KEY',      available: !!process.env.GROQ_API_KEY },
     };
+}
+
+// ─── Retry helper ─────────────────────────────────────────────────────────────
+// Retries transient HTTP errors (429 rate-limited, 500/502/503/529 overload).
+// Backoff: 1 s × 2^attempt + ±200ms jitter (capped at 30s).
+// authN/authZ errors (401/403), bad-request (400), and client errors (<400)
+// are never retried — they will fail on every attempt.
+
+const RETRYABLE = new Set([429, 500, 502, 503, 529]);
+const MAX_BACKOFF_MS = 30_000;
+
+async function retryableFetch(
+    url: string,
+    init: RequestInit,
+    maxAttempts = 3,
+): Promise<Response> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            const resp = await fetch(url, init);
+            if (resp.ok || !RETRYABLE.has(resp.status)) return resp;
+            const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 400, MAX_BACKOFF_MS);
+            console.warn(`[llm] ${resp.status} from ${url} — retry ${attempt + 1}/${maxAttempts - 1} in ${Math.round(backoff)}ms`);
+            await sleep(backoff);
+            lastErr = new Error(`HTTP ${resp.status}`);
+        } catch (e) {
+            lastErr = e;
+            if (attempt < maxAttempts - 1) {
+                const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 400, MAX_BACKOFF_MS);
+                await sleep(backoff);
+            }
+        }
+    }
+    throw lastErr;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+// ─── Trace logging ────────────────────────────────────────────────────────────
+// Emits one JSON line per LLM call to stdout. Langfuse / OpenTelemetry
+// collectors can ingest this via a log-shipper sidecar without code changes.
+
+interface TraceSpan {
+    ts: string;
+    event: 'llm_call';
+    provider: string;
+    model: string;
+    promptChars: number;
+    outputChars: number;
+    latencyMs: number;
+    cacheStats?: { created: number; read: number };
+    ok: boolean;
+    errorMessage?: string;
+}
+
+function emitTrace(span: TraceSpan): void {
+    console.log(JSON.stringify(span));
 }
 
 // ─── GET /api/llm/providers — What's available ───────────────────────────────
@@ -79,6 +142,8 @@ llmRouter.post('/chat', async (req, res) => {
         return;
     }
 
+    const t0 = Date.now();
+
     try {
         let result: { text: string; cacheStats?: { created: number; read: number } };
 
@@ -112,8 +177,31 @@ llmRouter.post('/chat', async (req, res) => {
                 return;
         }
 
-        res.json({ text: result.text, model, provider, cacheStats: result.cacheStats });
+        const latencyMs = Date.now() - t0;
+        emitTrace({
+            ts: new Date().toISOString(),
+            event: 'llm_call',
+            provider, model,
+            promptChars: prompt.length,
+            outputChars: result.text.length,
+            latencyMs,
+            cacheStats: result.cacheStats,
+            ok: true,
+        });
+
+        res.json({ text: result.text, model, provider, cacheStats: result.cacheStats, latencyMs });
     } catch (error: any) {
+        const latencyMs = Date.now() - t0;
+        emitTrace({
+            ts: new Date().toISOString(),
+            event: 'llm_call',
+            provider, model,
+            promptChars: prompt.length,
+            outputChars: 0,
+            latencyMs,
+            ok: false,
+            errorMessage: error.message,
+        });
         console.error(`LLM proxy error (${provider}/${model}):`, error.message);
         res.status(502).json({ error: error.message || 'LLM call failed', provider, model });
     }
@@ -165,8 +253,6 @@ async function callAnthropic(
     prompt: string,
     maxTokens: number,
 ): Promise<{ text: string; cacheStats: { created: number; read: number } }> {
-    // Attempt to split the prompt for caching. Falls back to a plain user
-    // message when the prompt is too short or can't be split cleanly.
     const split = splitPromptForCache(prompt);
 
     const body: Record<string, unknown> = { model, max_tokens: maxTokens };
@@ -182,12 +268,11 @@ async function callAnthropic(
         body.messages = [{ role: 'user', content: prompt }];
     }
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await retryableFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
-            // Enable prompt caching beta for all Anthropic calls.
             'anthropic-beta': 'prompt-caching-2024-07-31',
             'content-type': 'application/json',
         },
@@ -212,12 +297,26 @@ async function callAnthropic(
 async function callGeminiAPI(apiKey: string, model: string, prompt: string): Promise<string> {
     const genAI = new GoogleGenerativeAI(apiKey);
     const m = genAI.getGenerativeModel({ model });
-    const result = await m.generateContent(prompt);
-    return result.response.text();
+    // Gemini SDK handles retries internally, but we wrap to align error surface.
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const result = await m.generateContent(prompt);
+            return result.response.text();
+        } catch (e: any) {
+            const isTransient = /429|500|502|503|RESOURCE_EXHAUSTED|UNAVAILABLE/i.test(e.message ?? '');
+            if (!isTransient || attempt === 2) throw e;
+            const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 400, MAX_BACKOFF_MS);
+            console.warn(`[llm] Gemini ${model} transient error — retry ${attempt + 1}/2 in ${Math.round(backoff)}ms`);
+            await sleep(backoff);
+            lastErr = e;
+        }
+    }
+    throw lastErr;
 }
 
 async function callOpenAICompatible(url: string, apiKey: string, model: string, prompt: string, maxTokens: number): Promise<string> {
-    const resp = await fetch(url, {
+    const resp = await retryableFetch(url, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${apiKey}`,
