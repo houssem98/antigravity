@@ -1,7 +1,7 @@
 // Premium Finance Research Report — World-Class Design
 // Bloomberg Terminal × AlphaSense × Perplexity Pro
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -139,6 +139,101 @@ function SourceCard({ c }: { c: Citation }) {
     );
 }
 
+/* ─────────────────── Citation hover popover ─────────────────── */
+function CitationTag({ id, citation }: { id: string; citation?: Citation }) {
+    const [visible, setVisible] = useState(false);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const domain = (() => {
+        try { return new URL(citation?.url ?? '').hostname.replace('www.', ''); }
+        catch { return citation?.source ?? ''; }
+    })();
+
+    const show = () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        setVisible(true);
+    };
+    const hide = () => {
+        timerRef.current = setTimeout(() => setVisible(false), 120);
+    };
+
+    return (
+        <span className="relative inline-block align-super">
+            <a
+                href={`#citation-${id}`}
+                onMouseEnter={show}
+                onMouseLeave={hide}
+                className="inline-block min-w-[16px] text-center px-1 py-0.5 rounded text-[10px] font-mono font-bold mx-0.5 transition-all cursor-pointer select-none"
+                style={{ backgroundColor: 'rgba(61,127,246,0.15)', color: '#3D7FF6' }}
+            >
+                {id}
+            </a>
+
+            {visible && citation && (
+                <span
+                    onMouseEnter={show}
+                    onMouseLeave={hide}
+                    className="absolute bottom-full left-1/2 z-50 pointer-events-auto"
+                    style={{
+                        transform: 'translateX(-50%)',
+                        marginBottom: '6px',
+                        width: '260px',
+                    }}
+                >
+                    {/* Arrow */}
+                    <span className="absolute left-1/2 -bottom-[5px] -translate-x-1/2 w-2.5 h-2.5 rotate-45"
+                        style={{ background: '#1A2035', border: '1px solid rgba(255,255,255,0.09)', borderTop: 'none', borderLeft: 'none' }} />
+
+                    <span className="flex flex-col gap-1.5 rounded-xl p-3 text-left shadow-2xl"
+                        style={{
+                            background: '#1A2035',
+                            border: '1px solid rgba(255,255,255,0.09)',
+                            boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
+                        }}>
+                        {/* Citation number + title */}
+                        <span className="flex items-start gap-2">
+                            <span className="shrink-0 mt-0.5 w-5 h-5 rounded flex items-center justify-center text-[10px] font-mono font-bold"
+                                style={{ background: 'rgba(61,127,246,0.18)', color: '#3D7FF6' }}>
+                                {id}
+                            </span>
+                            <span className="text-[12px] font-medium leading-[1.4] line-clamp-2"
+                                style={{ color: '#D0DCF0' }}>
+                                {citation.title || domain}
+                            </span>
+                        </span>
+
+                        {/* Source + date row */}
+                        <span className="flex items-center gap-1.5 pl-7">
+                            <Globe className="w-3 h-3 shrink-0" style={{ color: '#5A6480' }} />
+                            <span className="text-[11px] truncate" style={{ color: '#5A6480' }}>{domain}</span>
+                            {citation.publishedDate && (
+                                <span className="text-[10px] shrink-0" style={{ color: '#424A60' }}>
+                                    · {citation.publishedDate.slice(0, 10)}
+                                </span>
+                            )}
+                        </span>
+
+                        {/* Open link */}
+                        {citation.url && (
+                            <a
+                                href={citation.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 pl-7 transition-opacity hover:opacity-80"
+                                style={{ color: '#3D7FF6' }}
+                                onClick={e => e.stopPropagation()}
+                            >
+                                <ExternalLink className="w-3 h-3" />
+                                <span className="text-[11px]">Open source</span>
+                            </a>
+                        )}
+                    </span>
+                </span>
+            )}
+        </span>
+    );
+}
+
 /* ─────────────────── Main component ─────────────────── */
 export default function ResearchReport({ report, instant, onClose }: Props) {
     const [revealedChars, setRevealedChars] = useState(instant ? report.markdown.length : 0);
@@ -150,6 +245,13 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
     const [showPreview, setShowPreview] = useState(false);
     const [activeSection, setActiveSection] = useState('');
     const reportRef = useRef<HTMLDivElement>(null);
+
+    /* Citation id → Citation lookup for hover popover */
+    const citationMap = useMemo(() => {
+        const m = new Map<number, Citation>();
+        (report.citations ?? []).forEach(c => m.set(c.id, c));
+        return m;
+    }, [report.citations]);
 
     /* Typewriter — 80 chars / 16ms ≈ 5000 chars/sec */
     useEffect(() => {
@@ -269,19 +371,14 @@ export default function ResearchReport({ report, instant, onClose }: Props) {
             <em className="italic" style={{ color: '#B8C6DE' }}>{children}</em>
         ),
         a: ({ href, children }) => {
-            /* Citation superscript */
+            /* Citation superscript with hover popover */
             if (href?.startsWith('#cite-')) {
                 const id = href.replace('#cite-', '');
                 return (
-                    <sup>
-                        <a
-                            href={`#citation-${id}`}
-                            className="inline-block min-w-[16px] text-center px-1 py-0.5 rounded text-[10px] font-mono font-bold mx-0.5 transition-opacity hover:opacity-70"
-                            style={{ backgroundColor: 'rgba(61,127,246,0.15)', color: '#3D7FF6' }}
-                        >
-                            {id}
-                        </a>
-                    </sup>
+                    <CitationTag
+                        id={id}
+                        citation={citationMap.get(parseInt(id))}
+                    />
                 );
             }
             return (
