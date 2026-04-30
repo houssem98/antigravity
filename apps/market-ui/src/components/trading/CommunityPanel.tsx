@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, ExternalLink, TrendingUp, TrendingDown, Minus, Zap, AlertCircle, Youtube, PlayCircle } from 'lucide-react';
+import { Search, RefreshCw, ExternalLink, TrendingUp, TrendingDown, Minus, Zap, AlertCircle, Youtube, PlayCircle, Volume2, VolumeX, Maximize2 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Influencer {
@@ -164,6 +164,318 @@ function SourceIcon({ source }: { source: Influencer['source'] }) {
   );
 }
 
+function extractYouTubeId(url: string): string | null {
+  if (!url) return null;
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})/,
+    /[?&]v=([A-Za-z0-9_-]{11})/,
+  ];
+  for (const re of patterns) { const m = url.match(re); if (m) return m[1]; }
+  return null;
+}
+
+// ── YouTube IFrame API singleton loader & shared state ───────────────────────
+const videoPositions = new Map<string, number>();      // videoId → last currentTime (s)
+let userHasInteracted = false;
+if (typeof window !== 'undefined' && !(window as any).__agYtGestureBound) {
+  const mark = () => { userHasInteracted = true; };
+  ['click', 'keydown', 'touchend', 'pointerup'].forEach(ev =>
+    window.addEventListener(ev, mark, { capture: true, passive: true })
+  );
+  (window as any).__agYtGestureBound = true;
+}
+
+let ytApiPromise: Promise<any> | null = null;
+function loadYouTubeApi(): Promise<any> {
+  if (typeof window === 'undefined') return Promise.reject(new Error('no window'));
+  const w = window as any;
+  if (w.YT?.Player) return Promise.resolve(w.YT);
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise<any>(resolve => {
+    const prev = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => { prev?.(); resolve(w.YT); };
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.async = true;
+    document.head.appendChild(s);
+  });
+  return ytApiPromise;
+}
+
+function YouTubeHoverEmbed({ videoId, thumbnailUrl, title }: { videoId: string; thumbnailUrl?: string; title: string }) {
+  // 'idle' = thumbnail only. 'active' = iframe mounted (playing OR paused — iframe persists).
+  const [mode, setMode]     = React.useState<'idle' | 'active'>('idle');
+  const [muted, setMuted]   = React.useState(!userHasInteracted);
+  const [paused, setPaused] = React.useState(false);
+  const [ready, setReady]   = React.useState(false);
+
+  const wrapperRef = React.useRef<HTMLDivElement>(null);
+  const mountRef   = React.useRef<HTMLDivElement>(null);
+  const playerRef  = React.useRef<any>(null);
+  const startTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef    = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const userPausedRef = React.useRef(false); // respect user's explicit pause
+
+  const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+
+  const captureTime = () => {
+    try {
+      const t = playerRef.current?.getCurrentTime?.();
+      if (typeof t === 'number' && t > 0) videoPositions.set(videoId, t);
+    } catch { /* not ready */ }
+  };
+
+  const destroyPlayer = () => {
+    captureTime();
+    stopPolling();
+    try { playerRef.current?.destroy?.(); } catch { /* ignore */ }
+    playerRef.current = null;
+    setReady(false);
+  };
+
+  // Create player once when entering 'active'; it stays alive through hover cycles.
+  React.useEffect(() => {
+    if (mode !== 'active' || !mountRef.current || playerRef.current) return;
+    let cancelled = false;
+    const resumeAt = Math.max(0, Math.floor(videoPositions.get(videoId) ?? 0));
+
+    // YT.Player replaces the target element with an iframe. If we pass a React-owned
+    // ref div, React will reconcile it away on the next re-render, killing the player.
+    // Create a dedicated inner child that React doesn't own, and hand THAT to the API.
+    const inner = document.createElement('div');
+    inner.style.width = '100%';
+    inner.style.height = '100%';
+    mountRef.current.appendChild(inner);
+
+    loadYouTubeApi().then(YT => {
+      if (cancelled || !mountRef.current) return;
+      playerRef.current = new YT.Player(inner, {
+        width:  '100%',
+        height: '100%',
+        videoId,
+        playerVars: {
+          autoplay: 1,
+          mute: userHasInteracted ? 0 : 1,
+          controls: 1,
+          modestbranding: 1,
+          rel: 0,
+          playsinline: 1,
+          start: resumeAt,
+        },
+        events: {
+          onReady: (e: any) => {
+            try {
+              if (userHasInteracted) { e.target.unMute(); e.target.setVolume(80); setMuted(false); }
+              else setMuted(true);
+              if (resumeAt > 0) e.target.seekTo(resumeAt, true);
+              e.target.playVideo();
+            } catch { /* ignore */ }
+            // Force iframe to fill the container — YT sometimes leaves inline 640×360 attributes.
+            const frame = e.target.getIframe?.() as HTMLIFrameElement | undefined;
+            if (frame) {
+              frame.style.width = '100%';
+              frame.style.height = '100%';
+              frame.style.display = 'block';
+              frame.setAttribute('width', '100%');
+              frame.setAttribute('height', '100%');
+            }
+            setReady(true);
+            stopPolling();
+            pollRef.current = setInterval(captureTime, 500);
+          },
+          onStateChange: (e: any) => {
+            // YT states: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
+            const st = e.data;
+            if (st === 1) { setPaused(false); userPausedRef.current = false; }
+            if (st === 2) setPaused(true);
+            if (st === 0) { captureTime(); }
+          },
+        },
+      });
+    });
+
+    return () => { cancelled = true; /* iframe lives on; destroyed only on unmount / scroll-out */ };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, videoId]);
+
+  // Tear down iframe only when the component unmounts or scrolls far out of view.
+  React.useEffect(() => () => destroyPlayer(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // IntersectionObserver: pause when card leaves viewport; destroy only when very far away.
+  React.useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(entries => {
+      const e = entries[0];
+      if (!e) return;
+      if (!e.isIntersecting) {
+        // off-screen → pause but keep iframe alive (cheap) until we confirm it's way off.
+        captureTime();
+        try { playerRef.current?.pauseVideo?.(); } catch { /* ignore */ }
+      }
+    }, { threshold: 0, rootMargin: '0px 0px 0px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clearTimers = () => { if (startTimer.current) { clearTimeout(startTimer.current); startTimer.current = null; } };
+
+  // Click-to-activate: idle → active (plays from saved position). After that, a hover-back
+  // resumes playback from the paused frame unless the user explicitly paused.
+  const onWrapperClick = (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't let the card's link handler open YouTube in a new tab
+    if (mode === 'idle') { setMode('active'); return; }
+    if (ready && paused && !userPausedRef.current) {
+      try { playerRef.current?.playVideo?.(); } catch { /* ignore */ }
+    }
+  };
+
+  const onEnter = () => {
+    // Hover alone never starts playback — user must click first.
+    if (mode !== 'active' || !ready) return;
+    if (userPausedRef.current) return; // respect explicit pause
+    if (paused) { try { playerRef.current?.playVideo?.(); } catch { /* ignore */ } }
+  };
+
+  const onLeave = (e: React.MouseEvent) => {
+    if (mode !== 'active') return;
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    const inside = !!rect && e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    if (inside) return; // iframe focus swap, not a real leave
+    captureTime();
+    // Pause but KEEP the iframe mounted — no reload feel.
+    try { playerRef.current?.pauseVideo?.(); } catch { /* ignore */ }
+  };
+
+  const toggleMute = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      if (muted) { p.unMute(); p.setVolume(80); setMuted(false); userHasInteracted = true; }
+      else       { p.mute();                     setMuted(true);  }
+    } catch { /* ignore */ }
+  };
+
+  const togglePlay = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      if (paused) { p.playVideo(); userPausedRef.current = false; }
+      else        { p.pauseVideo(); userPausedRef.current = true; }
+    } catch { /* ignore */ }
+  };
+
+  const openFullscreen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const iframe = mountRef.current?.querySelector('iframe');
+    (iframe as HTMLIFrameElement | null)?.requestFullscreen?.();
+  };
+
+  React.useEffect(() => {
+    const onHide = () => captureTime();
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saved = videoPositions.get(videoId);
+
+  return (
+    <div
+      ref={wrapperRef}
+      className="block mb-2.5 rounded-lg overflow-hidden relative group bg-black"
+      style={{ aspectRatio: '16 / 9' }}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      onClick={onWrapperClick}
+    >
+      {/* Thumbnail always rendered as a base layer; iframe mounts above when active.
+          Keeping the thumbnail behind the iframe avoids a flash-of-empty-black if the
+          iframe is slow to paint. */}
+      {thumbnailUrl && (
+        <img src={thumbnailUrl} alt={title}
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ objectFit: 'cover' }} />
+      )}
+
+      {/* YT.Player mount target. Once attached, iframe persists — no remounts, no reload feel.
+          The [&_iframe]:w-full etc. selectors force any child iframe (YT uses default 640x360
+          attributes) to fill this container regardless of its inline width/height. */}
+      <div ref={mountRef}
+        className="absolute inset-0 w-full h-full transition-opacity duration-200 [&>*]:w-full [&>*]:h-full [&_iframe]:w-full [&_iframe]:h-full [&_iframe]:block"
+        style={{ opacity: mode === 'active' ? 1 : 0, pointerEvents: mode === 'active' ? 'auto' : 'none' }}
+      />
+
+      {/* Idle overlay (play button + resume chip) */}
+      {mode === 'idle' && (
+        <>
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+            <div className="w-14 h-14 rounded-full flex items-center justify-center"
+              style={{ background: '#FF0000ee', boxShadow: '0 4px 24px #FF000055' }}>
+              <PlayCircle className="w-8 h-8 text-white" />
+            </div>
+          </div>
+          {saved && saved > 1 ? (
+            <div className="absolute bottom-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider"
+              style={{ background: '#000000cc', color: '#fff', letterSpacing: '0.08em' }}>
+              RESUME @ {Math.floor(saved / 60)}:{String(Math.floor(saved % 60)).padStart(2, '0')}
+            </div>
+          ) : (
+            <div className="absolute bottom-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider"
+              style={{ background: '#FF000022', color: '#FF3B3B', border: '1px solid #FF000040', letterSpacing: '0.08em' }}>
+              CLICK TO PLAY
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Active overlay controls */}
+      {mode === 'active' && (
+        <>
+          {/* While the iframe is still loading, keep the thumbnail + red play so there's no black flash. */}
+          {!ready && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+              <RefreshCw className="w-6 h-6 text-white animate-spin" />
+            </div>
+          )}
+          <div className="absolute top-1.5 right-1.5 flex items-center gap-1 z-10">
+            <button onClick={togglePlay} title={paused ? 'Play' : 'Pause'}
+              className="w-6 h-6 rounded-full flex items-center justify-center backdrop-blur-sm transition"
+              style={{ background: '#000000cc', color: '#fff', border: '1px solid #ffffff22' }}>
+              {paused ? <PlayCircle className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+            </button>
+            <button onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}
+              className="w-6 h-6 rounded-full flex items-center justify-center backdrop-blur-sm transition"
+              style={{ background: '#000000cc', color: '#fff', border: '1px solid #ffffff22' }}>
+              {muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+            </button>
+            <button onClick={openFullscreen} title="Fullscreen"
+              className="w-6 h-6 rounded-full flex items-center justify-center backdrop-blur-sm transition"
+              style={{ background: '#000000cc', color: '#fff', border: '1px solid #ffffff22' }}>
+              <Maximize2 className="w-3 h-3" />
+            </button>
+          </div>
+          {muted && !userHasInteracted && (
+            <div className="absolute bottom-1.5 left-1.5 pointer-events-none">
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider"
+                style={{ background: '#000000aa', color: '#fff', letterSpacing: '0.08em' }}>
+                <VolumeX className="w-2.5 h-2.5 inline -mt-0.5 mr-0.5" /> CLICK ONCE FOR SOUND
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Avatar({ name, avatarUrl, colors, size = 36 }:
   { name: string; avatarUrl: string; colors: [string, string]; size?: number }) {
   const [failed, setFailed] = useState(false);
@@ -201,6 +513,8 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
   const [page, setPage]             = useState(1);
   const [hasMore, setHasMore]       = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [poolCounts, setPoolCounts] = useState<{ reddit: number; youtube: number; twitter: number; linkedin: number }>({ reddit: 0, youtube: 0, twitter: 0, linkedin: 0 });
+  const [poolTotal, setPoolTotal]   = useState(0);
   const feedRef    = React.useRef<HTMLDivElement>(null);
   const sentinelRef = React.useRef<HTMLDivElement>(null);
   const passWheel  = (e: React.WheelEvent) => {
@@ -229,7 +543,7 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
     setStatus('loading'); setErrorMsg('');
     try {
       const res  = await fetch(`/api/social/influencers/${asset}?page=1&limit=20`, { signal: AbortSignal.timeout(18_000) });
-      const json = await res.json() as { posts?: any[]; pagination?: any; source?: string; error?: string };
+      const json = await res.json() as { posts?: any[]; pagination?: any; source?: string; sources?: any; error?: string };
       if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
       if (!json.posts?.length) throw new Error('No posts returned');
 
@@ -237,6 +551,13 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
       setSource(json.source ?? '');
       setPage(1);
       setHasMore(json.pagination?.hasMore ?? false);
+      setPoolTotal(json.pagination?.total ?? json.posts.length);
+      if (json.sources) setPoolCounts({
+        reddit:   json.sources.reddit   ?? 0,
+        youtube:  json.sources.youtube  ?? 0,
+        twitter:  json.sources.twitter  ?? 0,
+        linkedin: json.sources.linkedin ?? 0,
+      });
       setStatus('live');
       setLastFetched(Date.now());
     } catch (err: any) {
@@ -309,10 +630,12 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
 
   const bullCount   = influencers.filter(i => i.sentiment === 'bullish').length;
   const bearCount   = influencers.filter(i => i.sentiment === 'bearish').length;
-  const redditN     = influencers.filter(i => i.source === 'reddit').length;
-  const youtubeN    = influencers.filter(i => i.source === 'youtube').length;
-  const twitterN    = influencers.filter(i => i.source === 'twitter').length;
-  const linkedinN   = influencers.filter(i => i.source === 'linkedin').length;
+  // Prefer full-pool counts from server; fall back to loaded-set counts if not yet fetched.
+  const redditN     = poolCounts.reddit   || influencers.filter(i => i.source === 'reddit').length;
+  const youtubeN    = poolCounts.youtube  || influencers.filter(i => i.source === 'youtube').length;
+  const twitterN    = poolCounts.twitter  || influencers.filter(i => i.source === 'twitter').length;
+  const linkedinN   = poolCounts.linkedin || influencers.filter(i => i.source === 'linkedin').length;
+  const ytUnavailable = status === 'live' && poolCounts.youtube === 0 && influencers.length > 0;
   const cryptobertN = influencers.filter(i => i.sentimentModel === 'cryptobert').length;
   const total       = influencers.length || 1;
   const bullPct     = Math.round((bullCount / total) * 100);
@@ -440,10 +763,15 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
                     <span className="font-semibold text-white">{redditN}</span> r
                   </span>
                 )}
-                {youtubeN > 0 && (
+                {youtubeN > 0 ? (
                   <span className="flex items-center gap-0.5">
                     <Youtube className="w-2.5 h-2.5" style={{ color: '#FF0000' }} />
                     <span className="font-semibold text-white">{youtubeN}</span>
+                  </span>
+                ) : ytUnavailable && (
+                  <span className="flex items-center gap-0.5" title="YouTube RSS pool empty this cycle">
+                    <Youtube className="w-2.5 h-2.5" style={{ color: '#5A6478' }} />
+                    <span className="text-[9px] italic" style={{ color: '#5A6478' }}>feed idle</span>
                   </span>
                 )}
                 {twitterN > 0 && (
@@ -575,25 +903,21 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
           const preview   = isExp ? inf.tweet : inf.tweet.slice(0, 200) + (inf.tweet.length > 200 ? '…' : '');
 
           return (
-            <a key={inf.id} href={inf.postUrl} target="_blank" rel="noopener noreferrer"
+            <div key={inf.id}
+              role="link" tabIndex={0}
+              onClick={() => window.open(inf.postUrl, '_blank', 'noopener,noreferrer')}
+              onKeyDown={e => { if (e.key === 'Enter') window.open(inf.postUrl, '_blank', 'noopener,noreferrer'); }}
               className="block px-4 py-3 transition-colors cursor-pointer"
-              style={{ borderBottom: '1px solid #1B2236', textDecoration: 'none' }}
+              style={{ borderBottom: '1px solid #1B2236' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#0E1320')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
 
-              {/* YouTube thumbnail */}
-              {inf.source === 'youtube' && inf.thumbnailUrl && (
-                <a href={inf.postUrl} target="_blank" rel="noopener noreferrer"
-                  className="block mb-2.5 rounded-lg overflow-hidden relative group"
-                  onClick={e => e.stopPropagation()}>
-                  <img src={inf.thumbnailUrl} alt={inf.name}
-                    className="w-full object-cover rounded-lg"
-                    style={{ height: 120, objectFit: 'cover' }} />
-                  <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
-                    <PlayCircle className="w-10 h-10 text-white" />
-                  </div>
-                </a>
-              )}
+              {/* YouTube inline player — hover to play in-place */}
+              {inf.source === 'youtube' && (() => {
+                const vid = extractYouTubeId(inf.postUrl);
+                if (!vid) return null;
+                return <YouTubeHoverEmbed videoId={vid} thumbnailUrl={inf.thumbnailUrl} title={inf.name} />;
+              })()}
 
               {/* TOP ROW */}
               <div className="flex items-start gap-2.5 mb-2">
@@ -695,7 +1019,7 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
                   <ExternalLink className="w-2.5 h-2.5" />
                 </a>
               </div>
-            </a>
+            </div>
           );
         })}
 

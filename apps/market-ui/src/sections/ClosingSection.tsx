@@ -1,6 +1,7 @@
 import { useRef, useLayoutEffect, useState } from 'react';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { Link } from 'react-router-dom';
 import { Search, FileCheck, Bell, Mail, Twitter, Linkedin, Github, ArrowRight, Sparkles } from 'lucide-react';
 
 gsap.registerPlugin(ScrollTrigger);
@@ -254,6 +255,13 @@ export default function ClosingSection() {
           <p className="text-xs text-[#A7B0C8]/60">
             © 2026 MarketIntelligence. All rights reserved.
           </p>
+
+          <Link
+            to="/investors"
+            className="mt-4 inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.14em] text-[#A7B0C8]/50 hover:text-[#00F0FF] transition-colors"
+          >
+            For Investors <ArrowRight className="w-3 h-3" />
+          </Link>
         </div>
       </div>
     </section>

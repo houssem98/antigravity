@@ -21,8 +21,10 @@ import {
     GEMINI_MODELS,
     ResearchCancelledError,
 } from '../services/deepResearchService';
+import type { ResearchBlueprint } from '../services/deepResearchService';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
+import BlueprintReview from '../components/research/BlueprintReview';
 import { supabase } from '../services/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -483,8 +485,11 @@ export default function SearchPage() {
     const [researchInput, setResearchInput] = useState('');
     const [showModelPicker, setShowModelPicker] = useState(false);
     const [loadingReport, setLoadingReport] = useState(false);
+    const [reviewPlan, setReviewPlan] = useState(false);
+    const [pendingBlueprint, setPendingBlueprint] = useState<ResearchBlueprint | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const researchAbortRef = useRef<AbortController | null>(null);
+    const blueprintResolverRef = useRef<((v: ResearchBlueprint | null | undefined) => void) | null>(null);
 
     const isResearching  = useResearchStore((s) => s.isResearching);
     const progress       = useResearchStore((s) => s.progress);
@@ -608,7 +613,24 @@ export default function SearchPage() {
         const controller = new AbortController();
         researchAbortRef.current = controller;
         try {
-            const result = await performDeepResearch(searchQuery, setProgress, selectedModel, undefined, controller.signal);
+            // Build optional HITL callback — present only when the toggle is on.
+            // The callback stashes the drafted blueprint into component state and
+            // returns a Promise the dialog resolves when the analyst clicks
+            // Approve / Run-with-edits / Cancel.
+            const onBlueprintReady = reviewPlan
+                ? (bp: ResearchBlueprint) => new Promise<ResearchBlueprint | null | undefined>(resolve => {
+                    blueprintResolverRef.current = resolve;
+                    setPendingBlueprint(bp);
+                })
+                : undefined;
+            const result = await performDeepResearch(
+                searchQuery,
+                setProgress,
+                selectedModel,
+                undefined,
+                controller.signal,
+                onBlueprintReady,
+            );
             setReport(result);
             try {
                 const { data: { session } } = await supabase.auth.getSession();
@@ -638,6 +660,8 @@ export default function SearchPage() {
             }
         } finally {
             researchAbortRef.current = null;
+            blueprintResolverRef.current = null;
+            setPendingBlueprint(null);
             setIsResearching(false);
         }
     };
@@ -742,6 +766,19 @@ export default function SearchPage() {
                     </>
                 )}
 
+                {/* Human-in-the-loop plan-review dialog */}
+                {pendingBlueprint && (
+                    <BlueprintReview
+                        blueprint={pendingBlueprint}
+                        onSubmit={result => {
+                            const resolve = blueprintResolverRef.current;
+                            blueprintResolverRef.current = null;
+                            setPendingBlueprint(null);
+                            resolve?.(result);
+                        }}
+                    />
+                )}
+
                 {/* Search bar + Mode toggle */}
                 <div className="border-b border-white/[0.05] px-6 py-3 bg-[var(--bg)]">
                     <div className="flex gap-3 max-w-4xl mx-auto items-center">
@@ -820,19 +857,41 @@ export default function SearchPage() {
 
                     {/* Idle state — example queries */}
                     {qaState.status === 'idle' && chatHistory.length === 0 && (
-                        <div className="space-y-6">
-                            <p className="text-sm text-[var(--text-3)] text-center">Try asking:</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {QA_EXAMPLES.map(q => (
-                                    <button
-                                        key={q}
-                                        onClick={() => handleQaSubmit(q)}
-                                        className="text-left px-4 py-3 rounded-xl border border-white/[0.06] bg-white/[0.02] text-sm text-[var(--text-2)] hover:border-[var(--accent)]/30 hover:text-white transition-colors flex items-center gap-2 group"
-                                    >
-                                        <ChevronRight className="w-4 h-4 text-[var(--text-3)] group-hover:text-[var(--accent)] flex-shrink-0" />
-                                        {q}
-                                    </button>
-                                ))}
+                        <div className="relative">
+                            <div
+                                aria-hidden
+                                className="pointer-events-none absolute -inset-x-24 -top-10 h-[360px] -z-10"
+                                style={{
+                                    background: 'radial-gradient(58% 100% at 50% 0%, color-mix(in oklch, var(--accent) 10%, transparent) 0%, transparent 72%)',
+                                }}
+                            />
+                            <div className="stagger space-y-7 pt-4">
+                                <div className="text-center">
+                                    <div className="inline-flex items-center gap-2 mb-4 text-[10px] font-mono uppercase tracking-[0.26em] text-[var(--text-3)]">
+                                        <span className="pulse-dot text-[var(--accent)]">●</span>
+                                        <span>Retrieval online · 5 channels</span>
+                                    </div>
+                                    <h1 className="font-display font-medium text-[clamp(28px,4vw,44px)] leading-[1.02] tracking-[-0.02em] text-[var(--text)]">
+                                        What would you like to know?
+                                    </h1>
+                                    <p className="mt-3 text-[12px] text-[var(--text-3)] max-w-[46ch] mx-auto leading-relaxed">
+                                        Cross-channel retrieval over filings, transcripts, news &amp; broker notes — every claim cited.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {QA_EXAMPLES.map(q => (
+                                        <button
+                                            key={q}
+                                            onClick={() => handleQaSubmit(q)}
+                                            className="group text-left px-4 py-3.5 rounded-lg border border-white/[0.06] bg-white/[0.015] text-[13px] text-[var(--text-2)] hover:border-[var(--accent)]/30 hover:text-white hover:bg-white/[0.03] transition-all flex items-center gap-3"
+                                        >
+                                            <span className="flex items-center justify-center w-5 flex-shrink-0">
+                                                <span className="h-px w-4 bg-[var(--text-4)] group-hover:w-5 group-hover:bg-[var(--accent)] transition-all duration-200" />
+                                            </span>
+                                            <span className="leading-snug">{q}</span>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -1157,26 +1216,47 @@ export default function SearchPage() {
 
                     {/* Empty / Welcome state */}
                     {!report && !isResearching && !researchError && !loadingReport && (
-                        <div className="flex flex-col items-center justify-center h-full min-h-[420px] px-8 text-center">
-                            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6"
-                                style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent), var(--down))' }}>
-                                <Sparkles className="w-7 h-7 text-white" />
-                            </div>
-                            <h2 className="text-3xl font-medium text-white/90 mb-2">Deep Research</h2>
-                            <p className="text-sm text-white/40 max-w-sm mb-10 leading-relaxed">
-                                AI-powered institutional research reports with live web sources, SEC filings & market data
-                            </p>
-                            <div className="flex flex-wrap justify-center gap-2 max-w-xl">
-                                {RESEARCH_EXAMPLES.map((s, i) => (
-                                    <button
-                                        key={i}
-                                        onClick={() => { setResearchInput(s); setTimeout(() => textareaRef.current?.focus(), 50); }}
-                                        className="px-4 py-2 rounded-full text-sm text-white/55 hover:text-white/90 transition-all"
-                                        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
-                                    >
-                                        {s}
-                                    </button>
-                                ))}
+                        <div className="relative flex flex-col items-center justify-center h-full min-h-[420px] px-8 text-center overflow-hidden">
+                            <div
+                                aria-hidden
+                                className="pointer-events-none absolute inset-0"
+                                style={{
+                                    background: 'radial-gradient(55% 55% at 50% 42%, color-mix(in oklch, var(--accent) 9%, transparent) 0%, transparent 70%)',
+                                }}
+                            />
+                            <div
+                                aria-hidden
+                                className="pointer-events-none absolute inset-0 opacity-[0.35]"
+                                style={{
+                                    backgroundImage:
+                                        'linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px)',
+                                    backgroundSize: '56px 56px',
+                                    maskImage: 'radial-gradient(ellipse 50% 45% at 50% 42%, black 0%, transparent 75%)',
+                                    WebkitMaskImage: 'radial-gradient(ellipse 50% 45% at 50% 42%, black 0%, transparent 75%)',
+                                }}
+                            />
+                            <div className="stagger relative">
+                                <div className="inline-flex items-center gap-2 mb-6 text-[10px] font-mono uppercase tracking-[0.28em] text-[var(--text-3)]">
+                                    <span className="pulse-dot text-[var(--accent)]">●</span>
+                                    <span>Deep research instrument</span>
+                                </div>
+                                <h2 className="font-display font-medium text-[clamp(36px,5vw,56px)] leading-[0.98] tracking-[-0.022em] text-[var(--text)] mb-4">
+                                    A report, not a reply.
+                                </h2>
+                                <p className="text-[13px] text-[var(--text-3)] max-w-[48ch] mx-auto mb-10 leading-relaxed">
+                                    Multi-agent synthesis across live web, SEC filings &amp; market data — cited, structured, ready to share.
+                                </p>
+                                <div className="flex flex-wrap justify-center gap-2 max-w-2xl">
+                                    {RESEARCH_EXAMPLES.map((s) => (
+                                        <button
+                                            key={s}
+                                            onClick={() => { setResearchInput(s); setTimeout(() => textareaRef.current?.focus(), 50); }}
+                                            className="px-4 py-2 rounded-full text-[13px] text-[var(--text-2)] border border-white/[0.07] bg-white/[0.015] hover:text-white hover:border-[var(--accent)]/35 hover:bg-white/[0.04] transition-all"
+                                        >
+                                            {s}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -1256,6 +1336,22 @@ export default function SearchPage() {
                                             </>
                                         )}
                                     </div>
+
+                                    {/* Review-plan toggle (HITL) */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setReviewPlan(v => !v)}
+                                        title={reviewPlan
+                                            ? 'Plan review ON — you\'ll edit queries, SEC targets, metrics, and angles before retrieval fires.'
+                                            : 'Plan review OFF — research runs end-to-end without interruption.'}
+                                        className={`flex items-center gap-1.5 h-8 px-3 rounded-full text-[12px] transition-colors font-medium ${reviewPlan
+                                            ? 'text-pink-200 bg-pink-500/15 hover:bg-pink-500/25'
+                                            : 'text-white/60 hover:bg-white/10'}`}
+                                    >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                        Review plan
+                                        {reviewPlan && <span className="ml-0.5 w-1.5 h-1.5 rounded-full bg-pink-400" />}
+                                    </button>
                                 </div>
 
                                 {/* Send button */}

@@ -15,6 +15,7 @@ import SearchPage from './pages/SearchPage';
 import CompanyPage from './pages/CompanyPage';
 import DocumentsPage from './pages/DocumentsPage';
 import TradingAssistantPage from './pages/TradingAssistantPage';
+import InvestorsPage from './pages/InvestorsPage';
 
 function ProtectedRoute({ children, session }: { children: React.ReactNode; session: Session | null }) {
     if (!session) return <Navigate to="/auth" replace />;
@@ -56,6 +57,9 @@ export default function AppRouter() {
 
             {/* Trading — fullscreen with its own sidebar */}
             <Route path="/trading" element={<TradingAssistantPage />} />
+
+            {/* Investors — public waitlist landing */}
+            <Route path="/investors" element={<InvestorsPage />} />
 
             {/* Protected */}
             <Route element={
