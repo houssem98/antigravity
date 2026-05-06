@@ -744,12 +744,18 @@ class SearchPipeline:
 
             # ── Stage 7: Deterministic Verification (0ms, $0) ───────────
             # Layer 1: Numeric + Temporal verifiers (existing)
-            # Layer 2: Logic verifier — NEW: checks financial reasoning chains
+            # Layer 2: Logic verifier — checks financial reasoning chains
+            # Layer 3: Cross-passage contradiction detector — NEW
             # Based on: CRITIC (2023), step-level PRM validation concepts
             t4 = time.perf_counter()
 
+            from app.core.reasoning.contradiction_detector import (
+                detect_contradictions, format_for_response as _fmt_contradictions,
+            )
+
             numeric_mismatches = verify_answer_numerics(full_response, top_passages)
             temporal_mismatches = verify_temporal_consistency(full_response, top_passages)
+            cross_passage_contradictions = detect_contradictions(top_passages)
 
             # NEW: Logic consistency check (no LLM, O(n) rules-based)
             from app.core.reasoning.logic_verifier import verify_logic
@@ -816,6 +822,7 @@ class SearchPipeline:
                 validation_result = {}
             validation_result["numeric_mismatches"] = len(numeric_mismatches)
             validation_result["temporal_mismatches"] = len(temporal_mismatches)
+            validation_result["cross_passage_contradictions"] = len(cross_passage_contradictions)
             if nli_recall is not None:
                 validation_result["nli_citation_recall"] = round(nli_recall, 4)
 
@@ -854,6 +861,9 @@ class SearchPipeline:
                 follow_up_queries = answer_json.get("follow_up_queries", [])
                 caveats = answer_json.get("caveats", [])
                 contradictions_out = answer_json.get("contradictions", [])
+                # Merge deterministic cross-passage contradictions (Stage 7 Layer 3)
+                if cross_passage_contradictions:
+                    contradictions_out = contradictions_out + _fmt_contradictions(cross_passage_contradictions)
                 confidence_out = answer_json.get("confidence", "MEDIUM")
                 structured_data_out = answer_json.get("structured_data", [])
                 # Calibrate confidence: override HIGH if answer admits it cannot answer
@@ -869,6 +879,8 @@ class SearchPipeline:
             except (_json.JSONDecodeError, TypeError):
                 # Plain-text response — fall back to regex extraction
                 confidence_out = _extract_confidence(validated_answer)
+                if cross_passage_contradictions:
+                    contradictions_out = _fmt_contradictions(cross_passage_contradictions)
 
             # ── Stage 8b: ALiiCE Proposition Attribution ────────────────
             # Upgrade chunk-level citations → sentence-level attributed propositions.

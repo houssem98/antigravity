@@ -11,6 +11,7 @@
 // It does NOT own React rendering or persistence; those live in stores + pages.
 
 import type { Citation, ResearchModelId } from './deepResearchService';
+import { queryGravityRAG, formatRAGSourcesForPrompt, type GravityRAGResult } from './gravitySearchService';
 
 export interface GridPrompt {
     id: string;
@@ -35,7 +36,8 @@ export interface GridCell {
     citations?: Citation[];
     error?: string;
     durationMs?: number;
-    modelUsed?: ResearchModelId;
+    modelUsed?: ResearchModelId | string;
+    ragUsed?: boolean;
 }
 
 export interface GridState {
@@ -108,6 +110,7 @@ export function resolvePrompt(prompt: GridPrompt, ticker: string): string {
 export interface CellRunnerDeps {
     callLLM: (prompt: string, signal?: AbortSignal) => Promise<{ text: string; model: ResearchModelId }>;
     searchWeb?: (query: string, signal?: AbortSignal) => Promise<Citation[]>;
+    searchGravity?: (query: string, ticker: string, signal?: AbortSignal) => Promise<GravityRAGResult>;
 }
 
 export async function runGridCell(
@@ -130,7 +133,35 @@ export async function runGridCell(
     const started = Date.now();
 
     try {
-        // Optional web context (ignored on failure — cell should still answer).
+        // ── RAG retrieval (primary) ────────────────────────────────────────
+        let ragResult: GravityRAGResult | null = null;
+        if (deps.searchGravity) {
+            try {
+                ragResult = await deps.searchGravity(`${ticker} ${resolved}`, ticker, signal);
+            } catch { /* soft-fail */ }
+        }
+
+        // If RAG returned a grounded answer, use it directly — no LLM call needed.
+        if (ragResult?.available && ragResult.answer) {
+            const ragCitations: Citation[] = ragResult.sources.map((s, i) => ({
+                id: i + 1,
+                title: [s.title, s.ticker && `(${s.ticker})`, s.date && `[${s.date}]`].filter(Boolean).join(' '),
+                url: `gravity://source/${s.id}`,
+                source: 'gravity',
+                publishedDate: s.date || undefined,
+            }));
+            return {
+                ticker, promptId,
+                status: 'done',
+                answer: ragResult.answer,
+                citations: ragCitations,
+                durationMs: Date.now() - started,
+                modelUsed: 'gravity-rag',
+                ragUsed: true,
+            };
+        }
+
+        // ── Optional web context (fallback when RAG unavailable) ──────────
         let citations: Citation[] = [];
         if (deps.searchWeb) {
             try {
@@ -138,11 +169,14 @@ export async function runGridCell(
             } catch { /* soft-fail */ }
         }
 
-        const contextBlock = citations.length
-            ? `\n\nContext (cite by [n]):\n${citations.map(c => `[${c.id}] ${c.title}: ${c.url}`).join('\n')}\n\n`
+        // Inject RAG context even when it has no answer (sources still useful)
+        const ragBlock = ragResult ? formatRAGSourcesForPrompt(ragResult) : '';
+        const webBlock = citations.length
+            ? `\n\nWeb context (cite by [n]):\n${citations.map(c => `[${c.id}] ${c.title}: ${c.url}`).join('\n')}\n\n`
             : '';
+        const contextBlock = [ragBlock, webBlock].filter(Boolean).join('\n\n');
 
-        const fullPrompt = `You are a sell-side equity analyst. Answer concisely (under 150 words) with citations like [1].${contextBlock}Question: ${resolved}`;
+        const fullPrompt = `You are a sell-side equity analyst. Answer concisely (under 150 words) with citations like [1].${contextBlock ? '\n\n' + contextBlock : ''}Question: ${resolved}`;
 
         const { text, model } = await deps.callLLM(fullPrompt, signal);
 

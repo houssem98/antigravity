@@ -294,6 +294,67 @@ async def ingest_sec_filings(
     }
 
 
+@router.post("/documents/ingest-sec-bulk")
+async def ingest_sec_bulk(
+    response: Response,
+    tickers: str = Query(..., description="Comma-separated tickers, e.g. AAPL,MSFT,NVDA"),
+    filing_types: str = Query(default="10-K,10-Q", description="Comma-separated filing types"),
+    max_filings_per_ticker: int = Query(default=20, ge=1, le=100),
+    workers: int = Query(default=8, ge=1, le=16, description="Parallel worker count"),
+    auth: dict = Depends(require_auth),
+):
+    """
+    Bulk-ingest SEC filings for multiple tickers in parallel.
+
+    Uses 8 async workers bounded by EDGAR's 10 req/s rate limit.
+    Supports resume: already-indexed filings are skipped automatically.
+
+    Example:
+        POST /v1/documents/ingest-sec-bulk?tickers=AAPL,MSFT,NVDA,TSLA&workers=8
+
+    Returns a summary report once all filings are processed.
+    """
+    headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+    for k, v in headers.items():
+        response.headers[k] = v
+
+    from app.ingestion.sources.sec_edgar import SECEdgarSource
+    from app.ingestion.parallel_ingest import ParallelIngestor
+    from app.db.redis import redis_client
+
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="At least one ticker required")
+
+    types = [t.strip().upper() for t in filing_types.split(",") if t.strip()] or ["10-K", "10-Q"]
+
+    logger.info("sec_bulk_ingest_request", tickers=len(ticker_list), types=types, workers=workers)
+
+    source = SECEdgarSource(redis_client=redis_client)
+    pipeline = get_ingestion_pipeline()
+    ingestor = ParallelIngestor(pipeline=pipeline, edgar_source=source)
+
+    report = await ingestor.ingest_tickers(
+        tickers=ticker_list,
+        filing_types=types,
+        max_filings_per_ticker=max_filings_per_ticker,
+        workers=workers,
+    )
+
+    return {
+        "tickers": ticker_list,
+        "total_filings": report.total_filings,
+        "succeeded": report.succeeded,
+        "failed": report.failed,
+        "skipped": report.skipped,
+        "total_chunks": report.total_chunks,
+        "elapsed_s": round(report.elapsed_s, 1),
+        "rate_filings_per_hour": round(report.total_filings / max(report.elapsed_s / 3600, 0.001)),
+        "errors": report.errors[:20],
+        "summary": report.summary(),
+    }
+
+
 @router.get("/documents/{document_id}")
 async def get_document(
     document_id: str,

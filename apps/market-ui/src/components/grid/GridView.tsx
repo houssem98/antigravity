@@ -16,6 +16,7 @@ import {
     type GridCell,
     type CellRunnerDeps,
 } from '../../services/gridResearch';
+import { queryGravityRAG } from '../../services/gravitySearchService';
 import { saveGridRun, loadLatestGridRun, listGridRuns, loadGridRun, deleteGridRun, type SavedGridRow } from '../../services/gridStore';
 import { exportGridToXLSX, downloadBlob } from '../../services/gridExcel';
 
@@ -36,7 +37,11 @@ async function callLLMProxy(prompt: string, signal?: AbortSignal): Promise<{ tex
     return { text: data.text ?? '', model: 'gemini-2.5-flash' };
 }
 
-const deps: CellRunnerDeps = { callLLM: callLLMProxy };
+async function searchGravityCell(query: string, ticker: string, signal?: AbortSignal) {
+    return queryGravityRAG(query, { companies: [ticker] });
+}
+
+const deps: CellRunnerDeps = { callLLM: callLLMProxy, searchGravity: searchGravityCell };
 
 const DEFAULT_TICKERS = ['NVDA', 'AAPL', 'MSFT', 'GOOGL'];
 
@@ -380,9 +385,27 @@ export default function GridView() {
                         <div className="text-sm text-[color:var(--text-2)] whitespace-pre-wrap leading-relaxed">
                             {selectedCell.answer}
                         </div>
+                        {selectedCell.citations && selectedCell.citations.length > 0 && (
+                            <div className="mt-4 border-t border-[color:var(--line)] pt-3">
+                                <div className="label mb-1.5">SOURCES ({selectedCell.citations.length})</div>
+                                <ul className="space-y-1">
+                                    {selectedCell.citations.map(c => (
+                                        <li key={c.id} className="text-xs text-[color:var(--text-3)] flex gap-1.5">
+                                            <span className="text-[color:var(--accent)] font-mono shrink-0">[{c.id}]</span>
+                                            <span className="truncate">{c.title}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
                         {selectedCell.durationMs && (
-                            <div className="mt-4 label">
-                                {(selectedCell.durationMs / 1000).toFixed(1)}S · {selectedCell.modelUsed}
+                            <div className="mt-3 label flex items-center gap-2">
+                                <span>{(selectedCell.durationMs / 1000).toFixed(1)}S · {selectedCell.modelUsed}</span>
+                                {selectedCell.ragUsed && (
+                                    <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] text-[color:var(--accent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
+                                        SEC RAG
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>
@@ -419,9 +442,16 @@ function CellContent({ cell }: { cell?: GridCell }) {
     return (
         <div className="flex items-start gap-2">
             <Check className="w-3 h-3 mt-1 flex-shrink-0 up" />
-            <span className="text-xs text-[color:var(--text-2)] leading-relaxed line-clamp-3">
-                {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
-            </span>
+            <div className="min-w-0">
+                {cell.ragUsed && (
+                    <span className="inline-block mb-1 px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] text-[color:var(--accent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
+                        SEC RAG
+                    </span>
+                )}
+                <span className="block text-xs text-[color:var(--text-2)] leading-relaxed line-clamp-3">
+                    {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
+                </span>
+            </div>
         </div>
     );
 }
