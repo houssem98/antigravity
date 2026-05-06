@@ -29,10 +29,15 @@ async def get_db():
         yield session
 
 
+_ingestion_pipeline = None
+
 def get_ingestion_pipeline():
     """Lazy-init the ingestion pipeline (cached after first call)."""
-    from app.ingestion.pipeline import IngestionPipeline
-    return IngestionPipeline.create()
+    global _ingestion_pipeline
+    if _ingestion_pipeline is None:
+        from app.ingestion.pipeline import IngestionPipeline
+        _ingestion_pipeline = IngestionPipeline.create()
+    return _ingestion_pipeline
 
 
 @router.post("/documents/ingest")
@@ -196,6 +201,96 @@ async def ingest_earnings_transcript(
             "speaker_turns": speaker_count,
             "has_qa": bool(transcript["sections"].get("qa_session")),
         },
+    }
+
+
+@router.post("/documents/ingest-sec")
+async def ingest_sec_filings(
+    response: Response,
+    ticker: str = Query(..., description="Stock ticker, e.g. AAPL"),
+    filing_types: str = Query(default="10-K,10-Q", description="Comma-separated filing types"),
+    max_filings: int = Query(default=10, ge=1, le=100, description="Max filings per type"),
+    auth: dict = Depends(require_auth),
+):
+    """
+    Fetch and ingest SEC EDGAR filings for a ticker on demand.
+    Useful for historical backfill (2011–now).
+
+    Query params:
+      - ticker: stock ticker (e.g. AAPL, TSLA, MSFT)
+      - filing_types: comma-separated list (default: 10-K,10-Q)
+      - max_filings: how many filings per type to ingest (max 100)
+
+    Returns ingestion summary for each filing found.
+    """
+    headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+    for k, v in headers.items():
+        response.headers[k] = v
+
+    from app.ingestion.sources.sec_edgar import SECEdgarSource
+    from app.db.redis import redis_client
+
+    types = [t.strip().upper() for t in filing_types.split(",") if t.strip()]
+    if not types:
+        types = ["10-K", "10-Q"]
+
+    logger.info("sec_backfill_request", ticker=ticker, types=types, max_filings=max_filings)
+
+    source = SECEdgarSource(redis_client=redis_client)
+    pipeline = get_ingestion_pipeline()
+
+    filings = await source.fetch_company_filings(
+        ticker=ticker.upper(),
+        filing_types=types,
+        max_filings=max_filings,
+    )
+
+    if not filings:
+        return {
+            "ticker": ticker.upper(),
+            "filings_found": 0,
+            "results": [],
+            "message": "No filings found. Check ticker or try edgartools: pip install edgartools",
+        }
+
+    results = []
+    for filing in filings:
+        url = filing.get("url", "")
+        if not url:
+            results.append({"filing": filing, "status": "skipped", "reason": "no_url"})
+            continue
+        try:
+            result = await pipeline.ingest_from_url(
+                url=url,
+                filing_type=filing.get("filing_type", ""),
+                ticker=filing.get("ticker", ticker.upper()),
+                company_name=filing.get("company_name", ""),
+                filing_date=filing.get("filing_date", ""),
+            )
+            results.append({
+                "filing_type": filing.get("filing_type"),
+                "filing_date": filing.get("filing_date"),
+                "accession": filing.get("accession_number"),
+                "status": "ok" if "error" not in result else "error",
+                "chunk_count": result.get("chunk_count", 0),
+                "indexing": result.get("indexing", {}),
+            })
+        except Exception as e:
+            results.append({
+                "filing_type": filing.get("filing_type"),
+                "filing_date": filing.get("filing_date"),
+                "status": "error",
+                "error": str(e),
+            })
+
+    ingested = sum(1 for r in results if r.get("status") == "ok")
+    logger.info("sec_backfill_complete", ticker=ticker, found=len(filings), ingested=ingested)
+
+    return {
+        "ticker": ticker.upper(),
+        "filings_found": len(filings),
+        "ingested": ingested,
+        "results": results,
     }
 
 

@@ -23,13 +23,13 @@ class GraphIndexer:
     All operations use MERGE — idempotent and safe to re-run.
     """
 
-    def __init__(self):
-        self.driver = neo4j_driver
+    def __init__(self, driver=None):
+        self.driver = driver or neo4j_driver
 
-    async def index_document(
+    def index_document(
         self,
         document_id: str,
-        metadata: dict,
+        metadata,
         entities: dict,
     ) -> dict:
         """
@@ -44,6 +44,10 @@ class GraphIndexer:
             Node counts: {companies, filings, people, themes}
         """
         counts = {"companies": 0, "filings": 0, "people": 0, "themes": 0}
+
+        # Accept both dict and DocumentMetadata dataclass
+        if hasattr(metadata, "__dict__"):
+            metadata = vars(metadata)
 
         ticker = metadata.get("ticker", "")
         filing_date = metadata.get("filing_date", "") or "2000-01-01"

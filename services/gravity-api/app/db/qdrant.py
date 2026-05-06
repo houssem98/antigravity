@@ -136,7 +136,8 @@ async def ensure_collection():
         return
 
     try:
-        # Create collection with named vectors for Hybrid Search
+        # Create collection with named vectors for Hybrid Search + INT8 scalar quantization
+        # INT8 gives 4× memory reduction with ~1% quality loss — essential for 10M+ SEC chunks
         await qdrant_client.create_collection(
             collection_name=collection_name,
             vectors_config={
@@ -150,6 +151,13 @@ async def ensure_collection():
                     modifier=models.Modifier.IDF,
                 ),
             },
+            quantization_config=models.ScalarQuantization(
+                scalar=models.ScalarQuantizationConfig(
+                    type=models.ScalarType.INT8,
+                    quantile=0.99,
+                    always_ram=True,
+                ),
+            ),
         )
         
         # Create payload indexes for fast filtering

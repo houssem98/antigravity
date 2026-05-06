@@ -16,16 +16,16 @@ logger = structlog.get_logger()
 
 # Pricing per 1M tokens (Feb 2026)
 PRICING = {
-    "claude-sonnet-4-5-20250929": {"input": 3.00, "output": 15.00},
-    "claude-opus-4-6-20260210": {"input": 5.00, "output": 25.00},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00},
+    "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00},
+    "claude-opus-4-7":           {"input": 15.00, "output": 75.00},
 }
 
 
 class AnthropicClient(BaseLLMClient):
     provider = ModelProvider.ANTHROPIC
 
-    def __init__(self, model_id: str = "claude-sonnet-4-5-20250929"):
+    def __init__(self, model_id: str = "claude-sonnet-4-6"):
         self.model_id = model_id
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 

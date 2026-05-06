@@ -104,7 +104,7 @@ class VectorIndexer:
 
             # ── Upsert to Qdrant ─────────────────────────────────────────
             try:
-                qdrant_client.upsert(
+                await qdrant_client.upsert(
                     collection_name=self.collection,
                     points=points,
                     wait=True,

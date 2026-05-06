@@ -28,7 +28,8 @@ class ProcessedDocument:
     page_count: int = 0    # Number of pages (PDF only)
     language: str = "en"   # Detected language code
     raw_html: str = ""     # Original HTML (for debugging)
-    tables: list = field(default_factory=list)  # list[ParsedTable] — structured tables
+    tables: list = field(default_factory=list)    # list[ParsedTable] — structured tables
+    xbrl_facts: list = field(default_factory=list)  # list[XBRLFact] — machine-readable facts
 
 
 class DocumentProcessor:
@@ -86,6 +87,15 @@ class DocumentProcessor:
             # ── Extract structured tables BEFORE removing elements ────────
             tables = _table_parser.extract_html_tables(raw_html)
 
+            # ── Extract XBRL facts from iXBRL-embedded HTML ───────────────
+            xbrl_facts: list = []
+            try:
+                from app.ingestion.processing.xbrl_extractor import XBRLExtractor
+                _xbrl = XBRLExtractor()
+                xbrl_facts = _xbrl.extract_from_html(raw_html)
+            except Exception as _xe:
+                logger.debug("xbrl_extraction_skipped", error=str(_xe))
+
             # Remove noise elements
             for tag in soup(["script", "style", "nav", "footer", "header",
                               "aside", "noscript", "form", "button"]):
@@ -104,9 +114,9 @@ class DocumentProcessor:
                 # Fallback: get all text
                 text = soup.get_text(separator="\n", strip=True)
 
-            logger.info("html_processed", title=title[:50], chars=len(text), tables=len(tables))
+            logger.info("html_processed", title=title[:50], chars=len(text), tables=len(tables), xbrl_facts=len(xbrl_facts))
             return ProcessedDocument(
-                text=text, title=title, raw_html=raw_html[:10000], tables=tables,
+                text=text, title=title, raw_html=raw_html[:10000], tables=tables, xbrl_facts=xbrl_facts,
             )
 
         except Exception as e:

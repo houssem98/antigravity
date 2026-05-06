@@ -99,12 +99,22 @@ class StructuredIndexer:
         if not metrics:
             return 0
 
-        # Insert into PostgreSQL
+        # Try PostgreSQL first; fall back to Elasticsearch when mocked (Windows dev)
+        if async_session is not None:
+            inserted = await self._insert_postgres(metrics, metadata, document_id, ticker)
+        else:
+            inserted = await self._insert_elasticsearch(metrics, metadata, document_id, ticker)
+
+        logger.info("structured_indexed", ticker=ticker, metrics_inserted=inserted)
+        return inserted
+
+    async def _insert_postgres(
+        self, metrics: list, metadata: dict, document_id: str, ticker: str
+    ) -> int:
         inserted = 0
         try:
             async with async_session() as session:
                 for metric in metrics:
-                    # Parse fiscal year
                     try:
                         fy = int(metric.get("fiscal_year") or 0)
                     except (ValueError, TypeError):
@@ -125,10 +135,57 @@ class StructuredIndexer:
                     inserted += 1
 
                 await session.commit()
-
         except Exception as e:
-            logger.error("structured_insert_failed", error=str(e), ticker=ticker)
+            logger.error("structured_postgres_insert_failed", error=str(e), ticker=ticker)
             return 0
-
-        logger.info("structured_indexed", ticker=ticker, metrics_inserted=inserted)
         return inserted
+
+    async def _insert_elasticsearch(
+        self, metrics: list, metadata: dict, document_id: str, ticker: str
+    ) -> int:
+        """ES fallback used when Postgres is mocked (Windows dev environment)."""
+        try:
+            from app.db.elasticsearch import get_es_client
+            es = get_es_client()
+            if es is None:
+                return 0
+
+            index = "gravity_financials"
+            ops: list = []
+            for metric in metrics:
+                try:
+                    fy = int(metric.get("fiscal_year") or 0)
+                except (ValueError, TypeError):
+                    fy = 0
+
+                doc_id = f"{ticker}_{metric.get('metric_name', '')}_{metric.get('period', fy)}_{document_id[:8]}"
+                ops.append({"index": {"_index": index, "_id": doc_id}})
+                ops.append({
+                    "ticker": ticker,
+                    "company": metadata.get("company_name", ticker),
+                    "filing_type": metadata.get("filing_type", ""),
+                    "filing_date": metadata.get("filing_date", ""),
+                    "document_id": document_id,
+                    "metric_name": metric.get("metric_name", ""),
+                    "value_float": float(metric.get("value") or 0),
+                    "value_raw": str(metric.get("value", "")),
+                    "currency": metric.get("currency", "USD"),
+                    "fiscal_year": fy,
+                    "fiscal_quarter": metric.get("fiscal_quarter", ""),
+                    "period": metric.get("period", ""),
+                    "is_guidance": metric.get("is_guidance", False),
+                    "table_type": "llm_extracted",
+                })
+
+            if not ops:
+                return 0
+
+            resp = await es.bulk(body=ops, timeout="20s")
+            errors = [i for i in resp.get("items", []) if "error" in i.get("index", {})]
+            inserted = len(metrics) - len(errors)
+            if errors:
+                logger.warning("structured_es_partial_errors", count=len(errors))
+            return inserted
+        except Exception as e:
+            logger.warning("structured_es_insert_failed", error=str(e), ticker=ticker)
+            return 0

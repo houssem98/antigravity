@@ -45,7 +45,7 @@ class DenseSearch:
 
             qdrant_filter = self._build_filter(filters, models) if filters else None
 
-            results = qdrant_client.query_points(
+            results = await qdrant_client.query_points(
                 collection_name=settings.qdrant_collection,
                 query=query_vector,
                 using=DENSE_VECTOR_NAME,

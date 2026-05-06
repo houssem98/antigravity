@@ -17,3 +17,6 @@ async def init_timescaledb():
 async def create_all_tables():
     logger.info("postgres_mock_active", msg="SQLAlchemy async skipped on Windows due to deadlock")
 
+def get_db_pool():
+    return None
+

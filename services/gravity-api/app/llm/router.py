@@ -58,12 +58,14 @@ class LLMRouter:
         self._clients: dict[str, BaseLLMClient] = {}
         self._init_clients()
 
-        # Routing table: complexity → (primary_model_key, fallback_model_key)
+        # Routing table: complexity → ordered fallback chain
+        # Groq (llama-3.3-70b) and DeepSeek are last-resort fallbacks when
+        # Anthropic credits are exhausted or primary models are unavailable.
         self._routing_table: dict[QueryComplexity, list[str]] = {
-            QueryComplexity.SIMPLE: ["gemini_flash", "deepseek", "claude_sonnet"],
-            QueryComplexity.MEDIUM: ["claude_sonnet", "gemini_pro", "gpt5"],
-            QueryComplexity.COMPLEX: ["claude_opus", "claude_sonnet", "gpt5"],
-            QueryComplexity.MATH: ["gpt5", "claude_sonnet", "gemini_pro"],
+            QueryComplexity.SIMPLE:  ["claude_haiku", "gemini_flash", "groq_fast", "deepseek", "claude_sonnet"],
+            QueryComplexity.MEDIUM:  ["claude_sonnet", "gemini_pro", "deepseek", "groq_large", "claude_haiku"],
+            QueryComplexity.COMPLEX: ["claude_opus", "claude_sonnet", "gpt5", "deepseek", "groq_large"],
+            QueryComplexity.MATH:    ["claude_opus", "gpt5", "deepseek", "claude_sonnet", "groq_large"],
         }
 
         # Cost estimates per query by complexity
@@ -78,8 +80,9 @@ class LLMRouter:
         """Initialize available LLM clients based on configured API keys."""
         if settings.anthropic_api_key:
             from app.llm.anthropic_client import AnthropicClient
-            self._clients["claude_sonnet"] = AnthropicClient("claude-sonnet-4-5-20250929")
-            self._clients["claude_opus"] = AnthropicClient("claude-opus-4-6-20260210")
+            self._clients["claude_haiku"] = AnthropicClient("claude-haiku-4-5-20251001")
+            self._clients["claude_sonnet"] = AnthropicClient("claude-sonnet-4-6")
+            self._clients["claude_opus"] = AnthropicClient("claude-opus-4-7")
 
         if settings.openai_api_key:
             from app.llm.openai_client import OpenAIClient
@@ -90,6 +93,15 @@ class LLMRouter:
             from app.llm.google_client import GoogleClient
             self._clients["gemini_flash"] = GoogleClient("gemini-2.0-flash")
             self._clients["gemini_pro"] = GoogleClient("gemini-2.0-flash")
+
+        if settings.deepseek_api_key:
+            from app.llm.deepseek_client import DeepSeekClient
+            self._clients["deepseek"] = DeepSeekClient("deepseek-chat")
+
+        if settings.groq_api_key:
+            from app.llm.groq_client import GroqClient
+            self._clients["groq_large"] = GroqClient("llama-3.3-70b-versatile")
+            self._clients["groq_fast"] = GroqClient("llama-3.1-8b-instant")
 
         logger.info("llm_router_init", available_models=list(self._clients.keys()))
 
@@ -177,6 +189,16 @@ class LLMRouter:
 
         return client, decision
 
+    def select_models_ordered(self, complexity: QueryComplexity) -> list[BaseLLMClient]:
+        """Return all available clients for a complexity level, in fallback order."""
+        clients = []
+        for model_key in self._routing_table[complexity]:
+            if model_key in self._clients:
+                clients.append(self._clients[model_key])
+        if not clients:
+            clients = list(self._clients.values())
+        return clients
+
     def get_client(self, model_key: str) -> BaseLLMClient:
         """Get a specific model client by key (for validation agent, etc.)."""
         if model_key not in self._clients:
@@ -185,7 +207,7 @@ class LLMRouter:
 
     def get_fast_client(self) -> BaseLLMClient:
         """Get the fastest/cheapest available client (for query understanding, etc.)."""
-        for key in ["gemini_flash", "gpt4o", "claude_sonnet"]:
+        for key in ["claude_haiku", "gemini_flash", "groq_fast", "deepseek", "gpt4o", "claude_sonnet"]:
             if key in self._clients:
                 return self._clients[key]
         return next(iter(self._clients.values()))

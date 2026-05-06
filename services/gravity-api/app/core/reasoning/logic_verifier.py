@@ -414,10 +414,127 @@ class FinancialLogicVerifier:
         return "\n".join(parts)
 
 
+    # ── Step-Level Arithmetic Verification (Phase 3.5) ───────────────────
+
+    def verify_calculation_steps(self, answer: str) -> LogicVerificationResult:
+        """
+        Extract arithmetic calculation steps from LLM answer text and verify
+        that the stated results are correct.
+
+        Detects patterns like:
+          "Revenue growth = (391 - 383) / 383 = 2.09%"
+          "Gross margin = (394 - 245) / 394 * 100 = 37.8%"
+          "(123.4 - 98.6) / 98.6 = 25.2%"
+          "EPS = $45.2B / 15.4B shares = $2.93"
+
+        Returns a LogicVerificationResult with arithmetic errors flagged.
+        """
+        result = LogicVerificationResult()
+
+        # Pattern 1: expr = result (e.g. "(391 - 383) / 383 = 2.09%")
+        _STEP_PAT = re.compile(
+            r"(?P<expr>"
+            r"\(?\s*[\d,]+(?:\.\d+)?\s*"          # first operand
+            r"(?:[-+*/]\s*[\d,]+(?:\.\d+)?\s*)*"  # more operands
+            r"\)?"
+            r"(?:\s*/\s*[\d,]+(?:\.\d+)?)?"       # optional division
+            r"(?:\s*\*\s*100)?"                    # optional *100
+            r")\s*=\s*"
+            r"\(?\s*(?P<stated>[-]?[\d,]+(?:\.\d+)?)\s*%?\s*\)?",
+            re.IGNORECASE,
+        )
+
+        # Pattern 2: "X / Y = Z" (division, for ratios and per-share metrics)
+        _DIV_PAT = re.compile(
+            r"\$?(?P<num>[\d,]+(?:\.\d+)?)\s*(?:billion|million|B|M)?\s*/\s*"
+            r"\$?(?P<den>[\d,]+(?:\.\d+)?)\s*(?:billion|million|B|M|shares?)?\s*=\s*"
+            r"\$?(?P<result>[-]?[\d,]+(?:\.\d+)?)",
+            re.IGNORECASE,
+        )
+
+        def _parse(s: str) -> float | None:
+            try:
+                return float(s.replace(",", ""))
+            except (ValueError, TypeError):
+                return None
+
+        def _eval_expr(expr: str) -> float | None:
+            """Safely evaluate a simple arithmetic expression."""
+            # Strip parentheses, normalize
+            expr = expr.replace(",", "").strip()
+            try:
+                # Only allow numeric chars and arithmetic operators
+                if re.search(r"[^0-9\s\+\-\*/\.\(\)]", expr):
+                    return None
+                result_val = eval(expr, {"__builtins__": {}})  # noqa: S307
+                return float(result_val)
+            except Exception:
+                return None
+
+        for m in _STEP_PAT.finditer(answer):
+            expr = m.group("expr")
+            stated_str = m.group("stated")
+            stated = _parse(stated_str)
+            if stated is None:
+                continue
+
+            is_percent = "%" in m.group(0) or "* 100" in expr
+            computed = _eval_expr(expr)
+            if computed is None:
+                continue
+            if is_percent and abs(computed) <= 1.0 and abs(stated) > 1.0:
+                computed *= 100  # expression wasn't multiplied yet
+
+            tolerance = max(abs(stated) * 0.015, 0.1)  # 1.5% or 0.1 absolute
+            if abs(computed - stated) > tolerance:
+                result.issues.append(LogicIssue(
+                    rule_id="ARITHMETIC_STEP",
+                    description=(
+                        f"Step verification failed: {expr.strip()} = {computed:.4f} "
+                        f"but answer states {stated}. "
+                        f"Delta = {abs(computed - stated):.4f}. Check for rounding or unit error."
+                    ),
+                    severity="error",
+                    facts_involved=["calculation_step"],
+                ))
+
+        for m in _DIV_PAT.finditer(answer):
+            num = _parse(m.group("num"))
+            den = _parse(m.group("den"))
+            stated = _parse(m.group("result"))
+            if num is None or den is None or stated is None or den == 0:
+                continue
+
+            computed = num / den
+            tolerance = max(abs(stated) * 0.02, 0.01)  # 2% tolerance for unit scaling
+            if abs(computed - stated) > tolerance:
+                result.issues.append(LogicIssue(
+                    rule_id="DIVISION_STEP",
+                    description=(
+                        f"Division check: {num} / {den} = {computed:.4f} "
+                        f"but stated {stated}. May be a unit mismatch (B vs M)."
+                    ),
+                    severity="warning",
+                    facts_involved=["division_step"],
+                ))
+
+        result.passed = result.error_count == 0
+        result.summary = self._build_summary(result)
+        return result
+
+
 # Module-level singleton
 _verifier = FinancialLogicVerifier()
 
 
 def verify_logic(answer: str, extracted_facts: list[dict]) -> LogicVerificationResult:
-    """Convenience function: run logic verification."""
-    return _verifier.verify_answer(answer, extracted_facts)
+    """Convenience function: run all logic verification including step arithmetic."""
+    rule_result = _verifier.verify_answer(answer, extracted_facts)
+    step_result = _verifier.verify_calculation_steps(answer)
+
+    # Merge results
+    combined = LogicVerificationResult()
+    combined.issues = rule_result.issues + step_result.issues
+    combined.passed = rule_result.passed and step_result.passed
+    combined.summary = " | ".join(filter(None, [rule_result.summary, step_result.summary]))
+    return combined

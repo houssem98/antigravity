@@ -83,6 +83,7 @@ class SearchPipeline:
         semantic_cache,           # app.core.caching.semantic_cache.SemanticCache
         feedback_loop: RoutingFeedbackLoop | None = None,
         ratio_engine=None,        # app.core.finance.ratio_engine.RatioEngine (deterministic)
+        audit_logger=None,        # compliance.audit_log.AuditLogger
     ):
         self.llm_router = llm_router
         self.retrieval = retrieval_orchestrator
@@ -92,6 +93,7 @@ class SearchPipeline:
         self.cache = semantic_cache
         self.feedback = feedback_loop
         self.ratio_engine = ratio_engine
+        self.audit_logger = audit_logger
 
     def _should_use_agentic(self, reasoning_depth: str, query_plan: dict) -> bool:
         """Decide whether to use the multi-agent pipeline."""
@@ -108,30 +110,64 @@ class SearchPipeline:
         )
 
     async def _get_conversation_context(self, conversation_id: str | None) -> str:
-        """Load prior turns from Redis for conversational context."""
+        """
+        Load prior turns + numeric state from Redis for conversational context.
+
+        Returns two sections (when available):
+          1. KNOWN FACTS block (ConvFinQA numeric state)
+          2. Prior Q&A turns (last 3)
+        """
         if not conversation_id or not self.cache:
             return ""
+
+        parts = []
+
+        # ConvFinQA numeric state: inject known facts first so the LLM
+        # sees verified numbers before it reads the new question
+        try:
+            from app.core.reasoning.numeric_state import get_numeric_state_tracker
+            tracker = get_numeric_state_tracker()
+            facts_block = await tracker.get_facts_block(conversation_id)
+            if facts_block:
+                parts.append(facts_block)
+        except Exception as e:
+            logger.warning("numeric_state_load_failed", error=str(e))
+
+        # Prior Q&A turns
         try:
             from app.db.redis import redis_client
             raw = await redis_client.get(f"conv:{conversation_id}")
             if raw:
                 import json
                 turns = json.loads(raw)
-                # Format last 3 turns as context
-                parts = []
+                turn_parts = []
                 for t in turns[-3:]:
-                    parts.append(f"Previous Q: {t['query']}\nPrevious A: {t['answer'][:300]}...")
-                return "\n\n".join(parts)
+                    turn_parts.append(f"Previous Q: {t['query']}\nPrevious A: {t['answer'][:300]}...")
+                if turn_parts:
+                    parts.append("\n\n".join(turn_parts))
         except Exception as e:
             logger.warning("conversation_context_failed", error=str(e))
-        return ""
+
+        return "\n\n".join(parts)
 
     async def _save_conversation_turn(
         self, conversation_id: str | None, query: str, answer: str
     ):
-        """Append this turn to the conversation history in Redis (TTL 2h)."""
+        """
+        Append this turn to the conversation history in Redis (TTL 2h).
+        Also records numeric facts extracted from the answer for ConvFinQA state.
+        """
         if not conversation_id:
             return
+
+        # Record numeric facts from answer (fire-and-forget)
+        try:
+            from app.core.reasoning.numeric_state import get_numeric_state_tracker
+            tracker = get_numeric_state_tracker()
+            asyncio.create_task(tracker.record_turn(conversation_id, answer))
+        except Exception as e:
+            logger.warning("numeric_state_record_failed", error=str(e))
+
         try:
             import json
             from app.db.redis import redis_client
@@ -236,6 +272,15 @@ class SearchPipeline:
         total_cost = 0.0
         conversation_context = await self._get_conversation_context(conversation_id)
 
+        # Observability: start Langfuse trace (no-op if not configured)
+        from app.core.observability import get_tracer
+        _tracer = get_tracer()
+        _otrace = _tracer.start_trace(
+            trace_id=trace_id,
+            query=query,
+            session_id=conversation_id or "",
+        )
+
         try:
             # ── Stage 0: PII Stripping ───────────────────────────────────
             query, redacted = _pii_filter.filter(query)
@@ -246,7 +291,14 @@ class SearchPipeline:
             yield SearchEvent(type="status", data={"status": "understanding", "message": "Analyzing your query..."}, trace_id=trace_id)
 
             t0 = time.perf_counter()
-            query_plan = await self.query_understander.analyze(query)
+            try:
+                query_plan = await asyncio.wait_for(
+                    self.query_understander.analyze(query), timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                from app.core.query_understanding import DEFAULT_QUERY_PLAN
+                query_plan = DEFAULT_QUERY_PLAN.copy()
+                logger.warning("query_understanding_timeout", trace_id=trace_id, query=query[:60])
             understanding_ms = (time.perf_counter() - t0) * 1000
 
             logger.info(
@@ -357,13 +409,32 @@ class SearchPipeline:
                 )
             else:
                 # Single-pass retrieval for simple queries (faster)
-                retrieval_results = await self.retrieval.search(
-                    query=query,
-                    expanded_terms=query_plan.get("expanded_terms", {}),
-                    filters=filters or {},
-                    channels=query_plan.get("retrieval_channels", ["dense", "bm25", "splade"]),
-                )
+                # Multi-entity: comparison queries ("Apple vs Microsoft") get
+                # one independent retrieval pass per company then merged.
+                _companies = query_plan.get("entities", {}).get("companies", [])
+                _tickers = [e.get("ticker") for e in _companies if e.get("ticker")]
+                _channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+
+                if len(_tickers) >= 2 and complexity in ("medium", "complex"):
+                    retrieval_results = await self.retrieval.search_multi_entity(
+                        query=query,
+                        tickers=_tickers,
+                        filters=filters or {},
+                        channels=_channels,
+                        complexity=complexity,
+                    )
+                else:
+                    retrieval_results = await self.retrieval.search(
+                        query=query,
+                        expanded_terms=query_plan.get("expanded_terms", {}),
+                        filters=filters or {},
+                        channels=_channels,
+                        complexity=complexity,
+                    )
                 retrieval_ms = (time.perf_counter() - t1) * 1000
+                _tracer.record_stage(_otrace, "retrieval", latency_ms=retrieval_ms,
+                                     channels=list(retrieval_results.keys()),
+                                     total_retrieved=sum(len(v) for v in retrieval_results.values()))
 
                 # ── Stage 4: RRF Fusion + Reranking (<30ms) ────────────
                 t2 = time.perf_counter()
@@ -477,12 +548,66 @@ class SearchPipeline:
                 except Exception as _re:
                     logger.warning("ratio_engine_failed", trace_id=trace_id, error=str(_re))
 
+            # ── Stage 5c: Deterministic Calculator Pre-Pass ────────────
+            # For explicit math queries (YoY growth, margins, CAGR, etc.):
+            # detect the calculation type, extract operands from retrieved passages,
+            # compute the answer deterministically, and inject it into the prompt.
+            # LLMs hallucinate arithmetic — this guarantees correct math at $0 cost.
+            calculator_block = ""
+            try:
+                from app.core.financial_calculator import detect_calculation_type, execute_calculation, parse_financial_number
+                calc_type = detect_calculation_type(query)
+                if calc_type:
+                    # Extract numbers from top passages (first 5 passages, ≤2000 chars each)
+                    import re as _re_calc
+                    _NUM_PAT = _re_calc.compile(r"[\$€£]?[\d,]+(?:\.\d+)?(?:\s*(?:billion|million|trillion|thousand|B|M|T|K)\b)?(?:\s*%)?", _re_calc.IGNORECASE)
+                    candidate_numbers: list[float] = []
+                    for p in top_passages[:5]:
+                        for m in _NUM_PAT.finditer(p.text[:2000]):
+                            v = parse_financial_number(m.group(0))
+                            if v is not None and abs(v) > 0:
+                                candidate_numbers.append(v)
+
+                    # Attempt calculation with first two distinct candidates
+                    uniq = list(dict.fromkeys(candidate_numbers))[:4]
+                    if len(uniq) >= 2:
+                        calc_result = execute_calculation(calc_type, {
+                            "old": uniq[1], "new": uniq[0],           # percentage_change / yoy_growth
+                            "current": uniq[0], "prior_year": uniq[1], # yoy_growth alt params
+                            "prior_quarter": uniq[1],
+                            "beginning": uniq[1], "ending": uniq[0], "years": 1,
+                            "revenue": uniq[0], "cogs": uniq[1],
+                            "operating_income": uniq[1], "net_income": uniq[1],
+                            "ebitda": uniq[1],
+                        }.copy())
+                        if calc_result.get("result") is not None:
+                            calculator_block = (
+                                f"## Deterministic Calculation Result\n"
+                                f"Calculation type: {calc_result['calc_type']}\n"
+                                f"Formula: {calc_result['formula']}\n"
+                                f"Result: {calc_result['result']}\n"
+                                f"Description: {calc_result.get('description', '')}\n"
+                                f"(Use this verified result in your answer. Do not recompute.)\n"
+                            )
+                            logger.info(
+                                "calculator_injected",
+                                trace_id=trace_id,
+                                calc_type=calc_type,
+                                result=calc_result["result"],
+                            )
+            except Exception as _calc_err:
+                logger.warning("calculator_pre_pass_failed", trace_id=trace_id, error=str(_calc_err))
+
             # ── Stage 6: LLM Reasoning (200ms–2s) ──────────────────────
             t3 = time.perf_counter()
             yield SearchEvent(type="status", data={"status": "reasoning", "message": "Generating cited answer..."}, trace_id=trace_id)
 
-            # Route to optimal model
+            # Route to optimal model + build ordered fallback list
             client, routing_decision = await self.llm_router.route(query)
+            clients_ordered = self.llm_router.select_models_ordered(routing_decision.complexity)
+            # Ensure primary client is first (route() may differ from select_models_ordered index 0)
+            if client not in clients_ordered:
+                clients_ordered.insert(0, client)
 
             # Build messages — inject prior conversation context if present
             # Buffer of Thoughts (BoT, NeurIPS 2024): inject relevant financial
@@ -494,10 +619,12 @@ class SearchPipeline:
             )
             system_msg = LLMMessage(role="system", content=reasoning_system)
             user_content = build_user_message(query, top_passages)
-            # Prepend deterministic ratio data if available
-            # This goes BEFORE sources so the LLM sees verified numbers first
+            # Prepend deterministic data (ratios + calculator) before sources
+            # so the LLM sees verified numbers first and never needs to recompute
             if ratio_context_block:
                 user_content = ratio_context_block + "\n\n" + user_content
+            if calculator_block:
+                user_content = calculator_block + "\n\n" + user_content
             if conversation_context:
                 user_content = (
                     f"## Conversation Context (prior turns)\n{conversation_context}\n\n"
@@ -511,43 +638,99 @@ class SearchPipeline:
                 and not stream  # Only for non-streaming requests (avoids 3x latency for WS)
             )
 
+            gen_config = LLMConfig(temperature=0.1, max_tokens=4096)
+            full_response = ""
+            _last_llm_err = None
+
             if stream:
-                # Stream tokens to client (no self-consistency in streaming mode)
-                full_response = ""
-                async for token in client.generate_stream(
-                    messages=[system_msg, user_msg],
-                    config=LLMConfig(temperature=0.1, max_tokens=4096),
-                ):
-                    full_response += token
-                    yield SearchEvent(type="token", data={"token": token}, trace_id=trace_id)
+                # Stream tokens — try each client in fallback order.
+                # Credit/rate-limit errors are raised on the first iteration
+                # (before any tokens), so fallback is always clean.
+                for _client in clients_ordered:
+                    try:
+                        async for token in _client.generate_stream(
+                            messages=[system_msg, user_msg], config=gen_config
+                        ):
+                            full_response += token
+                            yield SearchEvent(type="token", data={"token": token}, trace_id=trace_id)
+                        routing_decision = RoutingDecision(
+                            complexity=routing_decision.complexity,
+                            primary_model=_client.model_id,
+                            provider=_client.provider.value,
+                            estimated_cost=routing_decision.estimated_cost,
+                            reasoning=routing_decision.reasoning,
+                        )
+                        break  # success
+                    except Exception as _e:
+                        if full_response:
+                            # Already streamed tokens — can't cleanly fall back
+                            logger.warning("stream_failed_mid_response", model=_client.model_id, error=str(_e))
+                            break
+                        logger.warning("llm_stream_failed_trying_next", model=_client.model_id, error=str(_e))
+                        _last_llm_err = _e
+                        continue
+
+                if not full_response and _last_llm_err:
+                    raise RuntimeError(f"All LLM clients failed: {_last_llm_err}")
+
             elif use_self_consistency:
-                # Self-consistency: run 3 times in parallel, pick most consistent
                 yield SearchEvent(
                     type="status",
-                    data={"status": "reasoning", "message": "Running self-consistency check (3×)..."},
+                    data={"status": "reasoning", "message": "Running self-consistency check (3x)..."},
                     trace_id=trace_id,
                 )
-                full_response = await self._self_consistent_generate(
-                    client, system_msg, user_msg, n_runs=_SELF_CONSISTENCY_RUNS
-                )
-                if not full_response:
-                    # Fallback to single run
-                    response = await client.generate(
-                        messages=[system_msg, user_msg],
-                        config=LLMConfig(temperature=0.1, max_tokens=4096),
-                    )
-                    full_response = response.content
-                    total_cost += response.cost_usd
+                for _client in clients_ordered:
+                    try:
+                        full_response = await self._self_consistent_generate(
+                            _client, system_msg, user_msg, n_runs=_SELF_CONSISTENCY_RUNS
+                        )
+                        if not full_response:
+                            response = await _client.generate(messages=[system_msg, user_msg], config=gen_config)
+                            full_response = response.content
+                            total_cost += response.cost_usd
+                        routing_decision = RoutingDecision(
+                            complexity=routing_decision.complexity,
+                            primary_model=_client.model_id,
+                            provider=_client.provider.value,
+                            estimated_cost=routing_decision.estimated_cost,
+                            reasoning=routing_decision.reasoning,
+                        )
+                        break
+                    except Exception as _e:
+                        logger.warning("llm_generate_failed_trying_next", model=_client.model_id, error=str(_e))
+                        _last_llm_err = _e
+                        continue
+
+                if not full_response and _last_llm_err:
+                    raise RuntimeError(f"All LLM clients failed: {_last_llm_err}")
+
             else:
-                # Non-streaming single-pass
-                response = await client.generate(
-                    messages=[system_msg, user_msg],
-                    config=LLMConfig(temperature=0.1, max_tokens=4096),
-                )
-                full_response = response.content
-                total_cost += response.cost_usd
+                # Non-streaming single-pass with fallback
+                for _client in clients_ordered:
+                    try:
+                        response = await _client.generate(messages=[system_msg, user_msg], config=gen_config)
+                        full_response = response.content
+                        total_cost += response.cost_usd
+                        routing_decision = RoutingDecision(
+                            complexity=routing_decision.complexity,
+                            primary_model=_client.model_id,
+                            provider=_client.provider.value,
+                            estimated_cost=routing_decision.estimated_cost,
+                            reasoning=routing_decision.reasoning,
+                        )
+                        break
+                    except Exception as _e:
+                        logger.warning("llm_generate_failed_trying_next", model=_client.model_id, error=str(_e))
+                        _last_llm_err = _e
+                        continue
+
+                if not full_response and _last_llm_err:
+                    raise RuntimeError(f"All LLM clients failed: {_last_llm_err}")
 
             reasoning_ms = (time.perf_counter() - t3) * 1000
+            _tracer.record_generation(_otrace, model=routing_decision.primary_model,
+                                      cost_usd=routing_decision.estimated_cost,
+                                      stage="generation")
 
             # ── AI Wording Check (fast-path) ────────────────────────────
             _, ai_phrases = strip_ai_wording(full_response)
@@ -687,7 +870,44 @@ class SearchPipeline:
                 # Plain-text response — fall back to regex extraction
                 confidence_out = _extract_confidence(validated_answer)
 
-            # ── Stage 8b: Yield Complete Answer ─────────────────────────
+            # ── Stage 8b: ALiiCE Proposition Attribution ────────────────
+            # Upgrade chunk-level citations → sentence-level attributed propositions.
+            # Runs only for MEDIUM/COMPLEX queries to avoid latency on simple lookups.
+            # Falls back silently if unavailable; never blocks the answer.
+            alce_props = []
+            alce_recall = None
+            if complexity in ("medium", "complex") and parsed_answer:
+                try:
+                    from app.core.reasoning.proposition_extractor import PropositionExtractor
+                    _fast_client = None
+                    try:
+                        _fast_client = self.llm_router.get_fast_client()
+                    except Exception:
+                        pass
+                    _prop_extractor = PropositionExtractor(llm_client=_fast_client)
+                    alce_props = await asyncio.wait_for(
+                        _prop_extractor.extract_and_attribute(parsed_answer, top_passages),
+                        timeout=3.0,  # never delay answer by more than 3s
+                    )
+                    alce_recall = PropositionExtractor.citation_recall(alce_props)
+                    alce_citations = PropositionExtractor.format_citations(alce_props)
+                    # Merge ALiiCE sentence citations with LLM-generated chunk citations
+                    if alce_citations:
+                        citations_out = alce_citations + citations_out
+                    if alce_recall is not None and validation_result is not None:
+                        validation_result["alce_citation_recall"] = round(alce_recall, 4)
+                    logger.info(
+                        "alce_attribution_complete",
+                        trace_id=trace_id,
+                        propositions=len(alce_props),
+                        recall=round(alce_recall, 3) if alce_recall is not None else None,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("alce_attribution_timeout", trace_id=trace_id)
+                except Exception as _alce_err:
+                    logger.warning("alce_attribution_failed", trace_id=trace_id, error=str(_alce_err))
+
+            # ── Stage 8c: Yield Complete Answer ─────────────────────────
             chart_specs_out = _auto_chart_specs(structured_data_out)
             yield SearchEvent(
                 type="answer",
@@ -750,6 +970,20 @@ class SearchPipeline:
                 trace_id=trace_id,
             )
 
+            # Finish Langfuse trace (fire-and-forget, never blocks response)
+            async def _finish_trace():
+                _tracer.finish_trace(
+                    _otrace,
+                    confidence=confidence_out,
+                    nli_recall=nli_recall,
+                    alce_recall=validation_result.get("alce_citation_recall") if validation_result else None,
+                    numeric_mismatches=len(numeric_mismatches),
+                    model_used=routing_decision.primary_model,
+                    total_cost_usd=total_cost,
+                    output=parsed_answer[:300] if isinstance(parsed_answer, str) else "",
+                )
+            asyncio.create_task(_finish_trace())
+
             logger.info(
                 "search_complete",
                 trace_id=trace_id,
@@ -777,6 +1011,52 @@ class SearchPipeline:
                     )))
                 except Exception:
                     pass  # Feedback failure must never affect the user
+
+            # ── Audit Log (fire-and-forget, zero latency impact) ─────────
+            if self.audit_logger:
+                try:
+                    from compliance.audit_log import (
+                        AuditEvent, QueryContext, RetrievalContext, RetrievedChunk,
+                        ModelContext, ResponseContext, PerformanceContext, CostContext,
+                    )
+                    _conf_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
+                    _audit_event = AuditEvent(
+                        trace_id=trace_id,
+                        session_id=conversation_id or "",
+                        request_id=trace_id,
+                        query=QueryContext(raw=query),
+                        retrieval=RetrievalContext(
+                            top_k=len(top_passages),
+                            retrieved_chunks=[
+                                RetrievedChunk(
+                                    doc_id=p.document_id,
+                                    chunk_id=p.chunk_id,
+                                    score=p.score,
+                                    source_uri=p.metadata.get("source_url", "") if p.metadata else "",
+                                )
+                                for p in top_passages[:20]
+                            ],
+                        ),
+                        model=ModelContext(
+                            provider=routing_decision.primary_model.split("-")[0],
+                            model_id=routing_decision.primary_model,
+                            temperature=0.0,
+                        ),
+                        response=ResponseContext(
+                            raw=full_response,
+                            confidence_score=_conf_map.get(confidence_out, 0.6),
+                        ),
+                        performance=PerformanceContext(
+                            ttft_ms=int(reasoning_ms),
+                            e2e_ms=int(total_ms),
+                        ),
+                        cost=CostContext(
+                            total_usd=routing_decision.estimated_cost,
+                        ),
+                    )
+                    asyncio.create_task(self.audit_logger.log(_audit_event))
+                except Exception:
+                    pass  # Audit failure must never affect the user
 
         except Exception as e:
             logger.error("search_error", trace_id=trace_id, error=str(e), exc_info=True)

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_api_key: str = ""
     deepseek_api_key: str = ""
+    groq_api_key: str = ""
     voyage_api_key: str = ""
     cohere_api_key: str = ""
 

@@ -49,12 +49,38 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning("pipeline_warmup_failed", error=str(_e))
 
+    # Startup: create pageindex_registry table (non-fatal if Postgres unavailable)
+    asyncio.create_task(_init_pageindex_registry())
+
+    # Startup: TurboQuant — load compressed index from disk, or seed from Qdrant (non-fatal)
+    asyncio.create_task(_init_turbo_quant())
+
+    # Startup: PageIndex — load doc registry from Postgres (non-fatal)
+    asyncio.create_task(_init_page_index())
+
     # Start hourly routing-override recomputation task
     _override_task = asyncio.create_task(_hourly_routing_recompute())
+
+    # Start SEC EDGAR background polling (new filings every 60 s)
+    _edgar_source = None
+    try:
+        from app.ingestion.sources.sec_edgar import SECEdgarSource
+        from app.ingestion.pipeline import IngestionPipeline
+        from app.db.redis import redis_client as _redis
+        _edgar_source = SECEdgarSource(
+            ingestion_pipeline=IngestionPipeline.create(),
+            redis_client=_redis,
+        )
+        await _edgar_source.start_background_polling()
+        logger.info("edgar_polling_started")
+    except Exception as e:
+        logger.warning("edgar_polling_failed_to_start", error=str(e))
 
     yield
 
     _override_task.cancel()
+    if _edgar_source:
+        await _edgar_source.stop()
 
     # Shutdown: close connections
     logger.info("Shutting down Gravity Search")
@@ -77,6 +103,11 @@ async def lifespan(app: FastAPI):
         pass
     if pg_engine is not None:
         await pg_engine.dispose()
+    try:
+        from app.core.observability import get_tracer
+        get_tracer().flush()
+    except Exception:
+        pass
 
 
 async def _hourly_routing_recompute():
@@ -94,6 +125,53 @@ async def _hourly_routing_recompute():
             break
         except Exception as e:
             logger.warning("hourly_recompute_failed", error=str(e))
+
+
+async def _init_pageindex_registry():
+    """Ensure pageindex_registry table exists in Postgres."""
+    try:
+        from app.ingestion.indexing.page_indexer import PageIndexer
+        from app.config import settings
+        indexer = PageIndexer()
+        db_url = str(settings.postgres_url).replace("postgresql+psycopg://", "postgresql://")
+        await indexer.ensure_registry_table(db_url)
+    except Exception as e:
+        logger.warning("pageindex_registry_init_failed", error=str(e))
+
+
+async def _init_turbo_quant():
+    """Load TurboQuant compressed index from disk; seed from Qdrant if no snapshot exists."""
+    try:
+        from app.dependencies import get_search_pipeline
+        pipeline = get_search_pipeline()
+        tq = getattr(pipeline.retrieval, "channels", {}).get("turbo_quant")
+        if tq is None:
+            return
+        loaded = await tq.load()
+        if not loaded:
+            logger.info("turbo_quant_no_snapshot_seeding_from_qdrant")
+            count = await tq.build_from_qdrant()
+            logger.info("turbo_quant_ready", vectors=count)
+        else:
+            logger.info("turbo_quant_ready_from_disk")
+    except Exception as e:
+        logger.warning("turbo_quant_init_failed", error=str(e))
+
+
+async def _init_page_index():
+    """Preload PageIndex doc registry from Postgres."""
+    try:
+        from app.dependencies import get_search_pipeline
+        from app.config import settings
+        pipeline = get_search_pipeline()
+        pi = getattr(pipeline.retrieval, "channels", {}).get("page_index")
+        if pi is None:
+            return
+        await pi.preload_registry(str(settings.postgres_url).replace(
+            "postgresql+psycopg://", "postgresql://"
+        ))
+    except Exception as e:
+        logger.warning("page_index_init_failed", error=str(e))
 
 
 async def _verify_connections():

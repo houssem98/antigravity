@@ -41,7 +41,7 @@ class SpladeSearch:
                     key="chunk_level", match=models.MatchValue(value=2)))
                 qdrant_filter = models.Filter(must=conditions)
 
-            results = qdrant_client.query_points(
+            results = await qdrant_client.query_points(
                 collection_name=settings.qdrant_collection,
                 query=models.SparseVector(
                     indices=sparse_vector["indices"],

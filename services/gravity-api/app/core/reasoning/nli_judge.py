@@ -192,32 +192,57 @@ class FinanceNLIJudge:
     """
     Finance-augmented NLI judge.
 
-    Priority: numeric pre-check → T5-XXL (if GPU) → Claude fallback.
-    Results are cached in-process (lru_cache not used because premise+
-    hypothesis strings are too large; we use a SHA-256 key dict instead).
+    Priority: numeric pre-check → FinBERT (finance-domain, CPU-OK) →
+              T5-XXL (if GPU) → Claude fallback.
+    FinBERT replaces T5 as the preferred local model: 440MB vs 11GB,
+    runs on CPU, and outperforms general NLI on financial statement text.
+    Results cached in-process by SHA-256 key.
     """
 
     def __init__(self, llm_client=None):
         self._llm = llm_client
         self._cache: dict[str, NLIResult] = {}
         _try_load_t5()
+        # Lazy-load FinBERT on first use (avoid startup delay)
+        self._finbert = None
 
     def _cache_key(self, premise: str, hypothesis: str) -> str:
         return hashlib.sha256(f"{premise}|||{hypothesis}".encode()).hexdigest()[:16]
+
+    def _get_finbert(self):
+        if self._finbert is None:
+            try:
+                from app.core.reasoning.finbert_nli import FinBERTNLI
+                self._finbert = FinBERTNLI()
+            except Exception as e:
+                logger.warning("finbert_import_failed", error=str(e))
+                self._finbert = False  # sentinel: don't retry
+        return self._finbert if self._finbert else None
 
     def score_sync(self, premise: str, hypothesis: str) -> NLIResult:
         key = self._cache_key(premise, hypothesis)
         if key in self._cache:
             return self._cache[key]
 
-        # Step 1: numeric pre-check
+        # Step 1: numeric pre-check (0ms, always first)
         num = numeric_entailment(premise, hypothesis)
         if num is not None:
             result = NLIResult(entails=int(num), method="numeric", cache_key=key)
             self._cache[key] = result
             return result
 
-        # Step 2: T5
+        # Step 2: FinBERT (finance-domain, CPU-OK, 440MB)
+        finbert = self._get_finbert()
+        if finbert and finbert.available:
+            try:
+                fb = finbert.score_sync(premise, hypothesis)
+                result = NLIResult(entails=fb.entails, method="finbert", cache_key=key)
+                self._cache[key] = result
+                return result
+            except Exception as e:
+                logger.warning("finbert_sync_failed", error=str(e))
+
+        # Step 3: T5-XXL (GPU only, 11GB)
         if _T5_AVAILABLE:
             try:
                 score = _t5_score(premise, hypothesis)
@@ -227,7 +252,7 @@ class FinanceNLIJudge:
             except Exception as e:
                 logger.warning("t5_score_failed", error=str(e))
 
-        # Step 3: synchronous LLM fallback (runs event loop if needed)
+        # Step 4: synchronous LLM fallback
         if self._llm:
             try:
                 loop = asyncio.get_event_loop()
@@ -247,12 +272,25 @@ class FinanceNLIJudge:
         if key in self._cache:
             return self._cache[key]
 
+        # Step 1: numeric pre-check
         num = numeric_entailment(premise, hypothesis)
         if num is not None:
             result = NLIResult(entails=int(num), method="numeric", cache_key=key)
             self._cache[key] = result
             return result
 
+        # Step 2: FinBERT async
+        finbert = self._get_finbert()
+        if finbert and finbert.available:
+            try:
+                fb = await finbert.score(premise, hypothesis)
+                result = NLIResult(entails=fb.entails, method="finbert", cache_key=key)
+                self._cache[key] = result
+                return result
+            except Exception as e:
+                logger.warning("finbert_async_failed", error=str(e))
+
+        # Step 3: T5-XXL
         if _T5_AVAILABLE:
             try:
                 score = await asyncio.get_event_loop().run_in_executor(
@@ -264,6 +302,7 @@ class FinanceNLIJudge:
             except Exception as e:
                 logger.warning("t5_async_failed", error=str(e))
 
+        # Step 4: LLM fallback
         if self._llm:
             score = await _llm_score(premise, hypothesis, self._llm)
             result = NLIResult(entails=score, method="llm", cache_key=key)

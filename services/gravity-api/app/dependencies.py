@@ -68,7 +68,17 @@ def get_search_pipeline():
     from app.core.retrieval.structured_search import StructuredSearch
     from app.core.retrieval.orchestrator import RetrievalOrchestrator
 
-    dense = DenseSearch(embedder=embedder)
+    # HyDE: generate hypothetical passage before embedding — +8-15% retrieval precision
+    hyde = None
+    try:
+        from app.core.retrieval.hyde import HyDE
+        hyde_client = router.get_fast_client()
+        hyde = HyDE(llm_client=hyde_client, embedder=embedder)
+        logger.info("hyde_ready")
+    except Exception as e:
+        logger.warning("hyde_unavailable", error=str(e))
+
+    dense = DenseSearch(embedder=embedder, hyde=hyde)
     sparse = SparseSearch()
     splade_search = SpladeSearch(splade_encoder=splade)
     graph = GraphSearch()
@@ -81,12 +91,44 @@ def get_search_pipeline():
     except Exception:
         logger.warning("structured_search_unavailable")
 
+    # Channel 6: PageIndex (enabled when PAGEINDEX_API_KEY is set)
+    page_index = None
+    try:
+        from app.core.retrieval.page_index_search import build_page_index_search
+        page_index = build_page_index_search()
+    except Exception as e:
+        logger.warning("page_index_unavailable", error=str(e))
+
+    # Channel 7: TurboQuant (enabled via TURBO_QUANT_ENABLED=true)
+    turbo_quant = None
+    try:
+        from app.core.retrieval.turbo_quant_search import build_turbo_quant_search
+        turbo_quant = build_turbo_quant_search()
+        if turbo_quant is not None:
+            turbo_quant._embedder = embedder  # orchestrator uses this for search_text()
+    except Exception as e:
+        logger.warning("turbo_quant_unavailable", error=str(e))
+
+    # MultiQueryRetriever: expands query into 4 variants, retrieves independently, merges
+    # +10-20% recall for MEDIUM/COMPLEX queries. Uses same fast_client as HyDE.
+    multi_query = None
+    try:
+        from app.core.retrieval.multi_query import MultiQueryRetriever
+        mq_client = router.get_fast_client()
+        multi_query = MultiQueryRetriever(llm_client=mq_client, dense_search=dense, n_variants=4)
+        logger.info("multi_query_ready")
+    except Exception as e:
+        logger.warning("multi_query_unavailable", error=str(e))
+
     orchestrator = RetrievalOrchestrator(
         dense_search=dense,
         sparse_search=sparse,
         splade_search=splade_search,
         graph_search=graph,
         structured_search=structured,
+        page_index_search=page_index,
+        turbo_quant_search=turbo_quant,
+        multi_query=multi_query,
     )
 
     # Reranker
@@ -100,14 +142,20 @@ def get_search_pipeline():
     except Exception:
         query_understander = QueryUnderstanding(llm_client=None)
 
-    # Citation validator (Gemini Pro)
+    # Citation validator — use best available model (sonnet > groq_large > haiku)
     from app.core.reasoning.validator import CitationValidator
     validator = None
     try:
-        gemini_pro = router.get_client("gemini_pro")
-        validator = CitationValidator(llm_client=gemini_pro)
-    except Exception:
-        logger.warning("citation_validator_unavailable")
+        for _key in ("claude_sonnet", "groq_large", "claude_haiku", "deepseek", "gemini_pro"):
+            try:
+                _val_client = router.get_client(_key)
+                validator = CitationValidator(llm_client=_val_client)
+                logger.info("citation_validator_ready", model=_key)
+                break
+            except ValueError:
+                continue
+    except Exception as e:
+        logger.warning("citation_validator_unavailable", error=str(e))
 
     # Semantic cache
     from app.core.caching.semantic_cache import SemanticCache
@@ -126,6 +174,15 @@ def get_search_pipeline():
     except Exception as e:
         logger.warning("ratio_engine_unavailable", error=str(e))
 
+    # Audit logger — tamper-evident SHA-256 chain, FINRA 4511 / MiFID II compliant
+    audit_logger = None
+    try:
+        from compliance.audit_log import AuditLogger
+        audit_logger = AuditLogger()  # starts with JSONL fallback; upgrades to PG when pool available
+        logger.info("audit_logger_ready")
+    except Exception as e:
+        logger.warning("audit_logger_unavailable", error=str(e))
+
     # Assemble the pipeline
     from app.core.search_pipeline import SearchPipeline
     _search_pipeline = SearchPipeline(
@@ -137,6 +194,7 @@ def get_search_pipeline():
         semantic_cache=cache,
         feedback_loop=feedback_loop,
         ratio_engine=ratio_engine,
+        audit_logger=audit_logger,
     )
 
     logger.info("search_pipeline_ready")
