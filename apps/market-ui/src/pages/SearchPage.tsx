@@ -22,6 +22,7 @@ import {
     ResearchCancelledError,
 } from '../services/deepResearchService';
 import type { ResearchBlueprint } from '../services/deepResearchService';
+import { runResearchGraph } from '../services/researchGraph';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
 import BlueprintReview from '../components/research/BlueprintReview';
@@ -623,14 +624,26 @@ export default function SearchPage() {
                     setPendingBlueprint(bp);
                 })
                 : undefined;
-            const result = await performDeepResearch(
-                searchQuery,
-                setProgress,
-                selectedModel,
-                undefined,
-                controller.signal,
-                onBlueprintReady,
-            );
+            // Use graph orchestration when VITE_USE_RESEARCH_GRAPH=true (durable
+            // checkpointing, reflection loop, gap-fill fanout). Falls back to the
+            // direct pipeline if the graph encounters an unrecoverable error.
+            const useGraph = import.meta.env.VITE_USE_RESEARCH_GRAPH === 'true';
+            const result = useGraph
+                ? await runResearchGraph({
+                    query: searchQuery,
+                    onProgress: setProgress,
+                    model: selectedModel,
+                    signal: controller.signal,
+                    onBlueprintReady,
+                })
+                : await performDeepResearch(
+                    searchQuery,
+                    setProgress,
+                    selectedModel,
+                    undefined,
+                    controller.signal,
+                    onBlueprintReady,
+                );
             setReport(result);
             try {
                 const { data: { session } } = await supabase.auth.getSession();
