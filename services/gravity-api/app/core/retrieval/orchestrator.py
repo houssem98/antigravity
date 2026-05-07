@@ -24,6 +24,36 @@ from app.core.retrieval.fusion import RetrievalResult
 logger = structlog.get_logger()
 
 
+async def _gdelt_to_results(gdelt_client, query: str) -> list[RetrievalResult]:
+    """Fetch GDELT articles and convert to RetrievalResult objects."""
+    articles = await gdelt_client.search_articles(query=query, max_records=10)
+    results = []
+    for art in articles:
+        text = art.get("snippet", art.get("title", ""))
+        if not text:
+            continue
+        url = art.get("url", "")
+        results.append(RetrievalResult(
+            document_id=url,
+            chunk_id=url,
+            text=text,
+            score=float(art.get("score", 0.6)),
+            document_title=art.get("title", ""),
+            document_type="news",
+            source_quality=4,  # news < SEC filings in authority scoring
+            metadata={
+                "title": art.get("title", ""),
+                "url": url,
+                "source_url": url,
+                "published_date": art.get("seendate", ""),
+                "domain": art.get("domain", ""),
+                "language": art.get("language", "English"),
+                "filing_type": "news",
+            },
+        ))
+    return results
+
+
 class RetrievalOrchestrator:
     """Parallel dispatch to all search backends with graceful degradation."""
 
@@ -36,6 +66,7 @@ class RetrievalOrchestrator:
         structured_search=None,
         page_index_search=None,   # Channel 6: VectifyAI PageIndex (optional)
         turbo_quant_search=None,  # Channel 7: TurboQuant compressed ANN (optional)
+        gdelt_search=None,        # Channel 8: GDELT global news (free, no key)
         multi_query=None,         # MultiQueryRetriever — replaces dense for MEDIUM/COMPLEX
     ):
         self.channels = {}
@@ -53,6 +84,8 @@ class RetrievalOrchestrator:
             self.channels["page_index"] = page_index_search
         if turbo_quant_search:
             self.channels["turbo_quant"] = turbo_quant_search
+        if gdelt_search:
+            self.channels["gdelt"] = gdelt_search
 
         self._multi_query = multi_query
         logger.info("retrieval_orchestrator_init", channels=list(self.channels.keys()),
@@ -155,6 +188,7 @@ class RetrievalOrchestrator:
         "structured":  4.0,
         "page_index": 30.0,   # PageIndex navigates document trees — allow more time
         "turbo_quant": 2.0,   # in-memory; fast
+        "gdelt":       4.0,   # external HTTP; allow extra time
     }
 
     async def _safe_search(
@@ -185,11 +219,13 @@ class RetrievalOrchestrator:
                 coro = channel.search(query=query, filters=filters)
             elif name == "turbo_quant":
                 # TurboQuantSearch needs the embedder; it uses search_text()
-                from app.embeddings.voyage_embedder import VoyageEmbedder
                 coro = channel.search_text(
                     query=query, embedder=channel._embedder if hasattr(channel, "_embedder") else None,
                     filters=filters,
                 )
+            elif name == "gdelt":
+                # GDELT returns article dicts — convert to RetrievalResult inline
+                coro = _gdelt_to_results(channel, query)
             else:
                 return []
 

@@ -120,6 +120,15 @@ def get_search_pipeline():
     except Exception as e:
         logger.warning("multi_query_unavailable", error=str(e))
 
+    # Channel 8: GDELT global news (free, no key required)
+    gdelt_search = None
+    try:
+        from app.ingestion.sources.gdelt import get_gdelt_client
+        gdelt_search = get_gdelt_client()
+        logger.info("gdelt_ready")
+    except Exception as e:
+        logger.warning("gdelt_unavailable", error=str(e))
+
     orchestrator = RetrievalOrchestrator(
         dense_search=dense,
         sparse_search=sparse,
@@ -128,6 +137,7 @@ def get_search_pipeline():
         structured_search=structured,
         page_index_search=page_index,
         turbo_quant_search=turbo_quant,
+        gdelt_search=gdelt_search,
         multi_query=multi_query,
     )
 

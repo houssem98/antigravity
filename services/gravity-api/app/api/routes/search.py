@@ -155,6 +155,7 @@ async def search_stream(websocket: WebSocket):
                 filters=request.filters.model_dump() if request.filters else None,
                 stream=True,
                 reasoning_depth=request.options.reasoning_depth,
+                user_id=user_id,
             ):
                 await websocket.send_json({
                     "type": event.type,

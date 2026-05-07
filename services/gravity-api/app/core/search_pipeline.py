@@ -252,6 +252,7 @@ class SearchPipeline:
         stream: bool = True,
         reasoning_depth: str = "auto",
         conversation_id: str | None = None,
+        user_id: str | None = None,
     ) -> AsyncIterator[SearchEvent]:
         """
         Execute the full search pipeline with progressive streaming.
@@ -1069,10 +1070,12 @@ class SearchPipeline:
                         ModelContext, ResponseContext, PerformanceContext, CostContext,
                     )
                     _conf_map = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
+                    from compliance.audit_log import UserContext as _UserContext
                     _audit_event = AuditEvent(
                         trace_id=trace_id,
                         session_id=conversation_id or "",
                         request_id=trace_id,
+                        user=_UserContext(id=user_id or ""),
                         query=QueryContext(raw=query),
                         retrieval=RetrievalContext(
                             top_k=len(top_passages),
