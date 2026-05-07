@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     raptor_cluster_threshold: float = 0.85  # Cosine similarity for clustering
     raptor_summary_max_tokens: int = 256    # Max tokens for generated summaries
 
+    # ── Earnings transcript sources
+    alpha_vantage_api_key: str = ""     # ALPHA_VANTAGE_API_KEY
+    quartr_api_key: str = ""            # QUARTR_API_KEY — paid; 14,500+ companies
+
     # ── PageIndex (VectifyAI) — hierarchical tree-based SEC filing retrieval
     pageindex_api_key: str = ""
     pageindex_workspace: str = "gravity"

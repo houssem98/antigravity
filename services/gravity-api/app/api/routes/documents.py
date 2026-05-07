@@ -146,6 +146,7 @@ async def ingest_earnings_transcript(
 
     source = EarningsTranscriptSource(
         alpha_vantage_key=getattr(settings, "alpha_vantage_api_key", "") or "",
+        quartr_api_key=getattr(settings, "quartr_api_key", "") or "",
     )
 
     logger.info("transcript_ingest_request", ticker=ticker, quarter=quarter)
@@ -200,8 +201,99 @@ async def ingest_earnings_transcript(
             "date": date_str,
             "speaker_turns": speaker_count,
             "has_qa": bool(transcript["sections"].get("qa_session")),
+            "source": transcript.get("source", "unknown"),
+            "source_url": transcript.get("source_url", ""),
         },
     }
+
+
+@router.get("/documents/kpis/{ticker}")
+async def extract_kpis(
+    ticker: str,
+    max_passages: int = Query(default=20, ge=1, le=50),
+    response: Response = None,
+    auth: dict = Depends(require_auth),
+):
+    """
+    Extract segment-level KPIs for a ticker from indexed SEC filings.
+
+    Queries the Qdrant vector store for KPI-relevant passages (segment revenue,
+    margins, units, subscribers, etc.) and runs LLM extraction over the top hits.
+
+    Returns a KPITable with every value hyperlinked to its source passage.
+    """
+    from app.dependencies import get_search_pipeline
+    from app.core.kpi_extractor import KPIExtractor
+
+    headers = await check_rate_limit(auth["user_id"], auth.get("tier", "free"))
+    if response:
+        for k, v in headers.items():
+            response.headers[k] = v
+
+    ticker_up = ticker.upper()
+    logger.info("kpi_extract_request", ticker=ticker_up)
+
+    # Retrieve KPI-relevant passages from Qdrant
+    pipeline = get_search_pipeline()
+
+    kpi_queries = [
+        f"{ticker_up} revenue by segment",
+        f"{ticker_up} operating income margin segment",
+        f"{ticker_up} subscribers units sold active users",
+        f"{ticker_up} average selling price ARPU NRR",
+        f"{ticker_up} gross profit gross margin segment results",
+    ]
+
+    all_passages: list[dict] = []
+    try:
+        import asyncio
+        from app.core.retrieval.dense_search import DenseSearch
+
+        dense: DenseSearch = pipeline.retrieval_orchestrator.dense_search
+        results = await asyncio.gather(
+            *[
+                dense.search(
+                    query_text=q,
+                    ticker_filter=ticker_up,
+                    top_k=8,
+                )
+                for q in kpi_queries
+            ],
+            return_exceptions=True,
+        )
+        seen_ids: set[str] = set()
+        for r in results:
+            if isinstance(r, list):
+                for hit in r:
+                    pid = hit.get("id", hit.get("chunk_id", ""))
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        all_passages.append(hit)
+    except Exception as e:
+        logger.warning("kpi_retrieval_failed", ticker=ticker_up, error=str(e))
+
+    if not all_passages:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No indexed passages found for {ticker_up}. Run /v1/documents/ingest-sec first.",
+        )
+
+    # Extract KPIs with best available LLM
+    try:
+        from app.dependencies import get_llm_router
+        router_llm = get_llm_router()
+        llm_client = router_llm.get_fast_client()
+    except Exception:
+        llm_client = None
+
+    extractor = KPIExtractor(llm_client=llm_client)
+    table = await extractor.extract(
+        ticker=ticker_up,
+        passages=all_passages,
+        max_passages=max_passages,
+    )
+
+    return table.to_dict()
 
 
 @router.post("/documents/ingest-sec")

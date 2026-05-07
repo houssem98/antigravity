@@ -20,7 +20,7 @@ import {
 import { queryGravityRAG, formatRAGSourcesForPrompt, formatRAGStructuredData, type GravityRAGResult } from './gravitySearchService';
 import { searchFilings, type SECFiling } from './secEdgarService';
 import { getCompanyOverview, type CompanyOverview } from './marketData';
-import { getMacroSummaryText } from './fredService';
+import { getUnifiedMacroSummaryText as getMacroSummaryText } from './fredService';
 import { getInnovationSummaryText } from './innovationService';
 
 // ─── Model Registry ───────────────────────────────────────────────────────────
