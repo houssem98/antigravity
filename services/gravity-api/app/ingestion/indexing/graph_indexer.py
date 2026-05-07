@@ -10,6 +10,7 @@ from app.db.neo4j import neo4j_driver
 from app.knowledge_graph.queries import (
     UPSERT_COMPANY, UPSERT_FILING, UPSERT_PERSON, UPSERT_THEME,
     LINK_PERSON_TO_COMPANY, LINK_THEME_TO_FILING,
+    UPSERT_FINANCIAL_METRIC, LINK_METRIC_TO_COMPANY, LINK_METRIC_TO_FILING,
 )
 
 logger = structlog.get_logger()
@@ -109,6 +110,30 @@ class GraphIndexer:
                         "filing_id": document_id,
                     })
                     counts["themes"] += 1
+
+                # ── Upsert KPI metrics and link to company + filing ──────
+                for kpi in entities.get("kpis", [])[:50]:  # Cap at 50 KPIs/doc
+                    metric_name = kpi.get("metric", "").strip()
+                    if not metric_name or kpi.get("value") is None:
+                        continue
+                    metric_id = f"{ticker}::{metric_name}::{kpi.get('period', '')}::{kpi.get('segment', '')}"
+                    session.run(UPSERT_FINANCIAL_METRIC, {
+                        "metric_id": metric_id,
+                        "metric": metric_name,
+                        "value": float(kpi.get("value", 0)),
+                        "currency": "USD" if "USD" in kpi.get("unit", "") else "",
+                        "unit": kpi.get("unit", ""),
+                        "period": kpi.get("period", ""),
+                    })
+                    if ticker:
+                        session.run(LINK_METRIC_TO_COMPANY, {
+                            "metric_id": metric_id,
+                            "ticker": ticker,
+                        })
+                    session.run(LINK_METRIC_TO_FILING, {
+                        "metric_id": metric_id,
+                        "filing_id": document_id,
+                    })
 
         except Exception as e:
             logger.error(
