@@ -301,6 +301,43 @@ class SearchPipeline:
                 logger.warning("query_understanding_timeout", trace_id=trace_id, query=query[:60])
             understanding_ms = (time.perf_counter() - t0) * 1000
 
+            # ── Stage 1b: Entity Resolution ──────────────────────────────
+            # Disambiguate company mentions → canonical (ticker, CIK, name).
+            # Runs fire-and-forget in parallel with cache check (no await needed
+            # for the result — we enrich query_plan in place if resolver is ready).
+            _raw_companies = query_plan.get("entities", {}).get("companies", [])
+            if _raw_companies:
+                try:
+                    from app.core.entity_resolver import get_resolver
+                    from app.db.redis import redis_client as _redis
+                    _resolver = await asyncio.wait_for(
+                        get_resolver(redis_client=_redis), timeout=2.0
+                    )
+                    _resolved = await _resolver.resolve_many(
+                        [c.get("name", c) if isinstance(c, dict) else str(c)
+                         for c in _raw_companies]
+                    )
+                    for i, entity in enumerate(_resolved):
+                        if entity.match_type != "unknown" and entity.ticker:
+                            if isinstance(_raw_companies[i], dict):
+                                _raw_companies[i]["ticker"] = entity.ticker
+                                _raw_companies[i]["cik"] = entity.cik
+                                _raw_companies[i]["resolved_name"] = entity.name
+                            else:
+                                _raw_companies[i] = {
+                                    "name": str(_raw_companies[i]),
+                                    "ticker": entity.ticker,
+                                    "cik": entity.cik,
+                                    "resolved_name": entity.name,
+                                }
+                    logger.debug(
+                        "entities_resolved",
+                        trace_id=trace_id,
+                        resolved=[e.ticker for e in _resolved if e.ticker],
+                    )
+                except Exception as _er:
+                    logger.debug("entity_resolution_skipped", trace_id=trace_id, error=str(_er))
+
             logger.info(
                 "query_understood",
                 trace_id=trace_id,

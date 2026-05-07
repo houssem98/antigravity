@@ -645,15 +645,33 @@ export function throwIfAborted(signal?: AbortSignal | null) {
     if (s?.aborted) throw new ResearchCancelledError();
 }
 
-// ─── Research Checkpoint (localStorage) ──────────────────────────────────────
-// Saves lightweight stage-boundary snapshots (blueprint + knowledge base) so a
-// refreshed or crashed tab can resume — or at minimum surface what was found —
-// instead of starting from zero.  TTL: 30 minutes.
+// ─── Research Checkpoint (localStorage + Supabase dual-write) ────────────────
+// localStorage = fast synchronous path (survives page refresh within same tab).
+// Supabase     = durable path (survives tab close, crash, device switch, 24h TTL).
+//
+// Write order: localStorage first (sync), Supabase second (fire-and-forget async).
+// Read order:  Supabase first (fresher cross-device state), localStorage fallback.
 //
 // Security: checkpoints contain LLM-generated text, not keys or credentials.
-// Key material is never stored here.
+// Key material is never stored here. Supabase RLS enforces user_id ownership.
+//
+// DDL (run once in Supabase SQL editor):
+//   CREATE TABLE IF NOT EXISTS research_checkpoints (
+//     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+//     user_id      uuid REFERENCES auth.users(id) ON DELETE CASCADE,
+//     query_key    text NOT NULL,
+//     stage        text NOT NULL,
+//     payload      jsonb NOT NULL,
+//     saved_at     timestamptz NOT NULL DEFAULT now(),
+//     UNIQUE (user_id, query_key)
+//   );
+//   ALTER TABLE research_checkpoints ENABLE ROW LEVEL SECURITY;
+//   CREATE POLICY "owner" ON research_checkpoints
+//     USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+//   CREATE INDEX ON research_checkpoints (user_id, saved_at DESC);
 
-export const CHECKPOINT_TTL_MS = 30 * 60 * 1000;
+export const CHECKPOINT_TTL_MS = 24 * 60 * 60 * 1000; // 24h for Supabase, 30min kept for localStorage
+const _LS_TTL_MS = 30 * 60 * 1000;
 const CHECKPOINT_KEY_PREFIX = 'drchk::';
 
 export interface ResearchCheckpoint {
@@ -670,20 +688,20 @@ function _cpKey(query: string): string {
     return `${CHECKPOINT_KEY_PREFIX}${norm}`;
 }
 
-export function saveCheckpoint(query: string, data: Omit<ResearchCheckpoint, 'savedAt'>): void {
+// ── localStorage helpers (sync, fast) ────────────────────────────────────────
+
+function _lsSave(query: string, cp: ResearchCheckpoint): void {
     if (typeof localStorage === 'undefined') return;
-    try {
-        localStorage.setItem(_cpKey(query), JSON.stringify({ ...data, savedAt: Date.now() }));
-    } catch { /* storage quota or SSR — ignore */ }
+    try { localStorage.setItem(_cpKey(query), JSON.stringify(cp)); } catch { }
 }
 
-export function loadCheckpoint(query: string): ResearchCheckpoint | null {
+function _lsLoad(query: string): ResearchCheckpoint | null {
     if (typeof localStorage === 'undefined') return null;
     try {
         const raw = localStorage.getItem(_cpKey(query));
         if (!raw) return null;
         const cp = JSON.parse(raw) as ResearchCheckpoint;
-        if (Date.now() - cp.savedAt > CHECKPOINT_TTL_MS) {
+        if (Date.now() - cp.savedAt > _LS_TTL_MS) {
             localStorage.removeItem(_cpKey(query));
             return null;
         }
@@ -691,9 +709,86 @@ export function loadCheckpoint(query: string): ResearchCheckpoint | null {
     } catch { return null; }
 }
 
-export function clearCheckpoint(query: string): void {
+function _lsClear(query: string): void {
     if (typeof localStorage === 'undefined') return;
     try { localStorage.removeItem(_cpKey(query)); } catch { }
+}
+
+// ── Supabase helpers (async, durable) ────────────────────────────────────────
+
+async function _sbSave(query: string, cp: ResearchCheckpoint): Promise<void> {
+    try {
+        const { supabase } = await import('./supabase');
+        const session = await supabase.auth.getSession();
+        const userId = session.data.session?.user?.id;
+        if (!userId) return; // not signed in — skip
+        await supabase.from('research_checkpoints').upsert({
+            user_id:   userId,
+            query_key: _cpKey(query),
+            stage:     cp.stage,
+            payload:   cp as unknown as Record<string, unknown>,
+            saved_at:  new Date(cp.savedAt).toISOString(),
+        }, { onConflict: 'user_id,query_key' });
+    } catch { /* Supabase unavailable — localStorage still has it */ }
+}
+
+async function _sbLoad(query: string): Promise<ResearchCheckpoint | null> {
+    try {
+        const { supabase } = await import('./supabase');
+        const session = await supabase.auth.getSession();
+        const userId = session.data.session?.user?.id;
+        if (!userId) return null;
+        const cutoff = new Date(Date.now() - CHECKPOINT_TTL_MS).toISOString();
+        const { data } = await supabase
+            .from('research_checkpoints')
+            .select('payload, saved_at')
+            .eq('user_id', userId)
+            .eq('query_key', _cpKey(query))
+            .gte('saved_at', cutoff)
+            .order('saved_at', { ascending: false })
+            .limit(1)
+            .single();
+        if (!data) return null;
+        return data.payload as unknown as ResearchCheckpoint;
+    } catch { return null; }
+}
+
+async function _sbClear(query: string): Promise<void> {
+    try {
+        const { supabase } = await import('./supabase');
+        const session = await supabase.auth.getSession();
+        const userId = session.data.session?.user?.id;
+        if (!userId) return;
+        await supabase.from('research_checkpoints')
+            .delete()
+            .eq('user_id', userId)
+            .eq('query_key', _cpKey(query));
+    } catch { }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+export function saveCheckpoint(query: string, data: Omit<ResearchCheckpoint, 'savedAt'>): void {
+    const cp: ResearchCheckpoint = { ...data, savedAt: Date.now() };
+    _lsSave(query, cp);
+    _sbSave(query, cp); // fire-and-forget
+}
+
+export function loadCheckpoint(query: string): ResearchCheckpoint | null {
+    // Synchronous path only — callers that need Supabase use loadCheckpointAsync.
+    return _lsLoad(query);
+}
+
+export async function loadCheckpointAsync(query: string): Promise<ResearchCheckpoint | null> {
+    // Try Supabase first (fresher, cross-device), fall back to localStorage.
+    const remote = await _sbLoad(query);
+    if (remote) return remote;
+    return _lsLoad(query);
+}
+
+export function clearCheckpoint(query: string): void {
+    _lsClear(query);
+    _sbClear(query); // fire-and-forget
 }
 
 // ─── Output Cache (plan §6.13 — query-scoped TTL cache) ───────────────────
@@ -3838,6 +3933,19 @@ export const performDeepResearch = async (
         };
     }
 
+    // ── Checkpoint resume (localStorage → Supabase) ──────────────────────────
+    // Load the most recent durable checkpoint for this query (24h TTL).
+    // Used downstream: blueprint stage skips re-planning if a blueprint exists;
+    // search stage skips rounds already completed in a prior run.
+    const priorCheckpoint = await loadCheckpointAsync(query);
+    if (priorCheckpoint) {
+        onProgress({
+            stage: 'planning',
+            message: `Resuming from ${priorCheckpoint.stage} checkpoint (${Math.round((Date.now() - priorCheckpoint.savedAt) / 60000)}m ago)…`,
+            progress: priorCheckpoint.stage === 'blueprint' ? 8 : priorCheckpoint.stage === 'search' ? 40 : 70,
+        });
+    }
+
     // Pre-fetch server providers to validate availability and resolve driver model.
     const providers = await getServerProviders();
     if (providers.length === 0) {
@@ -3866,7 +3974,9 @@ export const performDeepResearch = async (
     // ── Stage 1: Blueprint (0–10%) ─────────────────────────────────────────
     st.start('blueprint', 'Building research blueprint', 'planning', 3, driverModel);
 
-    let blueprint = await buildResearchBlueprint(query, driverModel, workflow);
+    // Skip LLM blueprint call if a recent checkpoint already has one (saves ~3s + cost).
+    let blueprint = priorCheckpoint?.blueprint
+        ?? await buildResearchBlueprint(query, driverModel, workflow);
 
     // Apply workflow preset — prepend guaranteed angles + metrics and record
     // how many fresh ones were injected vs already present in the Chief

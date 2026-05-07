@@ -201,6 +201,18 @@ def get_search_pipeline():
     return _search_pipeline
 
 
+async def get_entity_resolver():
+    """Get (or lazily build) the SEC entity resolver singleton."""
+    try:
+        from app.db.redis import redis_client
+        from app.core.entity_resolver import get_resolver
+        return await get_resolver(redis_client=redis_client)
+    except Exception as e:
+        logger.warning("entity_resolver_unavailable", error=str(e))
+        from app.core.entity_resolver import get_resolver
+        return await get_resolver(redis_client=None)
+
+
 def get_feedback_loop():
     """Get (or lazily create) the routing feedback loop."""
     global _feedback_loop
