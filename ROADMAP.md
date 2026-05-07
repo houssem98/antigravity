@@ -80,7 +80,7 @@ curl -X POST http://localhost:8000/v1/documents/ingest-sec \
 
 `table_indexer.py` built and wired into `pipeline._parallel_index()` as the 6th concurrent indexer. Converts `ParsedTable` objects (already extracted by `DocumentProcessor`) into: (1) per-metric sentence chunks + per-period summary chunks → Qdrant + ES; (2) structured rows → ES `gravity_financials` index. Also injects `financial_calculator` deterministic results (Stage 5c) into LLM prompt for math queries.
 
-### 2.1b XBRL table extractor — biggest single quality gap ⬜
+### 2.1b XBRL table extractor ✅
 
 Most FinanceBench errors are table questions. Income statements, balance sheets, cash flows are in structured HTML/XBRL — current chunking treats them as flat text, destroying row-column relationships.
 
@@ -194,34 +194,17 @@ Score targets displayed automatically:
 
 `parallel_ingest.py` built. `ParallelIngestor(pipeline, edgar_source).ingest_tickers(tickers, workers=8)` runs 8 concurrent workers bounded by EDGAR's 10 req/s Semaphore. Includes checkpoint/resume (JSONL), Redis dedup, per-filing error isolation, and progress callback. `POST /v1/documents/ingest-sec-bulk?tickers=AAPL,MSFT,...&workers=8` exposed as API endpoint. Throughput: ~500 filings/hour = 52 hours for full S&P 500 × 13yr corpus.
 
-### 4.3 Earnings call transcripts ⬜
+### 4.3 Earnings call transcripts ✅
 
-SEC filings are backward-looking. Transcripts capture forward guidance and analyst Q&A.
+`earnings.py` rewritten with 4-tier source priority: EDGAR 8-K (free, primary), Quartr API (paid, best quality), Alpha Vantage, Motley Fool scrape. EDGAR path resolves CIK from SEC company_tickers.json, fetches exhibit 99.x, strips HTML. Bulk fetch with bounded concurrency. `QUARTR_API_KEY` in config.
 
-Sources (free):
-- EDGAR 8-K exhibits — earnings press releases
-- `earnings.py` source already exists — wire it
+### 4.4 Real-time filing pipeline ✅
 
-Sources (paid):
-- Seeking Alpha API (~$200/mo)
+`sec_edgar.py` polls EDGAR Atom feed (`browse-edgar?output=atom`) every 60s via `start_background_polling()`. New filings indexed within ~2 minutes of EDGAR acceptance. Redis dedup prevents reprocessing. Started in `main.py` lifespan.
 
-Add to ingestion as a parallel stream alongside filings.
+### 4.5 GDELT news channel ✅
 
-### 4.4 Real-time filing pipeline ⬜
-
-EDGAR RSS feed updates within minutes of filing acceptance. Upgrade from 60-second poll to RSS-based real-time:
-
-```python
-# RSS: https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&output=atom
-# Update sec_edgar.py: poll RSS alongside full-index
-# Target: new filings indexed within 5 minutes of EDGAR acceptance
-```
-
-This is what AlphaSense sells as a premium feature.
-
-### 4.5 GDELT news channel ⬜
-
-`gdelt.py` source already exists. GDELT is free and gives news sentiment + event extraction. Wire it as Channel 8 for "what does the market think" queries.
+`gdelt.py` GDELTClient wired as Channel 8 in `RetrievalOrchestrator`. `_gdelt_to_results()` converts articles to `RetrievalResult` with `source_quality=4`. Instantiated in `dependencies.py` alongside other channels.
 
 **Phase 4 exit criterion:** 26K filings indexed · Vals AI benchmark ≥68% · Real-time filing ingestion <5 min lag.
 
@@ -245,13 +228,14 @@ Load Balancer (nginx/Caddy)
     └── PG Primary + 2 replicas
 ```
 
-### 5.2 Observability stack ⬜
+### 5.2 Observability stack ✅
 
-Without this you're flying blind in production:
+`app/core/observability.py` — Langfuse tracing wired into `search_pipeline.py`. Every query emits a trace with per-stage latency, retrieval channel hit rates, token counts, cost, NLI recall, and confidence. Zero latency impact (fire-and-forget via `asyncio.create_task`). Graceful no-op when `LANGFUSE_PUBLIC_KEY` not set.
 
-- **Prometheus + Grafana**: latency per stage, retrieval channel hit rates, LLM cost/day, cache hit rate
-- **Sentry**: exception tracking with trace IDs
-- **OpenTelemetry**: distributed tracing across all 10 pipeline stages
+Remaining gaps (infra):
+- **Prometheus + Grafana**: metrics endpoint at `/metrics` exists; needs Grafana dashboard config
+- **Sentry**: add `sentry-sdk[fastapi]` + `SENTRY_DSN` env var
+- **OpenTelemetry**: full distributed tracing across market-server ↔ gravity-api
 
 Key dashboard metrics:
 ```
@@ -270,7 +254,7 @@ Hallucination rate            (NLI recall <0.6 = flag)
 | Audit log (SHA-256 chain + HMAC) | ✅ | FINRA 4511 / MiFID II compliant |
 | SOC 2 Type II | ⬜ | 6-month observation period — start now |
 | Data residency (EU) | ⬜ | Deploy Qdrant + ES in Frankfurt for EU clients |
-| User-level audit trail | ⬜ | Pass `user_id` through to AuditLogger |
+| User-level audit trail | ✅ | `user_id` → `UserContext(id=)` in every `AuditEvent`; passed from WS auth |
 | PII redaction logging | ✅ | PIIFilter runs; results not logged (good) |
 | Model governance log | ✅ | `model_used` field on every response |
 
