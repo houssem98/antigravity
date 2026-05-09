@@ -18,9 +18,10 @@ SPARSE_VECTOR_NAME = "sparse"
 # ── Mock Fallbacks ──────────────────────────────────────────────────────────
 
 class _MockQdrantResult:
-    """Mock for search/upsert results."""
+    """Mock for search/upsert results. Mirrors QueryResponse shape (.points list)."""
     def __init__(self, items=None):
         self.items = items or []
+        self.points = self.items  # query_points() callers read .points
     def __iter__(self):
         return iter(self.items)
     def __len__(self):
@@ -120,9 +121,25 @@ class QdrantLazyClient:
 qdrant_client = QdrantLazyClient()
 
 
-async def ensure_collection():
+def collection_for_org(org_id: str | None) -> str:
+    """
+    Return the Qdrant collection name for a given org.
+
+    Multi-tenant mode (MULTI_TENANT_QDRANT=true): {org_id}_gravity_chunks
+    Single-tenant / no org: settings.qdrant_collection (default "gravity_chunks")
+
+    Org IDs are validated to prevent path-traversal: only [a-z0-9_-] allowed.
+    """
+    if not settings.multi_tenant_qdrant or not org_id:
+        return settings.qdrant_collection
+    import re
+    safe = re.sub(r"[^a-z0-9_-]", "_", org_id.lower())[:64]
+    return f"{safe}_gravity_chunks"
+
+
+async def ensure_collection(collection_name: str | None = None):
     """Create the Qdrant collection if it doesn't exist."""
-    collection_name = settings.qdrant_collection
+    collection_name = collection_name or settings.qdrant_collection
     
     # Check if we're actually connected or just mocking
     client = await qdrant_client.client
@@ -161,7 +178,8 @@ async def ensure_collection():
         )
         
         # Create payload indexes for fast filtering
-        for field in ["ticker", "company_name", "filing_type", "document_id"]:
+        # `entitlements` is critical — every search query filters by it (plan §6.11).
+        for field in ["ticker", "company_name", "filing_type", "document_id", "entitlements"]:
             await qdrant_client.create_payload_index(
                 collection_name=collection_name,
                 field_name=field,

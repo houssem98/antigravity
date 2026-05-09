@@ -20,6 +20,7 @@ from app.llm.base import BaseLLMClient, LLMConfig, LLMMessage
 from app.core.agents.agent_base import BaseAgent, AgentContext
 from app.core.safety.propensity_checker import get_safety_checker
 from app.core.reasoning.prompts import strip_ai_wording
+from app.core.finance.financial_skills import get_skills_loader
 
 logger = structlog.get_logger()
 
@@ -118,6 +119,16 @@ class WriterAgent(BaseAgent):
         narratives_block = self._format_narratives(ctx)
         sources_block = self._format_sources(ctx)
 
+        # ── Inject financial skills methodology ──────────────────
+        skill_context = self._load_skill_context(ctx)
+        system_prompt = WRITER_SYSTEM
+        if skill_context:
+            system_prompt = WRITER_SYSTEM + skill_context
+            ctx.add_trace(
+                self.name, "skill_injection",
+                f"Injected {len(skill_context)} chars of financial methodology",
+            )
+
         user_content = (
             f"## Original Query\n{ctx.query}\n\n"
             f"## Sub-task Narratives\n{narratives_block}\n\n"
@@ -127,7 +138,7 @@ class WriterAgent(BaseAgent):
 
         response = await self.llm.generate(
             messages=[
-                LLMMessage(role="system", content=WRITER_SYSTEM),
+                LLMMessage(role="system", content=system_prompt),
                 LLMMessage(role="user", content=user_content),
             ],
             config=LLMConfig(temperature=0.1, max_tokens=4096, json_mode=True),
@@ -231,6 +242,11 @@ class WriterAgent(BaseAgent):
             "6. Respond in clean markdown (NOT JSON)."
         )
 
+        # ── Inject financial skills methodology for streaming ────
+        skill_context = self._load_skill_context(ctx)
+        if skill_context:
+            streaming_system += skill_context
+
         user_content = (
             f"## Query\n{ctx.query}\n\n"
             f"## Narratives\n{narratives_block}\n\n"
@@ -258,6 +274,22 @@ class WriterAgent(BaseAgent):
             f"Answer: {len(full_answer)} chars (streaming)",
             duration_ms=elapsed,
         )
+
+    @staticmethod
+    def _load_skill_context(ctx: AgentContext) -> str:
+        """Load relevant financial methodology skills based on query content."""
+        try:
+            loader = get_skills_loader()
+            intent = ctx.query_plan.get("intent") or ctx.query_plan.get("category")
+            skill_context = loader.build_skill_context(
+                query=ctx.query,
+                intent=intent,
+                max_chars=3000,
+            )
+            return skill_context
+        except Exception as e:
+            logger.warning("skill_context_load_failed", error=str(e))
+            return ""
 
     def _format_facts(self, ctx: AgentContext) -> str:
         """Format extracted facts as a readable table for the LLM."""

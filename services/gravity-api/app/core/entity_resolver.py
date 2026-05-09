@@ -47,11 +47,20 @@ class ResolvedEntity:
     confidence: float          # 0.0–1.0
     match_type: str            # "exact_ticker" | "exact_cik" | "fuzzy_name" | "unknown"
     alternatives: list[dict] = field(default_factory=list)  # other candidates
+    # Cross-references — populated lazily via enrich() when needed.
+    lei: str = ""              # Legal Entity Identifier (ISO 17442) from GLEIF
+    cusip: str = ""            # CUSIP — first 6 chars from SEC ticker file
+    former_names: list[str] = field(default_factory=list)  # historical aliases
+    parent_cik: str = ""       # if known parent (multi-CIK group)
 
 
 _UNKNOWN = ResolvedEntity(
     ticker="", cik="", name="", confidence=0.0, match_type="unknown"
 )
+
+# GLEIF — Global LEI Foundation. Free public API.
+# https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=APPLE+INC
+_GLEIF_BASE = "https://api.gleif.org/api/v1/lei-records"
 
 # Common informal → canonical mappings that fuzzy match misses
 _ALIASES: dict[str, str] = {
@@ -226,11 +235,20 @@ class EntityResolver:
             )
 
         # ── 3. Fuzzy name match ───────────────────────────────────────────
+        # Containment-based: mention's tokens must all appear in entity name.
+        # Score = mention-tokens / entity-tokens. Highest specificity wins.
+        mention_tokens = set(mention_norm.split())
         candidates: list[tuple[float, dict]] = []
         for norm_name, entry in self._name_index:
-            score = _token_overlap(mention_norm, norm_name)
-            if score >= 0.5:
+            name_tokens = set(norm_name.split())
+            if mention_tokens.issubset(name_tokens):
+                score = len(mention_tokens) / max(len(name_tokens), 1)
                 candidates.append((score, entry))
+            else:
+                # Symmetric token overlap as a fallback for partial overlaps
+                score = _token_overlap(mention_norm, norm_name)
+                if score >= 0.5:
+                    candidates.append((score, entry))
         candidates.sort(key=lambda x: x[0], reverse=True)
 
         if candidates:
@@ -239,8 +257,9 @@ class EntityResolver:
                 {"ticker": e["ticker"], "name": e["name"], "score": round(s, 3)}
                 for s, e in candidates[1:top_k]
             ]
-            # Require score ≥ 0.7 to avoid false positives
-            if best_score >= 0.7:
+            # Require ≥ 0.5 — disambiguation surfaces alternatives so callers
+            # can choose, instead of silently returning UNKNOWN.
+            if best_score >= 0.5:
                 return ResolvedEntity(
                     ticker=best["ticker"], cik=best["cik"], name=best["name"],
                     confidence=round(best_score, 3), match_type="fuzzy_name",
@@ -256,6 +275,185 @@ class EntityResolver:
 
     def is_ready(self) -> bool:
         return len(self._ticker_map) > 0
+
+    async def disambiguate(
+        self, mention: str, top_k: int = 5,
+    ) -> list[ResolvedEntity]:
+        """
+        Return ALL plausible matches sorted by confidence, instead of one.
+
+        Used by retrieval when the same name maps to multiple CIKs:
+          "Apple"  → [Apple Inc. (AAPL), Apple Hospitality REIT (APLE)]
+          "Coach"  → [Tapestry / Coach (TPR), Coach Industries (COHU)]
+
+        Caller can ask the user to pick or filter by additional context
+        (sector, market-cap, ticker hint).
+        """
+        if not mention:
+            return []
+
+        mention_norm = _normalize(mention)
+        results: list[ResolvedEntity] = []
+
+        # Exact ticker match always wins as #1
+        upper = mention.strip().upper()
+        if upper in self._ticker_map:
+            e = self._ticker_map[upper]
+            results.append(ResolvedEntity(
+                ticker=e["ticker"], cik=e["cik"], name=e["name"],
+                confidence=1.0, match_type="exact_ticker",
+            ))
+
+        # Token-containment candidates — every entity whose name contains all
+        # mention tokens is a plausible match. Score by token-overlap.
+        mention_tokens = set(mention_norm.split())
+        for norm_name, entry in self._name_index:
+            if entry["ticker"] == upper:
+                continue  # already added above
+            name_tokens = set(norm_name.split())
+            if mention_tokens.issubset(name_tokens):
+                # All mention tokens present in entity name = plausible match.
+                score = len(mention_tokens) / max(len(name_tokens), 1)
+                # Floor at 0.3 so short mentions ("Apple") still surface
+                # multi-word entities ("Apple Hospitality REIT Inc").
+                results.append(ResolvedEntity(
+                    ticker=entry["ticker"], cik=entry["cik"], name=entry["name"],
+                    confidence=round(max(score, 0.3), 3), match_type="fuzzy_name",
+                ))
+                if len(results) >= top_k * 2:
+                    break
+
+        results.sort(key=lambda r: r.confidence, reverse=True)
+        return results[:top_k]
+
+    async def enrich(
+        self,
+        entity: ResolvedEntity,
+        with_lei: bool = True,
+        with_submissions: bool = True,
+        redis_client=None,
+    ) -> ResolvedEntity:
+        """
+        Populate cross-reference IDs (LEI, former names, CUSIP-like ticker history)
+        for an already-resolved entity. Network calls — call only when needed.
+        """
+        import asyncio
+        tasks = []
+        if with_lei and not entity.lei and entity.name:
+            tasks.append(self._fetch_lei(entity.name, redis_client))
+        else:
+            tasks.append(None)
+        if with_submissions and entity.cik and not entity.former_names:
+            tasks.append(self._fetch_submissions_metadata(entity.cik, redis_client))
+        else:
+            tasks.append(None)
+
+        results = await asyncio.gather(
+            *[t for t in tasks if t is not None],
+            return_exceptions=True,
+        )
+        idx = 0
+        if with_lei and not entity.lei and entity.name:
+            r = results[idx]; idx += 1
+            if isinstance(r, str) and r:
+                entity.lei = r
+        if with_submissions and entity.cik and not entity.former_names:
+            r = results[idx] if idx < len(results) else None
+            if isinstance(r, dict):
+                entity.former_names = r.get("former_names", [])
+                entity.parent_cik = r.get("parent_cik", "") or entity.parent_cik
+        return entity
+
+    async def _fetch_lei(self, legal_name: str, redis_client=None) -> str:
+        """Look up LEI by legal name via GLEIF public API. Caches per-name."""
+        cache_key = f"gravity:lei:{_normalize(legal_name)}"
+        if redis_client is not None:
+            try:
+                cached = await redis_client.get(cache_key)
+                if cached:
+                    return cached.decode() if isinstance(cached, bytes) else cached
+            except Exception:
+                pass
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    _GLEIF_BASE,
+                    params={"filter[entity.legalName]": legal_name, "page[size]": 5},
+                    headers={"Accept": "application/vnd.api+json"},
+                )
+                if resp.status_code != 200:
+                    return ""
+                data = resp.json().get("data") or []
+                if not data:
+                    return ""
+                # Prefer ACTIVE registrations
+                for rec in data:
+                    attrs = rec.get("attributes") or {}
+                    reg = attrs.get("registration") or {}
+                    if (reg.get("status") or "").upper() == "ISSUED":
+                        lei = rec.get("id", "")
+                        if redis_client is not None:
+                            try:
+                                await redis_client.setex(cache_key, _CACHE_TTL, lei)
+                            except Exception:
+                                pass
+                        return lei
+                # Fallback: first record
+                lei = data[0].get("id", "")
+                if redis_client is not None:
+                    try:
+                        await redis_client.setex(cache_key, _CACHE_TTL, lei)
+                    except Exception:
+                        pass
+                return lei
+        except Exception as e:
+            logger.debug("lei_lookup_failed", name=legal_name, error=str(e))
+            return ""
+
+    async def _fetch_submissions_metadata(self, cik: str, redis_client=None) -> dict:
+        """
+        Fetch SEC submissions JSON metadata. Returns:
+          {"former_names": [...], "parent_cik": "...", "tickers": [...]}
+        Used to flag multi-CIK ambiguity (e.g. Apple Inc has only one CIK,
+        Berkshire Hathaway A and B have separate CIKs).
+        """
+        cache_key = f"gravity:submissions_meta:{cik}"
+        if redis_client is not None:
+            try:
+                cached = await redis_client.get(cache_key)
+                if cached:
+                    raw = cached.decode() if isinstance(cached, bytes) else cached
+                    return json.loads(raw)
+            except Exception:
+                pass
+
+        url = f"https://data.sec.gov/submissions/CIK{str(int(cik)).zfill(10)}.json"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "GravitySearch/1.0 (gravity@antigravity.ai)"},
+                )
+                if resp.status_code != 200:
+                    return {}
+                data = resp.json()
+                meta = {
+                    "former_names": [
+                        n.get("name", "") for n in (data.get("formerNames") or [])
+                        if n.get("name")
+                    ],
+                    "tickers": data.get("tickers") or [],
+                    "parent_cik": "",  # SEC doesn't publish parent links here
+                }
+                if redis_client is not None:
+                    try:
+                        await redis_client.setex(cache_key, _CACHE_TTL, json.dumps(meta))
+                    except Exception:
+                        pass
+                return meta
+        except Exception as e:
+            logger.debug("submissions_meta_failed", cik=cik, error=str(e))
+            return {}
 
 
 # ── Module-level singleton (lazy-built) ──────────────────────────────────────

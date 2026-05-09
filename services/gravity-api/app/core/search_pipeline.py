@@ -27,7 +27,7 @@ import structlog
 
 from app.config import settings
 from app.api.middleware.pii_filter import PIIFilter
-from app.core.retrieval.fusion import RetrievalResult, reciprocal_rank_fusion
+from app.core.retrieval.fusion import RetrievalResult, authority_aware_rrf
 from app.core.reasoning.prompts import (
     FINANCIAL_ANALYST_SYSTEM,
     build_user_message,
@@ -475,8 +475,11 @@ class SearchPipeline:
                                      total_retrieved=sum(len(v) for v in retrieval_results.values()))
 
                 # ── Stage 4: RRF Fusion + Reranking (<30ms) ────────────
+                # Authority-aware RRF (plan §6.4): SEC/IR > sell-side > news > blogs.
+                # 0.15 boost makes primary filings outrank tier-2 news at ties without
+                # overpowering strong multi-channel news matches.
                 t2 = time.perf_counter()
-                fused = reciprocal_rank_fusion(retrieval_results, k=settings.rrf_k)
+                fused = authority_aware_rrf(retrieval_results, k=settings.rrf_k, authority_weight=0.15)
                 if self.reranker and len(fused) > 0:
                     reranked = await self.reranker.rerank(
                         query=query,
@@ -863,6 +866,37 @@ class SearchPipeline:
             validation_result["cross_passage_contradictions"] = len(cross_passage_contradictions)
             if nli_recall is not None:
                 validation_result["nli_citation_recall"] = round(nli_recall, 4)
+
+            # ── Stage 7c: Patronus Lynx finance hallucination guardrail ────
+            # Plan §3.4: finance-tuned grader. Uses HF inference API when
+            # HF_TOKEN is set, else LLM-as-Lynx via the wired sonnet client.
+            try:
+                from app.core.reasoning.lynx_guardrail import LynxGuardrail
+                _lynx_client = getattr(self, "_lynx_client", None) or (
+                    self.llm_router.get_client("claude_sonnet")
+                    if hasattr(self.llm_router, "get_client") else None
+                )
+                if _lynx_client is not None and top_passages:
+                    grader = LynxGuardrail(llm_client=_lynx_client)
+                    _passage_text2 = " ".join(p.text for p in top_passages[:10])[:8000]
+                    lynx_score = await grader.score(
+                        context=_passage_text2,
+                        answer=full_response,
+                    )
+                    validation_result["lynx_score"] = round(lynx_score.score, 3)
+                    validation_result["lynx_method"] = lynx_score.method
+                    validation_result["lynx_grounded"] = lynx_score.is_grounded
+                    if lynx_score.reasoning:
+                        validation_result["lynx_reasoning"] = lynx_score.reasoning[:300]
+                    logger.info(
+                        "lynx_check",
+                        trace_id=trace_id,
+                        score=round(lynx_score.score, 3),
+                        method=lynx_score.method,
+                        grounded=lynx_score.is_grounded,
+                    )
+            except Exception as _lynx_err:
+                logger.warning("lynx_check_failed", trace_id=trace_id, error=str(_lynx_err))
 
             validation_ms = (time.perf_counter() - t4) * 1000
 

@@ -40,6 +40,18 @@ SEC_ITEM_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Capture the item number/letter alone (used to derive canonical item_id).
+SEC_ITEM_NUMBER_RE = re.compile(r"ITEM\s+(\d+)([A-Z]?)", re.IGNORECASE)
+
+# Footnote / Note references in financial statements:
+#   "Note 1. Summary of Significant Accounting Policies"
+#   "NOTE 7 — Income Taxes"
+SEC_NOTE_PATTERN = re.compile(
+    r"(?:^|\n)\s*(NOTE\s+\d+[A-Z]?\.?\s*(?:[-—]\s*)?[A-Z][A-Za-z0-9\s,'&\-]{2,80})",
+    re.IGNORECASE | re.MULTILINE,
+)
+SEC_NOTE_NUMBER_RE = re.compile(r"NOTE\s+(\d+)([A-Z]?)", re.IGNORECASE)
+
 # Earnings call section markers
 EARNINGS_SECTION_PATTERNS = {
     "Prepared Remarks": re.compile(
@@ -101,26 +113,57 @@ class SectionDetector:
         return sections
 
     def _detect_sec_sections(self, text: str) -> list[Section]:
-        """Detect SEC Item sections using regex."""
-        matches = list(SEC_ITEM_PATTERN.finditer(text))
+        """Detect SEC Item sections + Note refs in financial statements."""
+        item_matches = list(SEC_ITEM_PATTERN.finditer(text))
+        note_matches = list(SEC_NOTE_PATTERN.finditer(text))
 
-        if not matches:
+        if not item_matches and not note_matches:
             return [Section(name="Full Document", text=text)]
 
-        sections = []
-        for i, match in enumerate(matches):
-            start = match.start()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections: list[Section] = []
 
-            # Determine section name
+        # ── Item sections ─────────────────────────────────────────────
+        for i, match in enumerate(item_matches):
+            start = match.start()
+            end = item_matches[i + 1].start() if i + 1 < len(item_matches) else len(text)
+
             header_text = match.group(1).strip()
-            # Normalize: "ITEM 1A — RISK FACTORS" → "Item 1A"
-            item_key = re.sub(r"\s+", " ", re.sub(r"[-—].*$", "", header_text)).strip().lower()
+            # Normalize: "ITEM 1A. RISK FACTORS" / "Item 1A — Risk Factors" → "item 1a"
+            num_for_key = SEC_ITEM_NUMBER_RE.search(header_text)
+            if num_for_key:
+                item_key = f"item {num_for_key.group(1)}{(num_for_key.group(2) or '').lower()}"
+            else:
+                item_key = re.sub(r"\s+", " ", re.sub(r"[-—].*$", "", header_text)).strip().lower()
             friendly_name = SEC_10K_SECTIONS.get(item_key, header_text)
 
+            # Canonical id: "item_1a", "item_7", etc. — stable across header variants.
+            item_id = ""
+            num_match = SEC_ITEM_NUMBER_RE.search(header_text)
+            if num_match:
+                num, letter = num_match.group(1), (num_match.group(2) or "").lower()
+                item_id = f"item_{num}{letter}"
+
             section_text = text[start:end].strip()
-            if len(section_text) > 50:  # Skip near-empty sections
-                sections.append(Section(name=friendly_name, text=section_text))
+            if len(section_text) > 50:
+                sections.append(Section(name=friendly_name, text=section_text, item_id=item_id))
+
+        # ── Note refs (only collected if found inside Item 8 region) ──
+        # Notes typically live inside Item 8 (Financial Statements). We add them
+        # as their own sections so retrieval can target "Note 7" directly.
+        for i, match in enumerate(note_matches):
+            start = match.start()
+            end = note_matches[i + 1].start() if i + 1 < len(note_matches) else len(text)
+            note_text = text[start:end].strip()
+            if len(note_text) < 80:
+                continue
+            header = match.group(1).strip()
+            num_match = SEC_NOTE_NUMBER_RE.search(header)
+            if num_match:
+                note_id = f"note_{num_match.group(1)}{(num_match.group(2) or '').lower()}"
+            else:
+                note_id = ""
+            # Cap note length to keep chunker happy on accidentally-greedy matches.
+            sections.append(Section(name=header[:120], text=note_text[:20000], item_id=note_id))
 
         return sections
 

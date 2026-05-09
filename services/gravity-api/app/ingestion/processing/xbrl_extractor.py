@@ -47,32 +47,107 @@ _NS = {
     "xlink": "http://www.w3.org/1999/xlink",
 }
 
-# US-GAAP concepts that map to our FinancialRow model (metric name → XBRL concept)
-_GAAP_CONCEPT_MAP: dict[str, str] = {
-    "revenue": "Revenues",
-    "net_income": "NetIncomeLoss",
-    "gross_profit": "GrossProfit",
-    "operating_income": "OperatingIncomeLoss",
-    "ebitda": "EarningsBeforeInterestTaxesDepreciationAndAmortization",
-    "total_assets": "Assets",
-    "total_liabilities": "Liabilities",
-    "stockholders_equity": "StockholdersEquity",
-    "cash": "CashAndCashEquivalentsAtCarryingValue",
-    "long_term_debt": "LongTermDebt",
-    "eps_basic": "EarningsPerShareBasic",
-    "eps_diluted": "EarningsPerShareDiluted",
-    "shares_outstanding": "CommonStockSharesOutstanding",
-    "capex": "PaymentsToAcquirePropertyPlantAndEquipment",
-    "operating_cash_flow": "NetCashProvidedByUsedInOperatingActivities",
-    "free_cash_flow": "FreeCashFlow",
-    "research_and_development": "ResearchAndDevelopmentExpense",
-    "selling_general_administrative": "SellingGeneralAndAdministrativeExpense",
-    "cost_of_revenue": "CostOfRevenue",
-    "income_tax": "IncomeTaxExpenseBenefit",
+# US-GAAP concept normalization with multi-variant mapping (plan §3.3).
+# Companies switch GAAP concepts across years (Revenues → SalesRevenueNet →
+# RevenueFromContractWithCustomerExcludingAssessedTax). Each canonical metric
+# maps to an ORDERED list of acceptable concepts — first match wins when
+# multiple are present.
+CANONICAL_CONCEPTS: dict[str, list[str]] = {
+    # Income statement
+    "revenue": [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "RevenueFromContractWithCustomerIncludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+        "SalesRevenueGoodsNet",
+        "SalesRevenueServicesNet",
+    ],
+    "cost_of_revenue": [
+        "CostOfGoodsAndServicesSold",
+        "CostOfRevenue",
+        "CostOfGoodsSold",
+        "CostOfServices",
+    ],
+    "gross_profit": ["GrossProfit"],
+    "operating_income": [
+        "OperatingIncomeLoss",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    ],
+    "net_income": [
+        "NetIncomeLoss",
+        "ProfitLoss",
+        "NetIncomeLossAttributableToParent",
+    ],
+    "ebitda": ["EarningsBeforeInterestTaxesDepreciationAndAmortization"],
+    "research_and_development": [
+        "ResearchAndDevelopmentExpense",
+        "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+    ],
+    "selling_general_administrative": [
+        "SellingGeneralAndAdministrativeExpense",
+        "GeneralAndAdministrativeExpense",
+    ],
+    "income_tax": ["IncomeTaxExpenseBenefit"],
+    "eps_basic": ["EarningsPerShareBasic"],
+    "eps_diluted": ["EarningsPerShareDiluted"],
+    # Balance sheet
+    "cash": [
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        "Cash",
+    ],
+    "total_assets": ["Assets"],
+    "total_liabilities": ["Liabilities"],
+    "long_term_debt": [
+        "LongTermDebt",
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+    ],
+    "stockholders_equity": [
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ],
+    "shares_outstanding": [
+        "CommonStockSharesOutstanding",
+        "EntityCommonStockSharesOutstanding",
+    ],
+    # Cash flow
+    "operating_cash_flow": ["NetCashProvidedByUsedInOperatingActivities"],
+    "investing_cash_flow": ["NetCashProvidedByUsedInInvestingActivities"],
+    "financing_cash_flow": ["NetCashProvidedByUsedInFinancingActivities"],
+    "free_cash_flow": ["FreeCashFlow"],
+    "capex": [
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PaymentsToAcquireProductiveAssets",
+    ],
+    "stock_repurchases": [
+        "PaymentsForRepurchaseOfCommonStock",
+        "PaymentsForRepurchaseOfEquity",
+    ],
+    "dividends_paid": [
+        "PaymentsOfDividends",
+        "PaymentsOfDividendsCommonStock",
+    ],
 }
 
-# Reverse map: XBRL local-name → friendly metric name
-_XBRL_TO_METRIC: dict[str, str] = {v: k for k, v in _GAAP_CONCEPT_MAP.items()}
+# Backward-compat: first variant per canonical = the "primary" concept
+_GAAP_CONCEPT_MAP: dict[str, str] = {
+    canonical: variants[0] for canonical, variants in CANONICAL_CONCEPTS.items()
+}
+
+# Inverse map: every concept variant -> canonical metric name (used by parser
+# to recognize tag drift).
+_XBRL_TO_METRIC: dict[str, str] = {
+    raw: canonical
+    for canonical, variants in CANONICAL_CONCEPTS.items()
+    for raw in variants
+}
+
+
+def canonicalize_concept(concept: str) -> str | None:
+    """Map raw GAAP concept (with or without `us-gaap:` prefix) to canonical metric."""
+    c = concept.split(":", 1)[-1].strip()
+    return _XBRL_TO_METRIC.get(c)
 
 # Scale multipliers by XBRL decimals attribute
 _SCALE_MAP = {
@@ -468,3 +543,145 @@ class XBRLExtractor:
         if "xbrl.sec.gov/dei" in uri:
             return "dei"
         return ""
+
+
+# ─── SEC companyfacts JSON path (preferred for backfill) ──────────────────────
+
+@dataclass
+class XBRLValidationReport:
+    """Result of optional Arelle validation of an inline XBRL document."""
+    valid: bool = False
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    fact_count: int = 0
+
+
+async def fetch_company_facts(cik: str) -> dict | None:
+    """Fetch SEC `companyfacts` JSON for a CIK (~all-period XBRL data prebuilt)."""
+    import httpx
+    cik_padded = str(int(cik)).zfill(10)
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik_padded}.json"
+    headers = {"User-Agent": "GravitySearch/1.0 (gravity@antigravity.ai)"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        logger.warning("companyfacts_fetch_failed", cik=cik, error=str(e))
+        return None
+
+
+def extract_facts_from_companyfacts(data: dict, max_facts: int = 5000) -> list[XBRLFact]:
+    """
+    Walk SEC `companyfacts` JSON and emit canonicalized XBRLFacts.
+
+    JSON shape:
+      data["facts"]["us-gaap"][<concept>]["units"][<unit>] -> [observation, ...]
+
+    Each observation:
+      { "val": float, "start": "YYYY-MM-DD", "end": "YYYY-MM-DD",
+        "fy": 2024, "fp": "Q4", "form": "10-K", "filed": "2024-11-01",
+        "accn": "0000320193-24-000123" }
+    """
+    facts: list[XBRLFact] = []
+    entity_name = (data.get("entityName") or "").strip()
+    entity_cik = str(data.get("cik") or "")
+    gaap = (data.get("facts") or {}).get("us-gaap") or {}
+
+    for concept, body in gaap.items():
+        canonical = _XBRL_TO_METRIC.get(concept)
+        if not canonical:
+            continue
+        units = body.get("units") or {}
+        for unit, observations in units.items():
+            for obs in observations:
+                start = obs.get("start", "") or ""
+                end = obs.get("end", "") or ""
+                fy = obs.get("fy", 0) or 0
+                fp = str(obs.get("fp", "") or "")
+                period_label = f"FY{fy}" if fp == "FY" else f"{fp} {fy}" if fp and fy else end
+                facts.append(XBRLFact(
+                    concept=f"us-gaap:{concept}",
+                    local_name=concept,
+                    metric_name=canonical,
+                    value=float(obs.get("val", 0) or 0),
+                    value_str=str(obs.get("val", "")),
+                    unit=unit if "USD" in unit or unit in ("shares", "pure") else _normalize_unit_str(unit),
+                    scale_suffix="",
+                    decimals=str(obs.get("decimals", "")),
+                    period_start=start,
+                    period_end=end,
+                    period_label=period_label,
+                    context_id=f"{fy}-{fp}",
+                    entity_cik=entity_cik,
+                    entity_name=entity_name,
+                ))
+                if len(facts) >= max_facts:
+                    return facts
+    logger.info(
+        "xbrl_companyfacts_extracted",
+        entity=entity_name,
+        cik=entity_cik,
+        facts_count=len(facts),
+    )
+    return facts
+
+
+def _normalize_unit_str(u: str) -> str:
+    ul = (u or "").lower()
+    if "share" in ul:
+        return "shares"
+    if "pure" in ul:
+        return "pure"
+    if "usd" in ul:
+        return "USD"
+    return u or "USD"
+
+
+# ─── Arelle validation (optional) ─────────────────────────────────────────────
+
+def validate_with_arelle(filing_path: str) -> XBRLValidationReport:
+    """
+    Validate an inline-XBRL filing with Arelle. Falls back to a no-op valid
+    report when Arelle is not installed (so ingestion is never blocked).
+
+    Install: pip install arelle-release
+    """
+    report = XBRLValidationReport()
+    try:
+        from arelle import Cntlr  # type: ignore
+    except ImportError:
+        report.warnings.append("arelle_not_installed")
+        report.valid = True
+        return report
+
+    try:
+        ctrl = Cntlr.Cntlr(logFileName=None)
+        model = ctrl.modelManager.load(filing_path)
+        if model is None:
+            report.errors.append("arelle_load_failed")
+            return report
+        ctrl.modelManager.validate()
+        report.fact_count = len(getattr(model, "facts", []) or [])
+        for msg in (getattr(model.modelDocument, "error", []) or []):
+            report.errors.append(str(msg))
+        report.valid = len(report.errors) == 0
+        return report
+    except Exception as e:
+        report.errors.append(f"arelle_run_failed: {e}")
+        return report
+
+
+async def extract_xbrl_facts_for_ticker(ticker: str, cik: str | None = None) -> list[XBRLFact]:
+    """Convenience: fetch + canonicalize XBRL facts for a ticker via companyfacts JSON."""
+    if cik is None:
+        from app.ingestion.sources.earnings import _resolve_cik
+        cik = await _resolve_cik(ticker)
+    if not cik:
+        logger.warning("xbrl_no_cik", ticker=ticker)
+        return []
+    data = await fetch_company_facts(cik)
+    if data is None:
+        return []
+    return extract_facts_from_companyfacts(data)

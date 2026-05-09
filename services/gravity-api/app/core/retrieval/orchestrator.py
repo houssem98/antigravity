@@ -9,7 +9,11 @@ Architecture:
     │                    ├─ Sparse Search (ES BM25)     ~30ms
     │                    ├─ SPLADE Search (Qdrant)      ~30ms
     │                    ├─ Graph Search (Neo4j)        ~40ms
-    │                    └─ Structured Search (PG)      ~20ms
+    │                    ├─ Structured Search (PG)      ~20ms
+    │                    ├─ PageIndex Search (VectifyAI) ~variable
+    │                    ├─ TurboQuant Search (in-mem)  ~10ms
+    │                    ├─ GDELT Search (HTTP)         ~500ms
+    │                    └─ MCP Search (FactSet/CapIQ)  ~2-10s
     └─ Returns: dict[channel_name → list[RetrievalResult]]
 """
 
@@ -67,6 +71,7 @@ class RetrievalOrchestrator:
         page_index_search=None,   # Channel 6: VectifyAI PageIndex (optional)
         turbo_quant_search=None,  # Channel 7: TurboQuant compressed ANN (optional)
         gdelt_search=None,        # Channel 8: GDELT global news (free, no key)
+        mcp_search=None,          # Channel 9: MCP financial data (FactSet, CapIQ, etc.)
         multi_query=None,         # MultiQueryRetriever — replaces dense for MEDIUM/COMPLEX
     ):
         self.channels = {}
@@ -86,6 +91,8 @@ class RetrievalOrchestrator:
             self.channels["turbo_quant"] = turbo_quant_search
         if gdelt_search:
             self.channels["gdelt"] = gdelt_search
+        if mcp_search:
+            self.channels["mcp"] = mcp_search
 
         self._multi_query = multi_query
         logger.info("retrieval_orchestrator_init", channels=list(self.channels.keys()),
@@ -189,6 +196,7 @@ class RetrievalOrchestrator:
         "page_index": 30.0,   # PageIndex navigates document trees — allow more time
         "turbo_quant": 2.0,   # in-memory; fast
         "gdelt":       4.0,   # external HTTP; allow extra time
+        "mcp":        15.0,   # MCP: external financial data APIs; variable latency
     }
 
     async def _safe_search(
@@ -226,6 +234,9 @@ class RetrievalOrchestrator:
             elif name == "gdelt":
                 # GDELT returns article dicts — convert to RetrievalResult inline
                 coro = _gdelt_to_results(channel, query)
+            elif name == "mcp":
+                # MCP channel accepts entities for ticker extraction
+                coro = channel.search(query=query, filters=filters, entities=entities)
             else:
                 return []
 

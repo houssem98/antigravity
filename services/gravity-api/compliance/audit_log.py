@@ -125,8 +125,50 @@ class CostContext:
 
 
 @dataclass
+class ReviewerEdit:
+    """A single field edit made by a human reviewer (FINRA 3110(b)(4))."""
+    field: str          # e.g. "answer", "summary", "citations[2].quote"
+    before: str = ""
+    after: str = ""
+    edited_at: str = ""
+    edited_by: str = ""
+
+
+@dataclass
+class ExportEvent:
+    """Record of an external export (PDF, XLSX, share link, email).
+
+    SEC Rule 17a-4 / FINRA 4511 require: all dissemination of an
+    AI-generated record is itself a recordable event.
+    """
+    format: str           # "pdf" | "xlsx" | "pptx" | "share_link" | "email"
+    destination: str = "" # email address, recipient_id, share_url, etc.
+    exported_by: str = "" # user_id who triggered the export
+    exported_at: str = ""
+    bytes_size: int = 0
+    artifact_hash: str = ""  # SHA256 of exported artifact for non-repudiation
+
+
+@dataclass
 class HumanOversight:
+    """Reviewer approval / rejection / edits per FINRA 3110(b)(4).
+
+    review_status states (state machine):
+      "not_required"   — auto-approved tier (low-risk simple lookup)
+      "pending"        — flagged for review, awaiting a reviewer
+      "approved"       — reviewer accepted as-is
+      "edited"         — reviewer accepted with edits (see edits[])
+      "rejected"       — reviewer rejected; response not delivered
+    """
     review_required: bool = False
+    review_status: str = "not_required"
+    reviewer_id: str = ""               # user_id of the reviewing principal
+    reviewed_at: str = ""               # ISO timestamp
+    reviewer_role: str = ""             # "principal" | "compliance" | "supervisor"
+    review_notes: str = ""              # free-text justification
+    edits: list[ReviewerEdit] = field(default_factory=list)
+    exports: list[ExportEvent] = field(default_factory=list)
+    # Legacy fields kept for backwards-compatibility with existing call sites.
     reviewed_by: str = ""
     override_action: Optional[str] = None
     override_reason: Optional[str] = None
@@ -330,6 +372,73 @@ class AuditLogger:
             logger.error("audit_log_write_failed", error=str(e), event_id=sealed.event_id)
 
         return sealed.integrity.record_hash
+
+    async def record_review(
+        self,
+        event_id: str,
+        reviewer_id: str,
+        review_status: str,        # "approved" | "edited" | "rejected"
+        reviewer_role: str = "principal",
+        review_notes: str = "",
+        edits: Optional[list[ReviewerEdit]] = None,
+    ) -> str:
+        """
+        Record a human reviewer's verdict on a prior AuditEvent (FINRA 3110(b)(4)).
+
+        Emits a new AuditEvent (review record) chained off the current head —
+        we never mutate sealed records. Returns the new record hash.
+        """
+        if review_status not in ("approved", "edited", "rejected"):
+            raise ValueError(f"invalid review_status: {review_status}")
+        if not reviewer_id.strip():
+            raise ValueError("reviewer_id required")
+
+        review_event = AuditEvent(
+            session_id=event_id,                # link via session_id back to original
+            request_id=f"review:{event_id}",
+            human_oversight=HumanOversight(
+                review_required=True,
+                review_status=review_status,
+                reviewer_id=reviewer_id,
+                reviewer_role=reviewer_role,
+                reviewed_at=datetime.now(timezone.utc).isoformat(),
+                review_notes=review_notes[:2000],
+                edits=edits or [],
+                reviewed_by=reviewer_id,        # legacy mirror
+            ),
+            query=QueryContext(raw=f"<review of {event_id}>"),
+            response=ResponseContext(raw=review_status),
+        )
+        return await self.log(review_event)
+
+    async def record_export(
+        self,
+        event_id: str,
+        format: str,
+        exported_by: str,
+        destination: str = "",
+        bytes_size: int = 0,
+        artifact_hash: str = "",
+    ) -> str:
+        """Record an external export of an AI-generated record (SEC 17a-4 / FINRA 4511)."""
+        if format not in ("pdf", "xlsx", "pptx", "share_link", "email", "api"):
+            logger.warning("audit_unknown_export_format", format=format)
+        export = ExportEvent(
+            format=format,
+            destination=destination[:500],
+            exported_by=exported_by,
+            exported_at=datetime.now(timezone.utc).isoformat(),
+            bytes_size=int(bytes_size),
+            artifact_hash=artifact_hash,
+        )
+        export_event = AuditEvent(
+            session_id=event_id,
+            request_id=f"export:{event_id}",
+            human_oversight=HumanOversight(exports=[export]),
+            query=QueryContext(raw=f"<export {format} of {event_id}>"),
+            response=ResponseContext(raw=destination[:200] or format),
+        )
+        return await self.log(export_event)
 
 
 # ── SQL migration ─────────────────────────────────────────────────────────────

@@ -4,33 +4,95 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key';
 
+// Dev-mode auth bypass — set VITE_DEV_AUTH_BYPASS=true in apps/market-ui/.env
+// when Supabase project is paused / DNS-failing / not yet provisioned.
+// Stores a fake session in localStorage so the app boots and protected
+// routes work without hitting Supabase. NEVER enable in production.
+const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true';
+const DEV_SESSION_KEY = 'gravity_dev_session_v1';
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// ─── Dev-mode helpers ─────────────────────────────────────────────────────────
+
+interface DevSession {
+    access_token: string;
+    refresh_token: string;
+    user: { id: string; email: string };
+    expires_at: number;
+}
+
+function getDevSession(): DevSession | null {
+    if (!DEV_AUTH_BYPASS) return null;
+    try {
+        const raw = localStorage.getItem(DEV_SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw) as DevSession;
+        if (Date.now() / 1000 > s.expires_at) {
+            localStorage.removeItem(DEV_SESSION_KEY);
+            return null;
+        }
+        return s;
+    } catch {
+        return null;
+    }
+}
+
+function setDevSession(email: string): DevSession {
+    const s: DevSession = {
+        access_token: `dev-token-${btoa(email)}-${Date.now()}`,
+        refresh_token: `dev-refresh-${Date.now()}`,
+        user: { id: `dev-${btoa(email)}`, email },
+        expires_at: Math.floor(Date.now() / 1000) + 12 * 3600, // 12h
+    };
+    localStorage.setItem(DEV_SESSION_KEY, JSON.stringify(s));
+    return s;
+}
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 export const signUp = async (email: string, password: string) => {
+    if (DEV_AUTH_BYPASS) {
+        const s = setDevSession(email);
+        return { user: s.user, session: s };
+    }
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
     return data;
 };
 
 export const signIn = async (email: string, password: string) => {
+    if (DEV_AUTH_BYPASS) {
+        if (!email || !password) throw new Error('email + password required');
+        const s = setDevSession(email);
+        return { user: s.user, session: s };
+    }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     return data;
 };
 
 export const signOut = async () => {
+    if (DEV_AUTH_BYPASS) {
+        localStorage.removeItem(DEV_SESSION_KEY);
+        return;
+    }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 };
 
 export const getSession = async () => {
+    if (DEV_AUTH_BYPASS) {
+        return getDevSession();
+    }
     const { data: { session } } = await supabase.auth.getSession();
     return session;
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
+    if (DEV_AUTH_BYPASS) {
+        return getDevSession()?.access_token || null;
+    }
     const session = await getSession();
     return session?.access_token || null;
 };
