@@ -15,6 +15,7 @@ import structlog
 
 from app.llm.base import BaseLLMClient, LLMConfig, LLMMessage
 from app.core.agents.agent_base import BaseAgent, AgentContext, SubTask
+from app.core.finance.financial_skills import get_skills_loader
 
 logger = structlog.get_logger()
 
@@ -97,11 +98,21 @@ class PlannerAgent(BaseAgent):
             return ctx
 
         # Complex path: use LLM decomposition
+        # Inject workflow guidance from financial agent templates if relevant
+        workflow_context = self._load_workflow_guidance(ctx)
+        system_prompt = DECOMPOSITION_SYSTEM
+        if workflow_context:
+            system_prompt = DECOMPOSITION_SYSTEM + workflow_context
+            ctx.add_trace(
+                self.name, "workflow_injection",
+                f"Injected financial workflow guidance ({len(workflow_context)} chars)",
+            )
+
         user_content = f"Query: {ctx.query}\n\nQuery analysis: {json.dumps(ctx.query_plan, default=str)}"
 
         response = await self.llm.generate(
             messages=[
-                LLMMessage(role="system", content=DECOMPOSITION_SYSTEM),
+                LLMMessage(role="system", content=system_prompt),
                 LLMMessage(role="user", content=user_content),
             ],
             config=LLMConfig(temperature=0.0, max_tokens=2000, json_mode=True),
@@ -194,3 +205,19 @@ class PlannerAgent(BaseAgent):
             ctx.add_trace(self.name, "replan_failed", str(e))
 
         return ctx
+
+    @staticmethod
+    def _load_workflow_guidance(ctx: AgentContext) -> str:
+        """Load workflow guidance from financial agent templates if relevant.
+
+        For example, if the query is about sector analysis, this injects the
+        market-researcher agent's step-by-step workflow into the decomposition
+        prompt so sub-tasks follow institutional analyst workflows.
+        """
+        try:
+            loader = get_skills_loader()
+            workflow = loader.build_agent_workflow_context(ctx.query)
+            return workflow
+        except Exception as e:
+            logger.warning("workflow_guidance_load_failed", error=str(e))
+            return ""

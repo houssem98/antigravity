@@ -13,7 +13,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.config import settings
 from app.api.routes import search, documents, entities, health, usage, workspaces, feedback
-from app.api.routes import grid_search, analytics
+from app.api.routes import grid_search, analytics, sso
 from app.db.qdrant import qdrant_client
 from app.db.elasticsearch import es_client
 from app.db.neo4j import neo4j_driver
@@ -212,6 +212,14 @@ app = FastAPI(
     docs_url="/docs" if not settings.is_production else None,
 )
 
+# ── Telemetry: Sentry + OpenTelemetry (plan §5.2) ────────────────────────
+# No-op when SENTRY_DSN / OTEL_EXPORTER_OTLP_ENDPOINT env vars are absent.
+try:
+    from app.core.telemetry import init_telemetry
+    _telemetry_status = init_telemetry(app=app)
+except Exception as _telemetry_err:
+    structlog.get_logger().warning("telemetry_init_failed", error=str(_telemetry_err))
+
 # ── Middleware ───────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -258,7 +266,9 @@ app.include_router(workspaces.router, prefix="/v1", tags=["Workspaces"])
 app.include_router(feedback.router, tags=["Feedback"])
 app.include_router(grid_search.router, tags=["Grid"])
 app.include_router(analytics.router, tags=["Analytics"])
-
+app.include_router(sso.router, tags=["SSO/SCIM"])
+from app.api.routes import claude
+app.include_router(claude.router, prefix="/v1", tags=["Claude Managed Agents"])
 
 # ── Prometheus-compatible /metrics endpoint ──────────────────────────────
 @app.get("/metrics", include_in_schema=False)

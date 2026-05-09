@@ -12,6 +12,7 @@ import { predictionsRouter } from './routes/predictions.js';
 import { llmRouter } from './routes/llm.js';
 import { tavilyRouter } from './routes/tavily.js';
 import { orgsRouter } from './routes/orgs.js';
+import { claudeRouter } from './routes/claude.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -119,6 +120,7 @@ app.use('/api', tradingRouter);
 app.use('/api/llm', llmRouter);
 app.use('/api/tavily', tavilyRouter);
 app.use('/api/orgs', orgsRouter);
+app.use('/api/claude', claudeRouter);
 
 // Start server
 server.listen(PORT, () => {

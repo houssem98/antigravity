@@ -7,8 +7,7 @@ Field names MUST match dense_search.py and splade_search.py payload expectations
 import structlog
 from qdrant_client import models as qmodels
 
-from app.config import settings
-from app.db.qdrant import qdrant_client, ensure_collection, DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from app.db.qdrant import qdrant_client, ensure_collection, collection_for_org, DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from app.ingestion.processing.chunker import ChunkOutput
 
 logger = structlog.get_logger()
@@ -28,23 +27,24 @@ class VectorIndexer:
         self.embedder = embedder          # VoyageEmbedder or LocalEmbedder
         self.splade = splade_encoder      # SpladeEncoder or None
         self.turbo_quant = turbo_quant    # TurboQuantSearch or None (optional)
-        self.collection = settings.qdrant_collection
 
     async def index_chunks(
         self,
         chunks: list[ChunkOutput],
         batch_size: int = 64,
+        org_id: str | None = None,
     ) -> int:
         """
         Embed and upsert chunks to Qdrant.
 
+        org_id: routes to per-tenant collection when MULTI_TENANT_QDRANT=true.
         Returns number of chunks indexed.
         """
         if not chunks:
             return 0
 
-        # Ensure collection exists
-        await ensure_collection()
+        collection = collection_for_org(org_id)
+        await ensure_collection(collection)
 
         total = 0
         for batch_start in range(0, len(chunks), batch_size):
@@ -80,6 +80,13 @@ class VectorIndexer:
                         values=sparse["values"],
                     )
 
+                # Entitlements: ingestion can stamp chunks with license keys
+                # via chunk.metadata["entitlements"]. Default to ["public"]
+                # for legacy / public-domain content (SEC EDGAR filings).
+                entitlements = chunk.metadata.get("entitlements")
+                if not entitlements or not isinstance(entitlements, list):
+                    entitlements = ["public"]
+
                 points.append(qmodels.PointStruct(
                     id=chunk.id,  # UUID string
                     vector=vector_dict,
@@ -99,13 +106,15 @@ class VectorIndexer:
                         "filing_type": chunk.metadata.get("filing_type", ""),
                         "filing_date": chunk.metadata.get("filing_date", ""),
                         "document_title": chunk.metadata.get("document_title", ""),
+                        # ACL — pre-retrieval entitlement check (plan §6.11)
+                        "entitlements": entitlements,
                     },
                 ))
 
             # ── Upsert to Qdrant ─────────────────────────────────────────
             try:
                 await qdrant_client.upsert(
-                    collection_name=self.collection,
+                    collection_name=collection,
                     points=points,
                     wait=True,
                 )

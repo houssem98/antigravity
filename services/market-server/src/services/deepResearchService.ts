@@ -10,6 +10,8 @@
 //   6. Output      — Structured ResearchReport with citations
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
     searchGravityParallel,
     fetchGravityStructured,
@@ -153,6 +155,102 @@ async function callGemini(
 // Kept for backward compat
 async function callGeminiWithRetry(prompt: string, maxRetries = 3, preferredModel?: GeminiModelId): Promise<string> {
     return callGemini(prompt, { preferredModel, maxRetries });
+}
+
+// ─── Financial Skills Loader ──────────────────────────────────────────────────
+
+interface FinancialSkillEntry {
+    name: string;
+    vertical: string;
+    contentTruncated: string;
+}
+
+const SKILL_KEYWORDS: Record<string, string[]> = {
+    'comps-analysis':       ['comps', 'comparable', 'peer', 'valuation', 'trading multiples', 'ev/ebitda'],
+    'dcf-model':            ['dcf', 'discounted cash flow', 'wacc', 'intrinsic value'],
+    'lbo-model':            ['lbo', 'leveraged buyout', 'buyout'],
+    'earnings-analysis':    ['earnings', 'quarterly results', 'eps', 'revenue beat', 'earnings call'],
+    'sector-overview':      ['sector', 'industry overview', 'market size', 'industry analysis', 'thematic'],
+    'competitive-analysis': ['competitive', 'competition', 'market share', 'competitive landscape'],
+    'thesis-tracker':       ['investment thesis', 'thesis', 'catalyst', 'conviction'],
+    'initiating-coverage':  ['initiation', 'initiating coverage', 'new coverage'],
+    'merger-model':         ['merger', 'm&a', 'accretion dilution', 'acquisition'],
+    'ic-memo':              ['ic memo', 'investment committee', 'investment memo'],
+    'returns-analysis':     ['irr', 'moic', 'returns analysis', 'fund returns'],
+};
+
+let _cachedSkills: FinancialSkillEntry[] | null = null;
+
+function loadFinancialSkills(): FinancialSkillEntry[] {
+    if (_cachedSkills) return _cachedSkills;
+    _cachedSkills = [];
+
+    const pluginsDir = path.resolve(__dirname, '..', '..', '..', '..', 'financial-services-main', 'plugins', 'vertical-plugins');
+    if (!fs.existsSync(pluginsDir)) {
+        console.warn('[FinancialSkills] Plugin directory not found:', pluginsDir);
+        return _cachedSkills;
+    }
+
+    try {
+        for (const vertical of fs.readdirSync(pluginsDir)) {
+            const skillsDir = path.join(pluginsDir, vertical, 'skills');
+            if (!fs.existsSync(skillsDir) || !fs.statSync(skillsDir).isDirectory()) continue;
+
+            for (const skillName of fs.readdirSync(skillsDir)) {
+                const skillFile = path.join(skillsDir, skillName, 'SKILL.md');
+                if (!fs.existsSync(skillFile)) continue;
+
+                try {
+                    const raw = fs.readFileSync(skillFile, 'utf-8');
+                    // Strip frontmatter
+                    const body = raw.replace(/^---[\s\S]*?---\s*\n/, '');
+                    _cachedSkills.push({
+                        name: skillName,
+                        vertical,
+                        contentTruncated: body.substring(0, 1500),
+                    });
+                } catch { /* skip unreadable files */ }
+            }
+        }
+        console.log(`[FinancialSkills] Loaded ${_cachedSkills.length} skills`);
+    } catch (e) {
+        console.warn('[FinancialSkills] Failed to load skills:', e);
+    }
+
+    return _cachedSkills;
+}
+
+function getRelevantSkillContext(query: string, maxChars = 3000): string {
+    const skills = loadFinancialSkills();
+    const queryLower = query.toLowerCase();
+
+    const scored: { score: number; skill: FinancialSkillEntry }[] = [];
+    for (const skill of skills) {
+        const keywords = SKILL_KEYWORDS[skill.name] || [];
+        let score = 0;
+        for (const kw of keywords) {
+            if (queryLower.includes(kw)) score += kw.split(' ').length * 2;
+        }
+        if (score > 0) scored.push({ score, skill });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    const topSkills = scored.slice(0, 2);
+
+    if (topSkills.length === 0) return '';
+
+    let context = '\n\n## Financial Analysis Methodology (institutional reference library)\n';
+    let remaining = maxChars - context.length;
+
+    for (const { skill } of topSkills) {
+        const header = `\n### ${skill.name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} (${skill.vertical})\n`;
+        const content = skill.contentTruncated.substring(0, Math.max(0, remaining - header.length - 50));
+        if (!content) break;
+        context += header + content + '\n';
+        remaining -= header.length + content.length;
+    }
+
+    return context;
 }
 
 // ─── Data Layer ───────────────────────────────────────────────────────────────
@@ -356,9 +454,13 @@ Timeframe: ${blueprint.timeframe}
 Source Intelligence Summary:
 ${sourceAnalysis.substring(0, 3000)}`.trim();
 
+    // Load relevant financial methodology for adversarial analysis
+    const skillContext = getRelevantSkillContext(blueprint.targetEntities.join(' ') + ' ' + blueprint.researchAngles.join(' '));
+
     const [bullResult, bearResult] = await Promise.allSettled([
         callGemini(
             `You are a BULL-CASE analyst at a top-tier long/long equity fund. You are presenting the upside thesis to the Investment Committee.
+${skillContext}
 
 ${context}
 
@@ -374,6 +476,7 @@ Write as a senior PM would: direct, data-driven, no hedging on the core thesis.`
         ),
         callGemini(
             `You are a BEAR-CASE analyst / short-seller at a top hedge fund presenting the downside thesis to your short-selling committee.
+${skillContext}
 
 ${context}
 
@@ -433,6 +536,7 @@ async function synthesizeInstitutionalReport(
         : '';
 
     const prompt = `You are a Managing Director of Equity Research at Goldman Sachs / Morgan Stanley. You are writing a flagship institutional research report for the most sophisticated investors in the world — sovereign wealth funds, top-tier hedge funds, and multi-family offices. Your work will be cited in Bloomberg terminals and investment committee presentations.
+${getRelevantSkillContext(query, 2000)}
 
 ═══════════════════════════════════════
 RESEARCH MANDATE

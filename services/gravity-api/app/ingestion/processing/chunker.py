@@ -42,6 +42,9 @@ class DocumentMetadata:
     fiscal_year: str = ""
     fiscal_quarter: str = ""
     source_url: str = ""
+    # Form-specific structured data (Form 4 transactions, 13F holdings,
+    # SC 13D/G beneficial ownership). Populated by sec_form_parsers.
+    extra: dict | None = None
 
 
 @dataclass
@@ -50,6 +53,9 @@ class Section:
     name: str
     text: str
     page_start: int | None = None
+    # Canonical SEC item id ("item_1a", "item_7", "item_8", "note_1", etc.).
+    # Stable across header variations — usable as a retrieval filter.
+    item_id: str = ""
 
 
 @dataclass

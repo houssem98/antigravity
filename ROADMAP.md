@@ -170,6 +170,38 @@ Score targets displayed automatically:
 
 `contradiction_detector.py` built and wired as Stage 7 Layer 3. Deterministic cross-passage scan: extracts (entity, metric, period, value) tuples from all retrieved passages, flags pairs with >15% relative difference for the same metric/period across different sources. Zero LLM cost, <5ms. Merged into `contradictions` field of the API response alongside LLM-reported contradictions.
 
+### 3.7 SEC form-specific structured parsing (Form 4, 13F-HR, SC 13D/G) ✅
+
+`sec_form_parsers.py` built. Five new filing types added to `WATCHED_FILING_TYPES`: 4, 13F-HR, SC 13D, SC 13G, 424B4. Form 4 parsed from ownership XML — extracts insider transactions with code, shares, price, post-tx holdings. 13F-HR parsed from informationTable XML — top-50 holdings sorted by value. SC 13D/G regex-parsed from HTML cover page — beneficial ownership %, voting/dispositive splits, Item 4 purpose summary. Stamped onto `metadata.extra["sec_form_data"]` for retrieval filters and downstream agents. Tested: AAPL Form 4 → CEO sale 100K shares @ $225.50; 13F top-holdings sorting; TSLA SC 13D beneficial ownership 13.0%.
+
+### 3.8 XBRL canonical concept mapping + Arelle validation ✅
+
+`xbrl_extractor.py` extended with `CANONICAL_CONCEPTS` table — 22 canonical metrics each with ordered list of GAAP variants (e.g. `revenue` ← `RevenueFromContractWithCustomerExcludingAssessedTax`, `Revenues`, `SalesRevenueNet`, `SalesRevenueGoodsNet`...). Handles tag drift across years. `canonicalize_concept()` maps any GAAP concept (with/without `us-gaap:` prefix) to canonical name. `fetch_company_facts()` + `extract_facts_from_companyfacts()` consume the SEC `companyfacts` JSON (~all-period XBRL data prebuilt by SEC, no parsing needed). `validate_with_arelle()` runs Arelle's CntlrCmdLine when installed, no-op when missing. Tested: AAPL FY2024 revenue $391,035M correctly extracted from companyfacts.
+
+### 3.9 SEC section tagger with canonical Item IDs + Note refs ✅
+
+`section_detector.py` extended. Each section now carries `item_id` (e.g. `item_1a`, `item_7`, `item_8`, `item_9a`) — a stable canonical identifier derived from the SEC item number, decoupled from header-text variations. Added Note-ref detection (`Note 1`, `NOTE 7 — Income Taxes`) emitted as their own sections with `note_N` ids — enables targeted retrieval like "Apple Note 7 income taxes 2024" without depending on text matching. Friendly names mapped via existing `SEC_10K_SECTIONS` dict.
+
+### 3.10 LEI + multi-CIK entity disambiguation ✅
+
+`entity_resolver.py` extended. `ResolvedEntity` gains `lei`, `cusip`, `former_names`, `parent_cik` cross-reference fields. New `disambiguate(mention, top_k)` returns ALL plausible candidates sorted by confidence — fixes the "Apple" vs "Apple Hospitality REIT" silent miss. New `enrich(entity)` lazily fetches LEI from GLEIF public API + former names from SEC submissions JSON, both Redis-cached. Container-based fuzzy match replaces strict token-overlap so short mentions surface multi-word entities. Tested live: AAPL LEI = `HWUPKR0MPOU8FGXBT394`, former names include "Apple Computer Inc" (correct historical alias).
+
+### 3.11 Authority-aware fusion ✅
+
+`fusion.py` extended with `authority_aware_rrf()` and a URL-domain quality table (`sec.gov` 10, IR sites 9, BusinessWire/PR Newswire 7, Bloomberg/Reuters 6, CNBC 5, blogs/social 2). `RetrievalResult.__post_init__` now auto-populates `source_quality` from `metadata.source_url` when not explicitly set. `search_pipeline.py` Stage 4 now uses `authority_aware_rrf(weight=0.15)` — primary filings outrank tier-2 news at score ties without overpowering strong multi-channel news matches.
+
+### 3.12 Patronus Lynx finance hallucination guardrail ✅
+
+`lynx_guardrail.py` built. Two-tier strategy: (1) HF Inference API to `PatronusAI/Llama-3-Patronus-Lynx-70B-Instruct` when `HF_TOKEN` set; (2) LLM-as-Lynx fallback via Sonnet/Opus using the published Lynx rubric (numeric exact-match, period match, entity match, derivable arithmetic permitted). Returns `LynxScore(score=0..1, reasoning, method)`. Wired as Stage 7c into `search_pipeline.py` after FinBERT NLI — populates `validation_result["lynx_score|method|grounded|reasoning"]`. Graceful fallback to neutral 0.5 when no grader configured.
+
+### 3.13 News-tier domain authority extensions ✅
+
+`fusion._DOMAIN_QUALITY` expanded from 22 → 63 entries. Tier 10: SEC/EDGAR + FRED/BEA/BLS + Federal Reserve/Treasury/IMF/World Bank/ECB/OECD + USPTO/FDA/EMA/clinicaltrials.gov. Tier 9: investor.* + ir.* + newsroom.*. Tier 7: BusinessWire/PRNewswire/GlobeNewswire. Tier 6: Bloomberg/Reuters/WSJ/FT/NYT/Economist/WaPo/SP Global/FactSet/Morningstar. Tier 5: CNBC/MarketWatch/Barrons/Forbes/TheStreet/Investors/Investing.com/Yahoo. Tier 4: SeekingAlpha/Fool/Zacks/Benzinga. Tier 3: Medium/Substack. Tier 2: Reddit/Twitter/X/StockTwits/WSB/YouTube. Tier 1: TikTok/Discord/Telegram. Auto-detected from URL via `RetrievalResult.__post_init__`.
+
+### 3.14 PDF deep-fetch for web search results ✅
+
+`app/core/retrieval/web_pdf_fetcher.py`. Free path uses pymupdf (already in requirements). `fetch_and_extract()` honors content-type, follows redirects, caps at 25MB / 200 pages. Per-domain semaphore (limit 2) prevents hammering single hosts. `web_pdf_to_results()` chunks output via sentence-aware splitter (default 1500 chars), tags `document_type="web_pdf"`, derives source_quality from URL via N2 table. Score factor decays with chunk position (earlier = higher). Drop-in for tavily/exa/sonar/firecrawl PDF results.
+
 **Phase 3 exit criterion:** FinanceBench ≥98% · NLI citation recall ≥0.90 · Zero hallucinated numbers on 50-question math test set.
 
 ---
@@ -206,6 +238,10 @@ Score targets displayed automatically:
 
 `gdelt.py` GDELTClient wired as Channel 8 in `RetrievalOrchestrator`. `_gdelt_to_results()` converts articles to `RetrievalResult` with `source_quality=4`. Instantiated in `dependencies.py` alongside other channels.
 
+### 4.6 Social signals — Reddit + StockTwits + SeekingAlpha ✅
+
+`app/ingestion/sources/social_signals.py`. Reddit via public `.json` endpoint (no auth) across 7 default subreddits (wallstreetbets, stocks, investing, SecurityAnalysis, ValueInvesting, options, StockMarket); StockTwits via free `/api/2/streams/symbol/{ticker}.json` returns 30 latest messages w/ bullish/bearish sentiment label; SeekingAlpha returns `[]` unless `SA_API_KEY` set (paid Pro tier; ToS prohibits scraping). All posts converted to `RetrievalResult` with `document_type="social"`, `source_quality=2`, `metadata.unverified=True` so authority-aware fusion deprioritizes — context-only, never citation source per plan §6.9.
+
 **Phase 4 exit criterion:** 26K filings indexed · Vals AI benchmark ≥68% · Real-time filing ingestion <5 min lag.
 
 ---
@@ -234,8 +270,8 @@ Load Balancer (nginx/Caddy)
 
 Remaining gaps (infra):
 - **Prometheus + Grafana**: metrics endpoint at `/metrics` exists; needs Grafana dashboard config
-- **Sentry**: add `sentry-sdk[fastapi]` + `SENTRY_DSN` env var
-- **OpenTelemetry**: full distributed tracing across market-server ↔ gravity-api
+- **Sentry**: ✅ wired via `app/core/telemetry.py:init_sentry()` — graceful no-op without `SENTRY_DSN`
+- **OpenTelemetry**: ✅ wired via `app/core/telemetry.py:init_otel()` — auto-instruments FastAPI + httpx; emits OTLP spans when `OTEL_EXPORTER_OTLP_ENDPOINT` set; no-op otherwise
 
 Key dashboard metrics:
 ```
@@ -247,7 +283,7 @@ Cost per query                (target <$0.05)
 Hallucination rate            (NLI recall <0.6 = flag)
 ```
 
-### 5.3 Compliance for institutional sales ⬜
+### 5.3 Compliance for institutional sales 🔧
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -257,16 +293,18 @@ Hallucination rate            (NLI recall <0.6 = flag)
 | User-level audit trail | ✅ | `user_id` → `UserContext(id=)` in every `AuditEvent`; passed from WS auth |
 | PII redaction logging | ✅ | PIIFilter runs; results not logged (good) |
 | Model governance log | ✅ | `model_used` field on every response |
+| **HITL reviewer audit (FINRA 3110(b)(4))** | ✅ | `record_review()`, `record_export()` on `AuditLogger`; `HumanOversight` carries reviewer_id, role, status, edits[], exports[]; new events chained off the original |
+| **Source-level entitlement ACL** | ✅ | `app.core.security.entitlements` — `UserEntitlements` from JWT; `qdrant_entitlement_filter` + `es_entitlement_filter` enforced **pre-retrieval** in `dense_search.py`, `splade_search.py`; chunks default to `["public"]`; defense-in-depth `filter_visible` post-retrieval check |
+| **MNPI wall-crossing** | ✅ | `app.core.security.mnpi.MNPIRegistry`: per-project information barriers, compliance-officer approval required (no self-approval), required justification reason, time-bounded grants (default 90d), explicit user acknowledgement gate before grant applied, revocation API, hash-chained audit |
+| **Server-side encrypted API key store** | ✅ | `app.core.security.key_store.APIKeyStore` — AES-256-GCM envelope encryption, AAD bound to (tenant_id, key_name) detects row-swap, versioned KEKs with lazy re-wrap, Postgres + in-memory fallback, removes localStorage requirement |
+| **BYOK (customer-managed KMS)** | ✅ | `app.core.security.key_store_byok` — `AWSKMSKEKProvider`, `GCPKMSKEKProvider`, `AzureKVKEKProvider` all implement `KEKProvider` protocol; customer revokes the KMS key → all stored secrets unrecoverable (kill-switch); SDKs imported on demand, zero default footprint |
+| **SAML 2.0 SSO + SCIM v2 directory sync** | ✅ | `app/api/routes/sso.py` — `/v1/sso/saml/login` + `/v1/sso/saml/callback` (WorkOS-compatible); HMAC-signed state nonce; JIT user provisioning; full SCIM v2: POST/GET/PATCH/DELETE/list with `userName eq` filter; per-tenant bearer token via `APIKeyStore`; tenant isolation enforced at every endpoint |
+| **MFA (TOTP) + session timeout + IP allowlist** | ✅ | `app.core.security.session_security` — RFC 6238 TOTP via `pyotp`, 10 single-use recovery codes (SHA-256 stored), `SessionStore` w/ idle (30m default) + absolute (12h default) timeouts + `revoke_all_for_user`, `IPAllowlistRegistry` per-org CIDR (IPv4+IPv6) deny-by-default when populated, validates CIDR on set |
+| **17a-4 WORM audit-trail alternative** | ✅ | `compliance/worm_archive.py` — append-only Postgres table with INSERT-only role grants (UPDATE/DELETE/TRUNCATE explicitly REVOKED), SHA-256 chain over canonical JSON, separate `worm_access_log` table, optional S3 Object Lock COMPLIANCE mirror, default 6yr retention, `verify_chain()` integrity scan detects tampered payloads + broken chain links |
 
-### 5.4 Multi-tenant Qdrant isolation ⬜
+### 5.4 Multi-tenant Qdrant isolation ✅
 
-RBAC (org/workspace/project) is wired. Missing: Qdrant collection-per-tenant for enterprise data isolation.
-
-```python
-# Pattern: {org_id}_gravity_chunks per enterprise tenant
-# Shared collection for public filings
-# Private uploads → org-specific collection
-```
+`collection_for_org(org_id)` in `db/qdrant.py` routes to `{org_id}_gravity_chunks` when `MULTI_TENANT_QDRANT=true`. Safe org ID sanitization (`[a-z0-9_-]` only, 64-char cap). `VectorIndexer.index_chunks(org_id=)`, `DenseSearch`, and `SpladeSearch` all respect the per-tenant collection at both index and query time. Single-tenant default unchanged.
 
 ### 5.5 API productization ⬜
 
@@ -276,7 +314,7 @@ RBAC (org/workspace/project) is wired. Missing: Qdrant collection-per-tenant for
 | Usage metering | ✅ (`usage.py` route) |
 | Stripe metered billing | ⬜ |
 | Python + TypeScript SDKs | ⬜ |
-| Webhook: "new filing indexed" | ⬜ |
+| Webhook: "new filing indexed" | ✅ (`_fire_webhooks` in `sec_edgar.py`; `FILING_WEBHOOK_URLS` + optional `FILING_WEBHOOK_SECRET` HMAC-SHA256) |
 
 **Phase 5 exit criterion:** 3 enterprise beta customers · SOC 2 audit started · 99.9% uptime for 30 days.
 

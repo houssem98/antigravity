@@ -99,6 +99,26 @@ class Settings(BaseSettings):
     turbo_quant_index_path: str = "data/turbo_quant.idx"  # disk snapshot path
     turbo_quant_top_k: int = 50
 
+    # ── MCP Financial Data Connectors ────────────────────────────────────
+    mcp_enabled: bool = False           # set True when any MCP API key is present
+    mcp_timeout_s: float = 15.0         # per-server timeout (seconds)
+    mcp_max_tools_per_server: int = 3   # max tool calls per MCP provider per query
+
+    # ── Multi-tenant isolation ───────────────────────────────────────────
+    # When True, per-org Qdrant collections are used: {org_id}_gravity_chunks
+    # Org ID flows from JWT claims (x-org-id header / sub claim prefix).
+    multi_tenant_qdrant: bool = False
+
+    # ── Filing webhooks ──────────────────────────────────────────────────
+    # Comma-separated list of URLs to POST when a new filing is indexed.
+    # Payload: {"event": "filing.indexed", "filing": {...}}
+    filing_webhook_urls: str = ""
+    filing_webhook_secret: str = ""  # HMAC-SHA256 signing key (optional)
+
+    @property
+    def filing_webhook_url_list(self) -> list[str]:
+        return [u.strip() for u in self.filing_webhook_urls.split(",") if u.strip()]
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]

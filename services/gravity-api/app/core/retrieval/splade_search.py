@@ -23,14 +23,19 @@ class SpladeSearch:
     ) -> list[RetrievalResult]:
         try:
             from qdrant_client import models
-            from app.config import settings
-            from app.db.qdrant import qdrant_client, SPARSE_VECTOR_NAME
+            from app.db.qdrant import qdrant_client, collection_for_org, SPARSE_VECTOR_NAME
+
+            org_id = (filters or {}).get("org_id")
+            collection = collection_for_org(org_id)
 
             sparse_vector = await self.encoder.encode_query(query)
 
-            qdrant_filter = None
+            # Always build a filter — entitlement ACL is mandatory.
+            from app.core.security.entitlements import (
+                UserEntitlements, qdrant_entitlement_filter,
+            )
+            conditions = []
             if filters:
-                conditions = []
                 if filters.get("companies"):
                     conditions.append(models.FieldCondition(
                         key="ticker", match=models.MatchAny(any=filters["companies"])))
@@ -39,10 +44,14 @@ class SpladeSearch:
                         key="filing_type", match=models.MatchAny(any=filters["document_types"])))
                 conditions.append(models.FieldCondition(
                     key="chunk_level", match=models.MatchValue(value=2)))
-                qdrant_filter = models.Filter(must=conditions)
+            user = (filters or {}).get("user_entitlements")
+            if not isinstance(user, UserEntitlements):
+                user = UserEntitlements.public_only()
+            conditions.append(qdrant_entitlement_filter(user))
+            qdrant_filter = models.Filter(must=conditions)
 
             results = await qdrant_client.query_points(
-                collection_name=settings.qdrant_collection,
+                collection_name=collection,
                 query=models.SparseVector(
                     indices=sparse_vector["indices"],
                     values=sparse_vector["values"],

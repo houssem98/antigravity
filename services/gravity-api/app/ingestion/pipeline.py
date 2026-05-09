@@ -303,6 +303,27 @@ class IngestionPipeline:
         if source_url:
             metadata.source_url = source_url
 
+        # Step 2.5: SEC form-specific structured parse for Form 4, 13F-HR,
+        # SC 13D/G. Pulls structured fields (insider transactions, holdings,
+        # beneficial ownership) into metadata.sec_form_data so retrieval
+        # filters and agents can act on them as structured data, not regex.
+        sec_form_data: dict = {}
+        try:
+            from app.ingestion.processing.sec_form_parsers import parse_sec_form
+            sec_form_data = parse_sec_form(metadata.filing_type, content, processed.text) or {}
+            if sec_form_data:
+                if not hasattr(metadata, "extra") or metadata.extra is None:
+                    metadata.extra = {}
+                metadata.extra["sec_form_data"] = sec_form_data
+                logger.info(
+                    "sec_form_parsed",
+                    document_id=document_id,
+                    form=sec_form_data.get("form"),
+                    fields=list(sec_form_data.keys()),
+                )
+        except Exception as e:
+            logger.warning("sec_form_parse_failed", document_id=document_id, error=str(e))
+
         # Step 3: Detect sections
         sections = await asyncio.get_event_loop().run_in_executor(
             None,

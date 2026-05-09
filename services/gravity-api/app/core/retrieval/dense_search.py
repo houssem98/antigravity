@@ -33,9 +33,11 @@ class DenseSearch:
         try:
             from qdrant_client import models
             from app.config import settings
-            from app.db.qdrant import qdrant_client, DENSE_VECTOR_NAME
+            from app.db.qdrant import qdrant_client, collection_for_org, DENSE_VECTOR_NAME
 
             top_k = top_k or settings.dense_search_top_k
+            org_id = (filters or {}).get("org_id")
+            collection = collection_for_org(org_id)
 
             # ── HyDE embedding (preferred) or raw query embedding ────────
             if use_hyde and self.hyde is not None:
@@ -46,7 +48,7 @@ class DenseSearch:
             qdrant_filter = self._build_filter(filters, models) if filters else None
 
             results = await qdrant_client.query_points(
-                collection_name=settings.qdrant_collection,
+                collection_name=collection,
                 query=query_vector,
                 using=DENSE_VECTOR_NAME,
                 query_filter=qdrant_filter,
@@ -132,7 +134,13 @@ class DenseSearch:
         return enriched
 
     def _build_filter(self, filters: dict, models):
-        """Convert API filter dict to Qdrant filter model."""
+        """Convert API filter dict to Qdrant filter model.
+
+        Always applies the entitlement ACL filter when a UserEntitlements
+        object is present in `filters["user_entitlements"]`. This is the
+        primary defense against prompt-injection exfiltration of unlicensed
+        content (plan §6.11). Falls back to public-only when absent.
+        """
         conditions = []
         if filters.get("companies"):
             conditions.append(models.FieldCondition(
@@ -142,4 +150,14 @@ class DenseSearch:
                 key="filing_type", match=models.MatchAny(any=filters["document_types"])))
         conditions.append(models.FieldCondition(
             key="chunk_level", match=models.MatchValue(value=2)))
+
+        # Source-level entitlement ACL — pre-retrieval, fail-closed.
+        from app.core.security.entitlements import (
+            UserEntitlements, qdrant_entitlement_filter,
+        )
+        user = filters.get("user_entitlements")
+        if not isinstance(user, UserEntitlements):
+            user = UserEntitlements.public_only()
+        conditions.append(qdrant_entitlement_filter(user))
+
         return models.Filter(must=conditions)

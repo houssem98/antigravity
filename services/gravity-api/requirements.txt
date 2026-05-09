@@ -26,6 +26,15 @@ cohere>=5.0.0
 numpy>=1.26.0
 transformers>=4.40.0
 sentence-transformers>=3.0.0
+tiktoken>=0.7.0  # token counting for chunker
+aiofiles>=23.2.0  # async JSONL fallback for audit log
+pyotp>=2.9.0  # TOTP MFA (RFC 6238)
+sentry-sdk[fastapi]>=2.0.0   # error tracking (plan §5.2)
+opentelemetry-api>=1.25.0    # distributed tracing (plan §5.2 / §6.13)
+opentelemetry-sdk>=1.25.0
+opentelemetry-instrumentation-fastapi>=0.46b0
+opentelemetry-instrumentation-httpx>=0.46b0
+opentelemetry-exporter-otlp>=1.25.0
 
 # PageIndex — VectifyAI tree-based retrieval (channel 6)
 # pip install litellm pymupdf PyPDF2

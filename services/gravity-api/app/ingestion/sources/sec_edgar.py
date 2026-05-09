@@ -17,6 +17,8 @@ User-Agent: required by EDGAR — must identify application + contact email.
 
 import asyncio
 import hashlib
+import hmac
+import json
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -32,8 +34,19 @@ EDGAR_FULL_INDEX = "https://www.sec.gov/Archives/edgar/full-index"
 # Required by EDGAR — change to your real contact info
 USER_AGENT = "GravitySearch/1.0 (gravity@antigravity.ai)"
 
-# Filing types to monitor
-WATCHED_FILING_TYPES = ["10-K", "10-Q", "8-K"]
+# Filing types to monitor.
+# 10-K/Q/8-K = periodic. Form 4 = insider tx. 13F-HR = institutional holdings.
+# SC 13D/G = activist / passive 5%+ stakes. DEF 14A = proxy. S-1/424B4 = registration.
+WATCHED_FILING_TYPES = [
+    "10-K", "10-Q", "8-K",
+    "4",         # insider transactions (Form 4)
+    "13F-HR",    # institutional holdings quarterly
+    "SC 13D",    # activist 5%+ stake
+    "SC 13G",    # passive 5%+ stake
+    "DEF 14A",   # proxy statement
+    "S-1",       # IPO registration
+    "424B4",     # IPO prospectus
+]
 
 # Rate limiting: 10 req/s max
 _REQUEST_SEMAPHORE = asyncio.Semaphore(10)
@@ -127,6 +140,7 @@ class SECEdgarSource:
                 await self._ingest_filing(filing)
                 await self._mark_seen(accession)
                 new_count += 1
+                asyncio.create_task(self._fire_webhooks(filing))
             except Exception as e:
                 logger.warning(
                     "edgar_ingest_failed",
@@ -136,6 +150,44 @@ class SECEdgarSource:
 
         if new_count:
             logger.info("edgar_new_filings", filing_type=filing_type, count=new_count)
+
+    async def _fire_webhooks(self, filing: dict):
+        """POST filing.indexed event to all registered webhook URLs (fire-and-forget)."""
+        from app.config import settings
+        urls = settings.filing_webhook_url_list
+        if not urls:
+            return
+
+        payload = json.dumps({
+            "event": "filing.indexed",
+            "filing": {
+                "ticker": filing.get("ticker", ""),
+                "company_name": filing.get("company_name", ""),
+                "filing_type": filing.get("filing_type", ""),
+                "filing_date": filing.get("filing_date", ""),
+                "accession_number": filing.get("accession_number", ""),
+                "url": filing.get("url", ""),
+            },
+            "indexed_at": datetime.utcnow().isoformat() + "Z",
+        }).encode()
+
+        secret = settings.filing_webhook_secret.encode() if settings.filing_webhook_secret else None
+        sig = (
+            "sha256=" + hmac.new(secret, payload, "sha256").hexdigest()
+            if secret else ""
+        )
+
+        headers = {"Content-Type": "application/json"}
+        if sig:
+            headers["X-Gravity-Signature"] = sig
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            for url in urls:
+                try:
+                    resp = await client.post(url, content=payload, headers=headers)
+                    logger.info("webhook_fired", url=url, status=resp.status_code)
+                except Exception as e:
+                    logger.warning("webhook_failed", url=url, error=str(e))
 
     async def _fetch_rss_feed(self, filing_type: str) -> list[dict]:
         """Fetch EDGAR RSS feed for a filing type."""

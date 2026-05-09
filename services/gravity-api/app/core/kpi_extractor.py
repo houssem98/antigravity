@@ -165,8 +165,8 @@ Rules:
 
 Return a JSON array. Example:
 [
-  {"metric": "revenue_cloud", "label": "Cloud Revenue", "value": 24.1, "unit": "USD_billions", "period": "Q3 2024", "segment": "Cloud", "confidence": 1.0},
-  {"metric": "operating_margin_total", "label": "Operating Margin", "value": 28.5, "unit": "percent", "period": "Q3 2024", "segment": "Total", "confidence": 1.0}
+  {{"metric": "revenue_cloud", "label": "Cloud Revenue", "value": 24.1, "unit": "USD_billions", "period": "Q3 2024", "segment": "Cloud", "confidence": 1.0}},
+  {{"metric": "operating_margin_total", "label": "Operating Margin", "value": 28.5, "unit": "percent", "period": "Q3 2024", "segment": "Total", "confidence": 1.0}}
 ]
 
 PASSAGE (filing: {filing_type}, section: {section}):
