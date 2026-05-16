@@ -77,3 +77,6 @@ respx>=0.22.0
 
 # LLM Evaluation (deepeval RAG triad)
 deepeval>=2.0.0
+
+# Memory system (local-first, semantic search)
+mempalace>=3.3.5

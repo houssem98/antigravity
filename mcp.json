@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mempalace": {
+      "command": "mempalace-mcp",
+      "args": ["--palace", "~/.mempalace/antigravity"],
+      "description": "Local-first AI memory system with semantic search",
+      "disabled": false
+    }
+  }
+}
