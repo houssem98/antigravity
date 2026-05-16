@@ -21,6 +21,7 @@ openai>=1.40.0
 google-genai>=0.8.0
 cohere>=5.0.0
 # voyageai>=0.3.0  # Fails to build on Python 3.14
+hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git
 
 # ML / Embeddings (optional — gracefully degrade if not available)
 numpy>=1.26.0
@@ -29,6 +30,13 @@ sentence-transformers>=3.0.0
 tiktoken>=0.7.0  # token counting for chunker
 aiofiles>=23.2.0  # async JSONL fallback for audit log
 pyotp>=2.9.0  # TOTP MFA (RFC 6238)
+passlib>=1.7.4  # password hashing (pbkdf2_sha256, no native deps)
+python-jose[cryptography]>=3.3.0  # JWT signing
+email-validator>=2.0.0  # pydantic EmailStr validation
+stripe>=15.0.0  # billing (A6) — kept for future non-TN deployments
+paddle-billing>=1.2.0  # Paddle Billing v2 SDK
+python-coinbase>=2.0.0  # Coinbase Commerce crypto payments
+qrcode[pil]>=7.4.0  # crypto wallet QR codes
 sentry-sdk[fastapi]>=2.0.0   # error tracking (plan §5.2)
 opentelemetry-api>=1.25.0    # distributed tracing (plan §5.2 / §6.13)
 opentelemetry-sdk>=1.25.0
@@ -66,3 +74,6 @@ langfuse>=2.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
 respx>=0.22.0
+
+# LLM Evaluation (deepeval RAG triad)
+deepeval>=2.0.0
