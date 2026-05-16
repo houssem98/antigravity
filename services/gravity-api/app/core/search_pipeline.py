@@ -671,6 +671,16 @@ class SearchPipeline:
                     f"## Conversation Context (prior turns)\n{conversation_context}\n\n"
                     + user_content
                 )
+
+            # Memory augmentation — inject semantically-similar past queries
+            try:
+                from app.core.memory_context import augment_context_with_memory
+                memory_ctx = await augment_context_with_memory(query, max_memory_results=3)
+                if memory_ctx:
+                    user_content = memory_ctx + "\n\n" + user_content
+            except Exception as _mem_err:
+                logger.debug("memory_augmentation_skipped", trace_id=trace_id, error=str(_mem_err))
+
             user_msg = LLMMessage(role="user", content=user_content)
 
             # Decide whether to use self-consistency (MATH/COMPLEX, non-streaming)
@@ -1027,6 +1037,20 @@ class SearchPipeline:
                     "answer": validated_answer,
                     "sources": source_data,
                 })
+
+            # Store in memory palace (fire-and-forget, non-blocking)
+            try:
+                from app.core.memory_context import store_search_result
+                _answer_text = parsed_answer if isinstance(parsed_answer, str) else str(parsed_answer)[:1000]
+                _source_ids = [str(s.get("id", s.get("source_id", ""))) for s in source_data[:5]]
+                asyncio.create_task(store_search_result(
+                    query=query,
+                    answer=_answer_text[:2000],
+                    sources=_source_ids,
+                    category=query_plan.get("intent", "general"),
+                ))
+            except Exception as _store_err:
+                logger.debug("memory_store_skipped", trace_id=trace_id, error=str(_store_err))
 
             # ── Stage 10: Yield Metadata ────────────────────────────────
             total_ms = (time.perf_counter() - start) * 1000
