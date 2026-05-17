@@ -552,9 +552,9 @@ interface ResearchBudget {
 }
 
 export const DEFAULT_BUDGET: ResearchBudget = {
-    maxLLMCalls: 30,
-    maxEstimatedTokens: 800_000,
-    maxSearchRounds: 4,
+    maxLLMCalls: 100,
+    maxEstimatedTokens: 2_000_000,
+    maxSearchRounds: 8,
     // maxCostUsd left undefined = no dollar cap by default
 };
 
