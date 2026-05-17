@@ -1,0 +1,57 @@
+name: Fly.io Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/gravity-api/**'
+      - 'services/market-server/**'
+      - '.github/workflows/fly-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: fly-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gravity: ${{ steps.filter.outputs.gravity }}
+      market: ${{ steps.filter.outputs.market }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gravity:
+              - 'services/gravity-api/**'
+            market:
+              - 'services/market-server/**'
+
+  deploy-gravity-api:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.gravity == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy gravity-api
+        working-directory: services/gravity-api
+        run: flyctl deploy --remote-only --app gravity-api-prod
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_GRAVITY }}
+
+  deploy-market-server:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.market == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy market-server
+        working-directory: services/market-server
+        run: flyctl deploy --remote-only --app market-server-prod
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_MARKET }}

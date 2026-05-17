@@ -13,7 +13,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.config import settings
 from app.api.routes import search, documents, entities, health, usage, workspaces, feedback
-from app.api.routes import grid_search, analytics, sso
+from app.api.routes import grid_search, analytics, sso, auth as auth_routes, billing
 from app.db.qdrant import qdrant_client
 from app.db.elasticsearch import es_client
 from app.db.neo4j import neo4j_driver
@@ -33,6 +33,14 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(create_all_tables(), timeout=5.0)
     except Exception as e:
         logger.warning("postgres_startup_skipped", error=str(e))
+
+    # Startup: billing schema (non-fatal)
+    try:
+        from app.api.routes.billing import ensure_billing_schema
+        pool = getattr(app.state, "pg_pool", None)
+        await ensure_billing_schema(pool)
+    except Exception as e:
+        logger.warning("billing_schema_skipped", error=str(e))
 
     # Startup: verify all connections
     await _verify_connections()
@@ -267,8 +275,13 @@ app.include_router(feedback.router, tags=["Feedback"])
 app.include_router(grid_search.router, tags=["Grid"])
 app.include_router(analytics.router, tags=["Analytics"])
 app.include_router(sso.router, tags=["SSO/SCIM"])
-from app.api.routes import claude
+app.include_router(auth_routes.router)
+app.include_router(billing.router)
+from app.api.routes import claude, hermes
 app.include_router(claude.router, prefix="/v1", tags=["Claude Managed Agents"])
+app.include_router(hermes.router, prefix="/v1", tags=["Hermes Agent"])
+from app.api.routes import forecast
+app.include_router(forecast.router, tags=["Forecast (Kronos)"])
 
 # ── Prometheus-compatible /metrics endpoint ──────────────────────────────
 @app.get("/metrics", include_in_schema=False)

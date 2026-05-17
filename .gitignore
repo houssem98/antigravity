@@ -47,3 +47,10 @@ htmlcov/
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# ── External reference repos (not part of this codebase) ──
+FinceptTerminal-main/
+TradingAgents-main/
+
+# ── Claude tool runtime ──
+.claude/scheduled_tasks.lock

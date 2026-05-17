@@ -242,6 +242,10 @@ Score targets displayed automatically:
 
 `app/ingestion/sources/social_signals.py`. Reddit via public `.json` endpoint (no auth) across 7 default subreddits (wallstreetbets, stocks, investing, SecurityAnalysis, ValueInvesting, options, StockMarket); StockTwits via free `/api/2/streams/symbol/{ticker}.json` returns 30 latest messages w/ bullish/bearish sentiment label; SeekingAlpha returns `[]` unless `SA_API_KEY` set (paid Pro tier; ToS prohibits scraping). All posts converted to `RetrievalResult` with `document_type="social"`, `source_quality=2`, `metadata.unverified=True` so authority-aware fusion deprioritizes — context-only, never citation source per plan §6.9.
 
+### 4.7 Crypto signals — DefiLlama + Coinpaprika + Messari + CoinGecko ✅
+
+`app/ingestion/sources/crypto_signals.py` (plan §6.8). Free path: DefiLlama protocols (top 50 by TVL, sorted desc) + chain TVL (top 30) + stablecoins (peg deviation + supply) + yields (>$1M TVL pools, sorted by APY); Coinpaprika global market stats + top-N tickers (rank, 24h %, mcap); Messari news (uses `MESSARI_API_KEY` if set, else anonymous limited rate); CoinGecko trending. Paid path env-gated: `KAIKO_API_KEY` → spot OHLC; `GLASSNODE_API_KEY` → on-chain metrics; both return `[]` cleanly when absent. All convert to `RetrievalResult` with `document_type="crypto"`, `source_quality=4`, `metadata.kind` ∈ {tvl, ohlc, onchain, news, stablecoin, protocol, yield, trending, ticker, global}. `fetch_all_crypto_signals()` fans out concurrently over all free sources. Tested with 11 cases incl. 429-graceful fallback.
+
 **Phase 4 exit criterion:** 26K filings indexed · Vals AI benchmark ≥68% · Real-time filing ingestion <5 min lag.
 
 ---

@@ -78,7 +78,7 @@ async def scroll_all_chunks(es_url: str, index: str, scroll_size: int):
                     "chunk_id", "document_id", "text", "text_with_metadata",
                     "ticker", "company_name", "filing_type", "filing_date",
                     "document_title", "section", "page", "chunk_level",
-                    "token_count", "position",
+                    "token_count", "position", "entitlements",
                 ],
             },
         )
@@ -217,6 +217,9 @@ async def run_sync(args):
             chunk_id = chunk.get("chunk_id") or str(uuid.uuid4())
             point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
+            ents = chunk.get("entitlements")
+            if not isinstance(ents, list) or not ents:
+                ents = ["public"]
             points.append(qmodels.PointStruct(
                 id=point_id,
                 vector={DENSE_VECTOR_NAME: dense},
@@ -235,6 +238,7 @@ async def run_sync(args):
                     "chunk_level":    chunk.get("chunk_level", 2),
                     "token_count":    chunk.get("token_count"),
                     "position":       chunk.get("position"),
+                    "entitlements":   ents,   # ACL — pre-retrieval filter (P0.1)
                 },
             ))
             synced_ids.add(chunk_id)

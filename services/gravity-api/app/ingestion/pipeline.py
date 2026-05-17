@@ -92,8 +92,7 @@ class IngestionPipeline:
 
         try:
             from app.ingestion.indexing.keyword_indexer import KeywordIndexer
-            from app.db.elasticsearch import get_es_client
-            keyword_indexer = KeywordIndexer(es_client=get_es_client())
+            keyword_indexer = KeywordIndexer()
         except Exception as e:
             logger.warning("keyword_indexer_unavailable", error=str(e))
 

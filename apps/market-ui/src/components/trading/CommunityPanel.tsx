@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Search, RefreshCw, ExternalLink, TrendingUp, TrendingDown, Minus, Zap, AlertCircle, Youtube, PlayCircle, Volume2, VolumeX, Maximize2 } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3002';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Influencer {
   id: string;
@@ -542,7 +544,7 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
     if (!force && Date.now() - lastFetched < 60_000) return;
     setStatus('loading'); setErrorMsg('');
     try {
-      const res  = await fetch(`/api/social/influencers/${asset}?page=1&limit=20`, { signal: AbortSignal.timeout(18_000) });
+      const res  = await fetch(`${API_BASE}/api/social/influencers/${asset}?page=1&limit=20`, { signal: AbortSignal.timeout(18_000) });
       const json = await res.json() as { posts?: any[]; pagination?: any; source?: string; sources?: any; error?: string };
       if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
       if (!json.posts?.length) throw new Error('No posts returned');
@@ -570,7 +572,7 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
     setLoadingMore(true);
     try {
       const nextPage = page + 1;
-      const res = await fetch(`/api/social/influencers/${currentAsset}?page=${nextPage}&limit=20`, { signal: AbortSignal.timeout(18_000) });
+      const res = await fetch(`${API_BASE}/api/social/influencers/${currentAsset}?page=${nextPage}&limit=20`, { signal: AbortSignal.timeout(18_000) });
       const json = await res.json() as { posts?: any[]; pagination?: any; error?: string };
       if (!res.ok || json.error || !json.posts?.length) return;
       setInfluencers(prev => [...prev, ...json.posts!.map(mapPost)]);
@@ -595,7 +597,7 @@ export const CommunityPanel: React.FC<CommunityPanelProps> = ({ currentAsset }) 
   // Fetch trending coins
   const fetchTrending = useCallback(async () => {
     try {
-      const res = await fetch('/api/social/trending');
+      const res = await fetch(`${API_BASE}/api/social/trending`);
       const j   = await res.json() as { trending?: { coin: string; count: number }[] };
       setTrending(j.trending ?? []);
     } catch { /* silent */ }

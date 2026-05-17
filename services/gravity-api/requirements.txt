@@ -34,8 +34,7 @@ passlib>=1.7.4  # password hashing (pbkdf2_sha256, no native deps)
 python-jose[cryptography]>=3.3.0  # JWT signing
 email-validator>=2.0.0  # pydantic EmailStr validation
 stripe>=15.0.0  # billing (A6) — kept for future non-TN deployments
-paddle-billing>=1.2.0  # Paddle Billing v2 SDK
-python-coinbase>=2.0.0  # Coinbase Commerce crypto payments
+# Paddle + Coinbase use raw httpx (no SDK needed)
 qrcode[pil]>=7.4.0  # crypto wallet QR codes
 sentry-sdk[fastapi]>=2.0.0   # error tracking (plan §5.2)
 opentelemetry-api>=1.25.0    # distributed tracing (plan §5.2 / §6.13)
@@ -80,3 +79,8 @@ deepeval>=2.0.0
 
 # Memory system (local-first, semantic search)
 mempalace>=3.3.5
+
+# Time-series forecasting (Kronos foundation model)
+einops>=0.8.0
+safetensors>=0.4.0
+# torch + huggingface_hub already pulled by transformers
