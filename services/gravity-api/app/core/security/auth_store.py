@@ -72,6 +72,8 @@ class UserRecord:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_login_at: Optional[datetime] = None
     disabled: bool = False
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
 
 
 # DDL — append-only-ish; updates only allowed for last_login_at, password_hash,
@@ -88,10 +90,17 @@ CREATE TABLE IF NOT EXISTS auth_users (
     mfa_secret     TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login_at  TIMESTAMPTZ,
-    disabled       BOOLEAN NOT NULL DEFAULT FALSE
+    disabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    email_verified_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_users_org ON auth_users (org_id);
 """
+
+USER_MIGRATIONS = [
+    "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ",
+]
 
 
 # ─── Auth store ───────────────────────────────────────────────────────────────
@@ -121,6 +130,11 @@ class AuthStore:
                 # citext extension for case-insensitive email
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS citext")
                 await conn.execute(USER_DDL)
+                for stmt in USER_MIGRATIONS:
+                    try:
+                        await conn.execute(stmt)
+                    except Exception as me:
+                        logger.warning("auth_migration_failed", stmt=stmt[:80], error=str(me))
         except Exception as e:
             logger.warning("auth_schema_init_failed", error=str(e))
 
@@ -187,7 +201,8 @@ class AuthStore:
                 async with self.db.acquire() as conn:
                     row = await conn.fetchrow(
                         "SELECT user_id, email, password_hash, org_id, role, entitlements, "
-                        "mfa_enabled, mfa_secret, created_at, last_login_at, disabled "
+                        "mfa_enabled, mfa_secret, created_at, last_login_at, disabled, "
+                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at "
                         "FROM auth_users WHERE email = $1",
                         norm,
                     )
@@ -204,7 +219,8 @@ class AuthStore:
                 async with self.db.acquire() as conn:
                     row = await conn.fetchrow(
                         "SELECT user_id, email, password_hash, org_id, role, entitlements, "
-                        "mfa_enabled, mfa_secret, created_at, last_login_at, disabled "
+                        "mfa_enabled, mfa_secret, created_at, last_login_at, disabled, "
+                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at "
                         "FROM auth_users WHERE user_id = $1",
                         user_id,
                     )
@@ -243,6 +259,8 @@ class AuthStore:
             created_at=row["created_at"],
             last_login_at=row["last_login_at"],
             disabled=bool(row["disabled"]),
+            email_verified=bool(row["email_verified"]) if "email_verified" in row.keys() else False,
+            email_verified_at=row["email_verified_at"] if "email_verified_at" in row.keys() else None,
         )
 
     # ── Verify password (constant-time) ──────────────────────────────────
@@ -333,6 +351,26 @@ class AuthStore:
         if rec is not None:
             rec.mfa_enabled = True
             rec.mfa_secret = secret_b32
+        return True
+
+    # ── Email verification ───────────────────────────────────────────────
+
+    async def mark_email_verified(self, user_id: str) -> bool:
+        now = datetime.now(timezone.utc)
+        if self.db is not None:
+            try:
+                async with self.db.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE auth_users SET email_verified = TRUE, "
+                        "email_verified_at = $1 WHERE user_id = $2",
+                        now, user_id,
+                    )
+            except Exception as e:
+                logger.warning("auth_mark_verified_failed", error=str(e))
+        rec = self._mem.get(user_id)
+        if rec is not None:
+            rec.email_verified = True
+            rec.email_verified_at = now
         return True
 
     # ── JWT issue / verify ───────────────────────────────────────────────

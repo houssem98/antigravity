@@ -186,6 +186,54 @@ export const getSession = async () => {
     return session;
 };
 
+// ─── Phase 1 auth flows: verify email, forgot password ────────────────────────
+
+export const requestEmailVerification = async (email: string): Promise<void> => {
+    if (!USE_GRAVITY_API_AUTH) {
+        // Supabase has a different flow; for now no-op when not on gravity-api.
+        return;
+    }
+    await gravityFetch('/v1/auth/verify/request', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+    });
+};
+
+export const confirmEmailVerification = async (token: string): Promise<void> => {
+    if (!USE_GRAVITY_API_AUTH) return;
+    await gravityFetch('/v1/auth/verify/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+    });
+};
+
+export const requestPasswordReset = async (email: string): Promise<void> => {
+    if (DEV_AUTH_BYPASS) return;
+    if (USE_GRAVITY_API_AUTH) {
+        await gravityFetch('/v1/auth/password/reset/request', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        });
+        return;
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) throw error;
+};
+
+export const confirmPasswordReset = async (token: string, newPassword: string): Promise<void> => {
+    if (!USE_GRAVITY_API_AUTH) {
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) throw error;
+        return;
+    }
+    await gravityFetch('/v1/auth/password/reset/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ token, new_password: newPassword }),
+    });
+};
+
 export const getAccessToken = async (): Promise<string | null> => {
     if (DEV_AUTH_BYPASS) {
         return getDevSession()?.access_token || null;

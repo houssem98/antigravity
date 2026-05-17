@@ -1,6 +1,6 @@
 // Auth Page — Login & Sign Up
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { signIn, signUp } from '../services/supabase';
 import { Brain, Loader2, Mail, Lock, ArrowRight, Sparkles } from 'lucide-react';
 
@@ -120,6 +120,18 @@ export default function AuthPage() {
                         {success && (
                             <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
                                 {success}
+                            </div>
+                        )}
+
+                        {/* Forgot password link — login mode only */}
+                        {isLogin && (
+                            <div className="flex justify-end -mt-1">
+                                <Link
+                                    to="/forgot-password"
+                                    className="text-xs text-[#A7B0C8] hover:text-[#00F0FF] transition-colors"
+                                >
+                                    Forgot password?
+                                </Link>
                             </div>
                         )}
 
