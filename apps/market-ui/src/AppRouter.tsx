@@ -16,6 +16,10 @@ import CompanyPage from './pages/CompanyPage';
 import DocumentsPage from './pages/DocumentsPage';
 import TradingAssistantPage from './pages/TradingAssistantPage';
 import InvestorsPage from './pages/InvestorsPage';
+import BillingPage from './pages/BillingPage';
+import BillingSuccessPage from './pages/BillingSuccessPage';
+import BillingCancelPage from './pages/BillingCancelPage';
+import AdminBillingPage from './pages/AdminBillingPage';
 
 function ProtectedRoute({ children, session }: { children: React.ReactNode; session: Session | null }) {
     if (!session) return <Navigate to="/auth" replace />;
@@ -61,6 +65,10 @@ export default function AppRouter() {
             {/* Investors — public waitlist landing */}
             <Route path="/investors" element={<InvestorsPage />} />
 
+            {/* Billing success/cancel — public so Stripe can redirect without session */}
+            <Route path="/billing/success" element={<BillingSuccessPage />} />
+            <Route path="/billing/cancel" element={<BillingCancelPage />} />
+
             {/* Protected */}
             <Route element={
                 <ProtectedRoute session={session}>
@@ -83,6 +91,8 @@ export default function AppRouter() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/documents" element={<DocumentsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/billing" element={<BillingPage />} />
+                <Route path="/admin/billing" element={<AdminBillingPage />} />
             </Route>
         </Routes>
     );

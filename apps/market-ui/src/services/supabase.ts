@@ -1,15 +1,22 @@
-// Supabase Client — frontend auth + §6.11 RBAC org/workspace/project helpers
+// Auth client — three back-end modes:
+//   1. "gravity_api"   — self-hosted FastAPI auth (P-A1). Default when
+//                        VITE_GRAVITY_API_URL is set and VITE_DEV_AUTH_BYPASS != "true".
+//   2. "supabase"      — legacy Supabase Auth (paused project).
+//   3. "dev_bypass"    — VITE_DEV_AUTH_BYPASS=true (fake localStorage session).
+//
+// RBAC + workspace endpoints continue routing through market-server (`API`).
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key';
 
-// Dev-mode auth bypass — set VITE_DEV_AUTH_BYPASS=true in apps/market-ui/.env
-// when Supabase project is paused / DNS-failing / not yet provisioned.
-// Stores a fake session in localStorage so the app boots and protected
-// routes work without hitting Supabase. NEVER enable in production.
 const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true';
+const GRAVITY_API_URL = import.meta.env.VITE_GRAVITY_API_URL || 'http://localhost:8000';
+const USE_GRAVITY_API_AUTH =
+    !DEV_AUTH_BYPASS && (import.meta.env.VITE_AUTH_BACKEND ?? 'gravity_api') === 'gravity_api';
+
 const DEV_SESSION_KEY = 'gravity_dev_session_v1';
+const GRAVITY_SESSION_KEY = 'gravity_api_session_v1';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -49,11 +56,77 @@ function setDevSession(email: string): DevSession {
     return s;
 }
 
+// ─── Gravity-API auth helpers ─────────────────────────────────────────────────
+
+interface GravitySession {
+    access_token: string;
+    refresh_token: string;
+    user: { id: string; email: string; org_id?: string };
+    expires_at: number;        // unix seconds
+}
+
+function getGravitySession(): GravitySession | null {
+    try {
+        const raw = localStorage.getItem(GRAVITY_SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw) as GravitySession;
+        if (Date.now() / 1000 > s.expires_at) {
+            localStorage.removeItem(GRAVITY_SESSION_KEY);
+            return null;
+        }
+        return s;
+    } catch {
+        return null;
+    }
+}
+
+function saveGravitySession(payload: {
+    access_token: string;
+    refresh_token: string;
+    user: { user_id: string; email: string; org_id?: string };
+}): GravitySession {
+    const s: GravitySession = {
+        access_token: payload.access_token,
+        refresh_token: payload.refresh_token,
+        user: { id: payload.user.user_id, email: payload.user.email, org_id: payload.user.org_id },
+        expires_at: Math.floor(Date.now() / 1000) + 12 * 3600,  // matches backend JWT TTL
+    };
+    localStorage.setItem(GRAVITY_SESSION_KEY, JSON.stringify(s));
+    return s;
+}
+
+async function gravityFetch(path: string, init?: RequestInit) {
+    const res = await fetch(`${GRAVITY_API_URL}${path}`, {
+        ...init,
+        headers: {
+            'Content-Type': 'application/json',
+            ...((init?.headers ?? {}) as Record<string, string>),
+        },
+    });
+    if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+            const body = await res.json();
+            if (typeof body?.detail === 'string') detail = body.detail;
+        } catch { /* ignore */ }
+        throw new Error(detail);
+    }
+    return res.status === 204 ? null : res.json();
+}
+
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
-export const signUp = async (email: string, password: string) => {
+export const signUp = async (email: string, password: string, orgId: string = '') => {
     if (DEV_AUTH_BYPASS) {
         const s = setDevSession(email);
+        return { user: s.user, session: s };
+    }
+    if (USE_GRAVITY_API_AUTH) {
+        const data = await gravityFetch('/v1/auth/signup', {
+            method: 'POST',
+            body: JSON.stringify({ email, password, org_id: orgId }),
+        });
+        const s = saveGravitySession(data);
         return { user: s.user, session: s };
     }
     const { data, error } = await supabase.auth.signUp({ email, password });
@@ -61,10 +134,18 @@ export const signUp = async (email: string, password: string) => {
     return data;
 };
 
-export const signIn = async (email: string, password: string) => {
+export const signIn = async (email: string, password: string, mfaCode?: string) => {
     if (DEV_AUTH_BYPASS) {
         if (!email || !password) throw new Error('email + password required');
         const s = setDevSession(email);
+        return { user: s.user, session: s };
+    }
+    if (USE_GRAVITY_API_AUTH) {
+        const data = await gravityFetch('/v1/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password, mfa_code: mfaCode || null }),
+        });
+        const s = saveGravitySession(data);
         return { user: s.user, session: s };
     }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -77,6 +158,19 @@ export const signOut = async () => {
         localStorage.removeItem(DEV_SESSION_KEY);
         return;
     }
+    if (USE_GRAVITY_API_AUTH) {
+        const tok = getGravitySession()?.access_token;
+        if (tok) {
+            try {
+                await fetch(`${GRAVITY_API_URL}/v1/auth/logout`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${tok}` },
+                });
+            } catch { /* best effort */ }
+        }
+        localStorage.removeItem(GRAVITY_SESSION_KEY);
+        return;
+    }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 };
@@ -85,6 +179,9 @@ export const getSession = async () => {
     if (DEV_AUTH_BYPASS) {
         return getDevSession();
     }
+    if (USE_GRAVITY_API_AUTH) {
+        return getGravitySession();
+    }
     const { data: { session } } = await supabase.auth.getSession();
     return session;
 };
@@ -92,6 +189,9 @@ export const getSession = async () => {
 export const getAccessToken = async (): Promise<string | null> => {
     if (DEV_AUTH_BYPASS) {
         return getDevSession()?.access_token || null;
+    }
+    if (USE_GRAVITY_API_AUTH) {
+        return getGravitySession()?.access_token || null;
     }
     const session = await getSession();
     return session?.access_token || null;

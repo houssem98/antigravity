@@ -1,13 +1,115 @@
 services:
+  # ── Gravity API (FastAPI) ─────────────────────────────────────────────
+  - type: web
+    name: gravity-api
+    runtime: python
+    plan: starter         # bump to standard for prod
+    rootDir: services/gravity-api
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Core
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PORT
+        value: 10000        # Render injects but uvicorn needs $PORT explicit
+      # Self-hosted auth (A1)
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+      # KEK for envelope-encrypted API key store (P0.4) — Render generates 32B
+      - key: KEY_ENCRYPTION_KEY_V1
+        generateValue: true
+      # SAML state-signing secret (P0.6)
+      - key: SAML_STATE_SECRET
+        generateValue: true
+      # CORS — set after market-ui deployed
+      - key: CORS_ORIGINS
+        sync: false
+      # LLM providers
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY_SECONDARY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Databases — wired via Render-managed PG + Render Redis below
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gravity-pg
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: gravity-redis
+          type: redis
+          property: connectionString
+      # External vector + ES — provision separately (Qdrant Cloud + Elastic Cloud)
+      - key: QDRANT_URL
+        sync: false
+      - key: ELASTICSEARCH_URL
+        sync: false
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      # Optional integrations
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: QUARTR_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      # Observability (N4)
+      - key: SENTRY_DSN
+        sync: false
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      # Filing webhooks
+      - key: FILING_WEBHOOK_URLS
+        sync: false
+      - key: FILING_WEBHOOK_SECRET
+        generateValue: true
+
+  # ── Market Server (Express proxy / RBAC API) ──────────────────────────
   - type: web
     name: market-server
     runtime: node
+    plan: starter
     rootDir: services/market-server
     buildCommand: npm install && npm run build
     startCommand: npm run start
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: GRAVITY_API_URL
+        fromService:
+          name: gravity-api
+          type: web
+          property: hostport
       - key: GEMINI_API_KEY
         sync: false
       - key: TAVILY_API_KEY
@@ -18,19 +120,22 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
-      - key: GRAVITY_API_URL
-        value: https://gravity-api.onrender.com
-
-  - type: web
-    name: gravity-api
-    runtime: python
-    rootDir: services/gravity-api
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: GOOGLE_API_KEY
+      - key: DEEPSEEK_API_KEY
         sync: false
-      - key: ENVIRONMENT
-        value: production
+      - key: GROQ_API_KEY
+        sync: false
+
+  # ── Redis (managed) ───────────────────────────────────────────────────
+  - type: redis
+    name: gravity-redis
+    plan: starter
+    ipAllowList: []   # private — only accessible from Render services
+
+databases:
+  - name: gravity-pg
+    plan: starter         # 256MB / 1GB. Bump to standard for prod.
+    databaseName: gravity_search
+    user: antigravity
+    postgresMajorVersion: 16

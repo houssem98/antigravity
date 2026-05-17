@@ -220,6 +220,11 @@ FINANCIAL_ANALYZER = {
 }
 
 
+def get_es_client() -> ESLazyClient:
+    """Return the shared Elasticsearch client singleton."""
+    return es_client
+
+
 async def ensure_index():
     """Create the Elasticsearch index with financial analyzer if it doesn't exist."""
     index = settings.elasticsearch_index

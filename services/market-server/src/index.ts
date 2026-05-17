@@ -13,6 +13,7 @@ import { llmRouter } from './routes/llm.js';
 import { tavilyRouter } from './routes/tavily.js';
 import { orgsRouter } from './routes/orgs.js';
 import { claudeRouter } from './routes/claude.js';
+import { hermesRouter } from './routes/hermes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -91,8 +92,17 @@ wss.on('connection', (ws) => {
 });
 
 // Middleware
+const corsOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'http://localhost:5177', 'http://localhost:4173'];
+
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'http://localhost:5177', 'http://localhost:4173'],
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (corsOrigins.includes(origin)) return callback(null, true);
+        if (corsOrigins.some(o => o.includes('*.vercel.app')) && origin.endsWith('.vercel.app')) return callback(null, true);
+        return callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -121,6 +131,7 @@ app.use('/api/llm', llmRouter);
 app.use('/api/tavily', tavilyRouter);
 app.use('/api/orgs', orgsRouter);
 app.use('/api/claude', claudeRouter);
+app.use('/api/hermes', hermesRouter);
 
 // Start server
 server.listen(PORT, () => {

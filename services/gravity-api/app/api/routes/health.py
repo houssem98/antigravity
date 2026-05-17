@@ -78,6 +78,68 @@ async def health():
     }
 
 
+@router.get("/status")
+async def status_page():
+    """
+    Public status page (A8). Component-level health for status pages and
+    monitoring. Returns 200 always; status is in the body so probes don't
+    auto-trip on degraded subsystems.
+
+    Recommended polling: Statuspage / Better Uptime / UptimeRobot every 60s.
+    Caches for 30s on the response.
+    """
+    start = time.perf_counter()
+    redis_s, es_s, qdrant_s, neo4j_s = await asyncio.gather(
+        _check_redis(), _check_elasticsearch(), _check_qdrant(), _check_neo4j(),
+        return_exceptions=True,
+    )
+
+    def _safe(r):
+        if isinstance(r, Exception):
+            return {"status": "error", "error": str(r)}
+        return r
+
+    components = {
+        "redis":          _safe(redis_s),
+        "elasticsearch":  _safe(es_s),
+        "qdrant":         _safe(qdrant_s),
+        "neo4j":          _safe(neo4j_s),
+    }
+    overall = "operational"
+    if any(v.get("status") == "error" for v in components.values()):
+        overall = "major_outage"
+    elif any(v.get("status") == "degraded" for v in components.values()):
+        overall = "degraded"
+
+    from fastapi.responses import JSONResponse
+    body = {
+        "status": overall,
+        "service": settings.app_name,
+        "version": settings.app_version,
+        "components": components,
+        "checked_at": time.time(),
+        "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+    }
+    return JSONResponse(content=body, status_code=200,
+                        headers={"Cache-Control": "public, max-age=30"})
+
+
+@router.get("/_internal/sentry-ping")
+async def sentry_ping():
+    """Trigger a captured exception in Sentry — verify alerts wired."""
+    import os
+    if not os.getenv("SENTRY_DSN"):
+        return {"status": "skipped", "reason": "no SENTRY_DSN"}
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(
+            "gravity_api_sentry_ping (health check)", level="info",
+        )
+        return {"status": "sent"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
 @router.get("/ready")
 async def readiness():
     """

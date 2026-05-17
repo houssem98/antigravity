@@ -3,7 +3,7 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
     Zap, BarChart3, Settings, Sparkles,
-    Activity, LogOut, History, Building2, Database, TrendingUp,
+    Activity, LogOut, History, Building2, Database, TrendingUp, CreditCard, ShieldCheck,
 } from 'lucide-react';
 import { signOut } from '../services/supabase';
 
@@ -14,6 +14,8 @@ const NAV = [
     { to: '/companies', icon: Building2, label: 'Companies' },
     { to: '/dashboard', icon: BarChart3, label: 'Dashboard' },
     { to: '/documents', icon: Database, label: 'Documents' },
+    { to: '/billing', icon: CreditCard, label: 'Billing' },
+    { to: '/admin/billing', icon: ShieldCheck, label: 'Admin — Billing' },
     { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
@@ -21,10 +23,11 @@ export default function AppLayout() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const isActive = (path: string) =>
-        path === '/companies'
-            ? location.pathname.startsWith('/companies')
-            : location.pathname === path;
+    const isActive = (path: string) => {
+        if (path === '/companies') return location.pathname.startsWith('/companies');
+        if (path === '/admin/billing') return location.pathname.startsWith('/admin');
+        return location.pathname === path;
+    };
 
     const handleSignOut = async () => {
         await signOut();
