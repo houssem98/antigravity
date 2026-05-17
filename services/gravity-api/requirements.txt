@@ -84,4 +84,5 @@ mempalace>=3.3.5
 # Time-series forecasting (Kronos foundation model)
 einops>=0.8.0
 safetensors>=0.4.0
+pandas>=2.2.0  # required by app/api/routes/forecast.py (Kronos forecast endpoint)
 # torch + huggingface_hub already pulled by transformers
