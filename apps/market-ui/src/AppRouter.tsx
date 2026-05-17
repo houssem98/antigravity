@@ -6,6 +6,9 @@ import type { Session } from '@supabase/supabase-js';
 import AppLayout from './components/AppLayout';
 import LandingPage from './pages/LandingPage';
 import AuthPage from './pages/AuthPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
@@ -58,6 +61,9 @@ export default function AppRouter() {
             {/* Public */}
             <Route path="/" element={<LandingPage />} />
             <Route path="/auth" element={session ? <Navigate to="/search" replace /> : <AuthPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
 
             {/* Trading — fullscreen with its own sidebar */}
             <Route path="/trading" element={<TradingAssistantPage />} />

@@ -27,6 +27,11 @@ from app.core.security.auth_store import AuthStore, UserRecord
 from app.core.security.session_security import (
     SessionStore, generate_totp_secret, verify_totp, MFASecret,
 )
+from app.core.security import auth_rate_limit, auth_tokens
+from app.core.security.password_policy import check_password
+from app.core.email_sender import (
+    send_email, render, verify_link, reset_link,
+)
 
 logger = structlog.get_logger()
 
@@ -98,7 +103,15 @@ def _user_dict(u: UserRecord) -> dict:
         "role": u.role,
         "entitlements": u.entitlements,
         "mfa_enabled": u.mfa_enabled,
+        "email_verified": u.email_verified,
     }
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else ""
 
 
 async def _current_user(
@@ -122,6 +135,13 @@ async def _current_user(
 
 @router.post("/signup", response_model=TokenResponse, status_code=201)
 async def signup(req: SignupRequest, request: Request):
+    ip = _client_ip(request)
+    await auth_rate_limit.enforce("signup", ip=ip, email=req.email)
+
+    policy = await check_password(req.password, email=req.email)
+    if not policy.ok:
+        raise HTTPException(status_code=400, detail="; ".join(policy.reasons))
+
     store = get_auth_store(request)
     try:
         user = await store.create_user(
@@ -129,6 +149,17 @@ async def signup(req: SignupRequest, request: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # Fire-and-forget verification email. Never block signup if email fails.
+    try:
+        token = await auth_tokens.issue_token(user.user_id, "verify")
+        await send_email(
+            to=user.email,
+            subject="Verify your email — AlphaSense AI",
+            html=render("verify", link=verify_link(token)),
+        )
+    except Exception as e:
+        logger.warning("auth_verify_email_failed", error=str(e), user_id=user.user_id)
 
     access = store.issue_access_token(user)
     refresh = store.issue_refresh_token(user)
@@ -142,6 +173,9 @@ async def signup(req: SignupRequest, request: Request):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest, request: Request):
+    ip = _client_ip(request)
+    await auth_rate_limit.enforce("login", ip=ip, email=req.email)
+
     store = get_auth_store(request)
     user = await store.verify_password(req.email, req.password)
     if user is None:
@@ -203,9 +237,13 @@ async def change_password(
     verified = await store.verify_password(user.email, req.current_password)
     if verified is None:
         raise HTTPException(status_code=401, detail="current password incorrect")
+    policy = await check_password(req.new_password, email=user.email)
+    if not policy.ok:
+        raise HTTPException(status_code=400, detail="; ".join(policy.reasons))
     await store.change_password(user.user_id, req.new_password)
     sess = get_session_store()
     sess.revoke_all_for_user(user.user_id)   # force re-login everywhere
+    await auth_tokens.revoke_all_for_user(user.user_id, "reset")
     logger.info("auth_password_changed", user_id=user.user_id)
 
 
@@ -243,3 +281,107 @@ async def mfa_verify(
     store = get_auth_store(request)
     await store.enable_mfa(user.user_id, x_mfa_secret)
     logger.info("auth_mfa_enabled", user_id=user.user_id)
+
+
+# ─── Email verification ──────────────────────────────────────────────────────
+
+class VerifyRequest(BaseModel):
+    email: EmailStr
+
+
+class TokenOnly(BaseModel):
+    token: str = Field(min_length=10, max_length=2048)
+
+
+@router.post("/verify/request", status_code=202)
+async def verify_request(req: VerifyRequest, request: Request):
+    """Send (or re-send) an email-verification link. Always returns 202 to avoid
+    account enumeration."""
+    ip = _client_ip(request)
+    await auth_rate_limit.enforce("verify_request", ip=ip, email=req.email)
+
+    store = get_auth_store(request)
+    user = await store.get_by_email(req.email)
+    if user is not None and not user.email_verified and not user.disabled:
+        try:
+            token = await auth_tokens.issue_token(user.user_id, "verify")
+            await send_email(
+                to=user.email,
+                subject="Verify your email — AlphaSense AI",
+                html=render("verify", link=verify_link(token)),
+            )
+        except Exception as e:
+            logger.warning("auth_verify_resend_failed", error=str(e))
+    return {"status": "ok"}
+
+
+@router.post("/verify/confirm", status_code=204)
+async def verify_confirm(req: TokenOnly, request: Request):
+    user_id = await auth_tokens.consume_token(req.token, "verify")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    store = get_auth_store(request)
+    user = await store.get_by_id(user_id)
+    if user is None or user.disabled:
+        raise HTTPException(status_code=400, detail="user not found")
+    await store.mark_email_verified(user_id)
+    logger.info("auth_email_verified", user_id=user_id)
+
+
+# ─── Password reset (forgot password) ────────────────────────────────────────
+
+class ResetRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetConfirm(BaseModel):
+    token: str = Field(min_length=10, max_length=2048)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+@router.post("/password/reset/request", status_code=202)
+async def password_reset_request(req: ResetRequest, request: Request):
+    """Email a single-use reset link. Always 202 to prevent account enumeration."""
+    ip = _client_ip(request)
+    await auth_rate_limit.enforce("reset_request", ip=ip, email=req.email)
+
+    store = get_auth_store(request)
+    user = await store.get_by_email(req.email)
+    if user is not None and not user.disabled:
+        try:
+            token = await auth_tokens.issue_token(user.user_id, "reset")
+            await send_email(
+                to=user.email,
+                subject="Reset your password — AlphaSense AI",
+                html=render("reset", link=reset_link(token)),
+            )
+            logger.info("auth_reset_requested", user_id=user.user_id)
+        except Exception as e:
+            logger.warning("auth_reset_email_failed", error=str(e))
+    return {"status": "ok"}
+
+
+@router.post("/password/reset/confirm", status_code=204)
+async def password_reset_confirm(req: ResetConfirm, request: Request):
+    ip = _client_ip(request)
+    await auth_rate_limit.enforce("reset_confirm", ip=ip)
+
+    user_id = await auth_tokens.consume_token(req.token, "reset")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+
+    store = get_auth_store(request)
+    user = await store.get_by_id(user_id)
+    if user is None or user.disabled:
+        raise HTTPException(status_code=400, detail="user not found")
+
+    policy = await check_password(req.new_password, email=user.email)
+    if not policy.ok:
+        raise HTTPException(status_code=400, detail="; ".join(policy.reasons))
+
+    await store.change_password(user.user_id, req.new_password)
+
+    sess = get_session_store()
+    sess.revoke_all_for_user(user.user_id)
+    await auth_tokens.revoke_all_for_user(user.user_id, "reset")
+    logger.info("auth_password_reset", user_id=user.user_id)

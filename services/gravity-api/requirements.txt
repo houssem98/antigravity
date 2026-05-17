@@ -31,6 +31,7 @@ tiktoken>=0.7.0  # token counting for chunker
 aiofiles>=23.2.0  # async JSONL fallback for audit log
 pyotp>=2.9.0  # TOTP MFA (RFC 6238)
 passlib>=1.7.4  # password hashing (pbkdf2_sha256, no native deps)
+zxcvbn>=4.4.28  # password strength scoring (Dropbox)
 python-jose[cryptography]>=3.3.0  # JWT signing
 email-validator>=2.0.0  # pydantic EmailStr validation
 stripe>=15.0.0  # billing (A6) — kept for future non-TN deployments
