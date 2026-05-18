@@ -36,7 +36,8 @@ python-jose[cryptography]>=3.3.0  # JWT signing
 email-validator>=2.0.0  # pydantic EmailStr validation
 stripe>=15.0.0  # billing (A6) — kept for future non-TN deployments
 # Paddle + Coinbase use raw httpx (no SDK needed)
-qrcode[pil]>=7.4.0  # crypto wallet QR codes
+qrcode[pil]>=7.4.0  # crypto wallet QR codes + MFA enrollment QR
+pypng>=0.20220715  # pure-Python PNG backend for qrcode (MFA QR)
 sentry-sdk[fastapi]>=2.0.0   # error tracking (plan §5.2)
 opentelemetry-api>=1.25.0    # distributed tracing (plan §5.2 / §6.13)
 opentelemetry-sdk>=1.25.0

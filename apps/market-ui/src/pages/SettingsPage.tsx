@@ -136,6 +136,23 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-6 panel-bg panel-border rounded-xl p-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 className="text-sm font-medium mb-1">Two-factor authentication</h3>
+                        <p className="text-xs text-[color:var(--muted)]">
+                            Add a second factor (TOTP authenticator app) to your sign-in. Recommended.
+                        </p>
+                    </div>
+                    <a
+                        href="/settings/mfa"
+                        className="shrink-0 px-4 py-2 rounded-xl border border-[color:var(--accent)]/40 text-sm text-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 transition-all"
+                    >
+                        Set up 2FA
+                    </a>
+                </div>
+            </div>
+
+            <div className="mt-6 panel-bg panel-border rounded-xl p-4">
                 <h3 className="text-sm font-medium mb-2">Security Model</h3>
                 <p className="text-xs text-[color:var(--muted)] leading-relaxed">
                     All third-party API calls (LLM, Tavily, Alpha Vantage) are proxied through the authenticated

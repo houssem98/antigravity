@@ -234,6 +234,63 @@ export const confirmPasswordReset = async (token: string, newPassword: string): 
     });
 };
 
+// ─── Phase 2: MFA (TOTP + recovery codes) ────────────────────────────────────
+
+export interface MfaEnrollResponse {
+    secret: string;
+    provisioning_uri: string;
+}
+
+export interface MfaVerifyResponse {
+    mfa_enabled: boolean;
+    recovery_codes: string[];
+}
+
+async function gravityAuthFetch(path: string, init?: RequestInit) {
+    const token = await getGravityToken();
+    if (!token) throw new Error('not authenticated');
+    return gravityFetch(path, {
+        ...init,
+        headers: {
+            Authorization: `Bearer ${token}`,
+            ...((init?.headers ?? {}) as Record<string, string>),
+        },
+    });
+}
+
+async function getGravityToken(): Promise<string | null> {
+    if (DEV_AUTH_BYPASS) return getDevSession()?.access_token ?? null;
+    if (USE_GRAVITY_API_AUTH) return getGravitySession()?.access_token ?? null;
+    return (await getSession())?.access_token ?? null;
+}
+
+export const mfaEnroll = (): Promise<MfaEnrollResponse> =>
+    gravityAuthFetch('/v1/auth/mfa/enroll', { method: 'POST' });
+
+export const mfaVerify = async (secret: string, code: string): Promise<MfaVerifyResponse> =>
+    gravityAuthFetch('/v1/auth/mfa/verify', {
+        method: 'POST',
+        headers: { 'X-MFA-Secret': secret },
+        body: JSON.stringify({ code }),
+    });
+
+export const mfaDisable = (password: string): Promise<void> =>
+    gravityAuthFetch('/v1/auth/mfa/disable', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+    });
+
+export const mfaRecoveryRegenerate = (password: string): Promise<{ recovery_codes: string[] }> =>
+    gravityAuthFetch('/v1/auth/mfa/recovery/regenerate', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+    });
+
+export const mfaQrUrl = (secret: string, email: string): string => {
+    const params = new URLSearchParams({ secret, email });
+    return `${GRAVITY_API_URL}/v1/auth/mfa/qr?${params.toString()}`;
+};
+
 export const getAccessToken = async (): Promise<string | null> => {
     if (DEV_AUTH_BYPASS) {
         return getDevSession()?.access_token || null;

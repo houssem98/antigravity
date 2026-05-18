@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, EmailStr
 from app.core.security.auth_store import AuthStore, UserRecord
 from app.core.security.session_security import (
     SessionStore, generate_totp_secret, verify_totp, MFASecret,
+    generate_recovery_codes, verify_recovery_code,
 )
 from app.core.security import auth_rate_limit, auth_tokens
 from app.core.security.password_policy import check_password
@@ -184,7 +185,17 @@ async def login(req: LoginRequest, request: Request):
     if user.mfa_enabled:
         if not req.mfa_code:
             raise HTTPException(status_code=403, detail="MFA code required")
-        if not verify_totp(user.mfa_secret, req.mfa_code):
+        code = req.mfa_code.strip()
+        passed = False
+        # 6-digit numeric → TOTP. Anything else → try recovery code.
+        if len(code) == 6 and code.isdigit():
+            passed = verify_totp(user.mfa_secret, code)
+        else:
+            matched, remaining = verify_recovery_code(code, user.recovery_codes_hashed)
+            if matched:
+                await store.set_recovery_codes(user.user_id, remaining)
+                passed = True
+        if not passed:
             raise HTTPException(status_code=401, detail="invalid MFA code")
 
     access = store.issue_access_token(user)
@@ -249,7 +260,6 @@ async def change_password(
 
 @router.post("/mfa/enroll")
 async def mfa_enroll(
-    request: Request,
     user: UserRecord = Depends(_current_user),
 ):
     """Returns a fresh TOTP secret + provisioning URI. Not yet active until verify."""
@@ -262,7 +272,29 @@ async def mfa_enroll(
     }
 
 
-@router.post("/mfa/verify", status_code=204)
+@router.get("/mfa/qr", responses={200: {"content": {"image/png": {}}}})
+async def mfa_qr(secret: str, email: str = ""):
+    """Render the provisioning URI for `secret` as a PNG QR code.
+
+    Stateless on purpose — client supplies the secret it received from /enroll
+    so we don't have to persist a half-enrolled record.
+    """
+    import io
+    import qrcode  # type: ignore
+    from qrcode.image.pure import PyPNGImage  # type: ignore
+
+    mfa = MFASecret(user_id="", secret_b32=secret)
+    uri = mfa.provisioning_uri(account_name=email or "user")
+    # PyPNGImage is pure-Python — no PIL/Pillow runtime dep required.
+    img = qrcode.make(uri, image_factory=PyPNGImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    buf.seek(0)
+    from fastapi.responses import Response
+    return Response(content=buf.read(), media_type="image/png")
+
+
+@router.post("/mfa/verify")
 async def mfa_verify(
     req: MFAVerifyRequest,
     request: Request,
@@ -270,9 +302,14 @@ async def mfa_verify(
     x_mfa_secret: Optional[str] = Header(None, alias="X-MFA-Secret"),
 ):
     """
-    Activate MFA. Client must submit:
-      - the secret from /enroll (in X-MFA-Secret header)
-      - a current TOTP code from the authenticator app
+    Activate MFA + return one-time-visible recovery codes.
+
+    Client must submit:
+      - secret from /enroll (in X-MFA-Secret header)
+      - current 6-digit TOTP code from authenticator app
+
+    Response: 10 plaintext recovery codes. **Shown once.** Display them to the
+    user and instruct them to download / store somewhere safe.
     """
     if not x_mfa_secret:
         raise HTTPException(status_code=400, detail="X-MFA-Secret header required")
@@ -280,7 +317,54 @@ async def mfa_verify(
         raise HTTPException(status_code=401, detail="invalid MFA code")
     store = get_auth_store(request)
     await store.enable_mfa(user.user_id, x_mfa_secret)
-    logger.info("auth_mfa_enabled", user_id=user.user_id)
+    plain, hashed = generate_recovery_codes(10)
+    await store.set_recovery_codes(user.user_id, hashed)
+    logger.info("auth_mfa_enabled", user_id=user.user_id, recovery_codes_issued=len(plain))
+    return {"mfa_enabled": True, "recovery_codes": plain}
+
+
+class MFADisableRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/mfa/disable", status_code=204)
+async def mfa_disable(
+    req: MFADisableRequest,
+    request: Request,
+    user: UserRecord = Depends(_current_user),
+):
+    """Require password re-entry to disable MFA (step-up auth)."""
+    store = get_auth_store(request)
+    verified = await store.verify_password(user.email, req.password)
+    if verified is None:
+        raise HTTPException(status_code=401, detail="password incorrect")
+    if not user.mfa_enabled:
+        return
+    await store.disable_mfa(user.user_id)
+    logger.info("auth_mfa_disabled", user_id=user.user_id)
+
+
+class MFARecoveryRegenerateRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/mfa/recovery/regenerate")
+async def mfa_recovery_regenerate(
+    req: MFARecoveryRegenerateRequest,
+    request: Request,
+    user: UserRecord = Depends(_current_user),
+):
+    """Invalidate previous recovery codes + issue a fresh set of 10."""
+    if not user.mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA is not enabled for this account")
+    store = get_auth_store(request)
+    verified = await store.verify_password(user.email, req.password)
+    if verified is None:
+        raise HTTPException(status_code=401, detail="password incorrect")
+    plain, hashed = generate_recovery_codes(10)
+    await store.set_recovery_codes(user.user_id, hashed)
+    logger.info("auth_recovery_codes_regenerated", user_id=user.user_id)
+    return {"recovery_codes": plain}
 
 
 # ─── Email verification ──────────────────────────────────────────────────────
