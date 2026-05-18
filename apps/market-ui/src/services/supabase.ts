@@ -18,7 +18,19 @@ const USE_GRAVITY_API_AUTH =
 const DEV_SESSION_KEY = 'gravity_dev_session_v1';
 const GRAVITY_SESSION_KEY = 'gravity_api_session_v1';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Supabase client kept as a legacy fallback. We disable detectSessionInUrl so
+// stray Supabase magic-link / OAuth callbacks (#access_token=..., #error=...)
+// land harmlessly in the URL fragment — AppRouter scrubs them on mount. With
+// gravity-api now the primary auth backend, the Supabase project should be
+// considered read-only; this prevents accidental session resumption from a
+// token leaked in shared browser history.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+        detectSessionInUrl: false,
+        persistSession: false,
+        autoRefreshToken: false,
+    },
+});
 
 // ─── Dev-mode helpers ─────────────────────────────────────────────────────────
 
