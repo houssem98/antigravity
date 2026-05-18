@@ -2,12 +2,14 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signIn, signUp } from '../services/supabase';
-import { Brain, Loader2, Mail, Lock, ArrowRight, Sparkles } from 'lucide-react';
+import { Brain, Loader2, Mail, Lock, ArrowRight, Sparkles, ShieldCheck } from 'lucide-react';
 
 export default function AuthPage() {
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [mfaCode, setMfaCode] = useState('');
+    const [mfaRequired, setMfaRequired] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -21,18 +23,32 @@ export default function AuthPage() {
 
         try {
             if (isLogin) {
-                await signIn(email, password);
+                await signIn(email, password, mfaCode || undefined);
                 navigate('/search');
             } else {
                 await signUp(email, password);
                 setSuccess('Account created! Check your email to verify, then log in.');
                 setIsLogin(true);
             }
-        } catch (err: any) {
-            setError(err.message || 'Authentication failed');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Authentication failed';
+            // Backend returns 403 "MFA code required" → show MFA challenge step
+            if (/mfa code required/i.test(msg)) {
+                setMfaRequired(true);
+                setError('');
+            } else {
+                setError(msg);
+                if (/invalid MFA code/i.test(msg)) setMfaCode('');
+            }
         } finally {
             setLoading(false);
         }
+    };
+
+    const resetForm = () => {
+        setMfaRequired(false);
+        setMfaCode('');
+        setError('');
     };
 
     return (
@@ -77,6 +93,46 @@ export default function AuthPage() {
                         </button>
                     </div>
 
+                    {mfaRequired ? (
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div className="flex items-center gap-2 text-[#00F0FF]">
+                                <ShieldCheck className="w-5 h-5" />
+                                <span className="text-sm font-medium">Two-factor required</span>
+                            </div>
+                            <p className="text-xs text-[#A7B0C8]">
+                                Enter the 6-digit code from your authenticator app, or a recovery code.
+                            </p>
+                            <input
+                                type="text"
+                                inputMode="text"
+                                value={mfaCode}
+                                onChange={(e) => setMfaCode(e.target.value)}
+                                placeholder="000000  or  recovery-code"
+                                required
+                                autoFocus
+                                className="w-full px-4 py-3 text-center text-lg tracking-widest font-mono rounded-lg bg-[#0D1225] border border-[rgba(0,240,255,0.1)] text-[#F4F6FF] placeholder-[#A7B0C8]/30 focus:outline-none focus:border-[#00F0FF]/40"
+                            />
+                            {error && (
+                                <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                                    {error}
+                                </div>
+                            )}
+                            <button
+                                type="submit"
+                                disabled={loading || mfaCode.length < 6}
+                                className="w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium text-sm transition-all disabled:opacity-50 bg-gradient-to-r from-[#4285F4] via-[#9B72CB] to-[#D96570] text-white"
+                            >
+                                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Verify'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={resetForm}
+                                className="w-full text-xs text-[#A7B0C8] hover:text-[#F4F6FF]"
+                            >
+                                ← Use a different account
+                            </button>
+                        </form>
+                    ) : (
                     <form onSubmit={handleSubmit} className="space-y-4">
                         {/* Email */}
                         <div>
@@ -151,6 +207,7 @@ export default function AuthPage() {
                             )}
                         </button>
                     </form>
+                    )}
 
                     {/* Features */}
                     {!isLogin && (

@@ -9,6 +9,7 @@ import AuthPage from './pages/AuthPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
+import MfaSetupPage from './pages/MfaSetupPage';
 
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
@@ -97,6 +98,7 @@ export default function AppRouter() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/documents" element={<DocumentsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/mfa" element={<MfaSetupPage />} />
                 <Route path="/billing" element={<BillingPage />} />
                 <Route path="/admin/billing" element={<AdminBillingPage />} />
             </Route>

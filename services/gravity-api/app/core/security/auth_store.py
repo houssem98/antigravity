@@ -74,6 +74,7 @@ class UserRecord:
     disabled: bool = False
     email_verified: bool = False
     email_verified_at: Optional[datetime] = None
+    recovery_codes_hashed: list[str] = field(default_factory=list)
 
 
 # DDL — append-only-ish; updates only allowed for last_login_at, password_hash,
@@ -100,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_users_org ON auth_users (org_id);
 USER_MIGRATIONS = [
     "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ",
+    "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS recovery_codes_hashed JSONB NOT NULL DEFAULT '[]'::jsonb",
 ]
 
 
@@ -202,7 +204,8 @@ class AuthStore:
                     row = await conn.fetchrow(
                         "SELECT user_id, email, password_hash, org_id, role, entitlements, "
                         "mfa_enabled, mfa_secret, created_at, last_login_at, disabled, "
-                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at "
+                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at, "
+                        "COALESCE(recovery_codes_hashed, '[]'::jsonb) AS recovery_codes_hashed "
                         "FROM auth_users WHERE email = $1",
                         norm,
                     )
@@ -220,7 +223,8 @@ class AuthStore:
                     row = await conn.fetchrow(
                         "SELECT user_id, email, password_hash, org_id, role, entitlements, "
                         "mfa_enabled, mfa_secret, created_at, last_login_at, disabled, "
-                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at "
+                        "COALESCE(email_verified, FALSE) AS email_verified, email_verified_at, "
+                        "COALESCE(recovery_codes_hashed, '[]'::jsonb) AS recovery_codes_hashed "
                         "FROM auth_users WHERE user_id = $1",
                         user_id,
                     )
@@ -261,7 +265,26 @@ class AuthStore:
             disabled=bool(row["disabled"]),
             email_verified=bool(row["email_verified"]) if "email_verified" in row.keys() else False,
             email_verified_at=row["email_verified_at"] if "email_verified_at" in row.keys() else None,
+            recovery_codes_hashed=(
+                self._parse_codes(row["recovery_codes_hashed"])
+                if "recovery_codes_hashed" in row.keys() else []
+            ),
         )
+
+    @staticmethod
+    def _parse_codes(val) -> list[str]:
+        import json
+        if val is None:
+            return []
+        if isinstance(val, str):
+            try:
+                v = json.loads(val)
+            except Exception:
+                return []
+            return list(v) if isinstance(v, list) else []
+        if isinstance(val, list):
+            return list(val)
+        return []
 
     # ── Verify password (constant-time) ──────────────────────────────────
 
@@ -351,6 +374,41 @@ class AuthStore:
         if rec is not None:
             rec.mfa_enabled = True
             rec.mfa_secret = secret_b32
+        return True
+
+    async def disable_mfa(self, user_id: str) -> bool:
+        if self.db is not None:
+            try:
+                async with self.db.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE auth_users SET mfa_enabled = FALSE, mfa_secret = '', "
+                        "recovery_codes_hashed = '[]'::jsonb WHERE user_id = $1",
+                        user_id,
+                    )
+            except Exception:
+                pass
+        rec = self._mem.get(user_id)
+        if rec is not None:
+            rec.mfa_enabled = False
+            rec.mfa_secret = ""
+            rec.recovery_codes_hashed = []
+        return True
+
+    async def set_recovery_codes(self, user_id: str, hashed: list[str]) -> bool:
+        import json
+        if self.db is not None:
+            try:
+                async with self.db.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE auth_users SET recovery_codes_hashed = $1::jsonb "
+                        "WHERE user_id = $2",
+                        json.dumps(hashed), user_id,
+                    )
+            except Exception as e:
+                logger.warning("auth_set_recovery_failed", error=str(e))
+        rec = self._mem.get(user_id)
+        if rec is not None:
+            rec.recovery_codes_hashed = list(hashed)
         return True
 
     # ── Email verification ───────────────────────────────────────────────
