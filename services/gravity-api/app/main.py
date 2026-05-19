@@ -17,7 +17,7 @@ from app.api.routes import grid_search, analytics, sso, auth as auth_routes, bil
 from app.db.qdrant import qdrant_client
 from app.db.elasticsearch import es_client
 from app.db.neo4j import neo4j_driver
-from app.db.postgres import engine as pg_engine, create_all_tables
+from app.db.postgres import engine as pg_engine, create_all_tables, init_pool
 from app.db.redis import redis_client
 
 logger = structlog.get_logger()
@@ -27,6 +27,20 @@ logger = structlog.get_logger()
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("Starting Gravity Search", version=settings.app_version, env=settings.app_env)
+
+    # Startup: asyncpg pool (non-fatal if DATABASE_URL absent)
+    await init_pool()
+    from app.db.postgres import get_db_pool as _get_pool
+    app.state.pg_pool = _get_pool()
+
+    # Startup: auth schema + reset cached store so it picks up real pool
+    try:
+        from app.core.security.auth_store import AuthStore
+        import app.api.routes.auth as _auth_mod
+        _auth_mod._AUTH_STORE = None  # force re-init with real pool on first request
+        await AuthStore(db_pool=app.state.pg_pool).ensure_schema()
+    except Exception as e:
+        logger.warning("auth_schema_startup_skipped", error=str(e))
 
     # Startup: create tables + enable TimescaleDB hypertable (non-fatal if DB unavailable)
     try:
