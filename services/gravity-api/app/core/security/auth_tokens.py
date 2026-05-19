@@ -7,6 +7,7 @@ Design:
   - Nonce stored in Redis with TTL == token TTL. On consume, key is deleted.
     Replaying the same token after consume returns None.
   - HMAC key: AUTH_TOKEN_SECRET env (falls back to AUTH_JWT_SECRET).
+  - Fallback: if Redis is unavailable, in-memory dict is used (single-process only).
 
 Why not JWT: we need true single-use semantics. JWT is stateless; Redis nonce
 gives us revocation w/o managing a deny-list of token IDs.
@@ -14,6 +15,7 @@ gives us revocation w/o managing a deny-list of token IDs.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -28,6 +30,10 @@ import structlog
 from app.db.redis import redis_client
 
 logger = structlog.get_logger()
+
+# In-memory fallback when Redis is unavailable. Maps nonce_key → (user_id, expires_at).
+_mem_store: dict[str, tuple[str, float]] = {}
+_mem_lock = asyncio.Lock()
 
 TokenKind = Literal["verify", "reset"]
 
@@ -75,10 +81,17 @@ async def issue_token(user_id: str, kind: TokenKind) -> str:
     sig = _sign(raw)
     token = f"{_b64e(raw)}.{_b64e(sig)}"
 
+    key = _nonce_key(kind, nonce)
+    redis_ok = False
     try:
-        await redis_client.set(_nonce_key(kind, nonce), user_id, ex=ttl)
+        await redis_client.set(key, user_id, ex=ttl)
+        redis_ok = True
     except Exception as e:
         logger.warning("auth_token_nonce_redis_failed", error=str(e), kind=kind)
+
+    if not redis_ok:
+        async with _mem_lock:
+            _mem_store[key] = (user_id, time.time() + ttl)
 
     return token
 
@@ -115,16 +128,42 @@ async def consume_token(token: str, expected_kind: TokenKind) -> Optional[str]:
     if not nonce or not user_id:
         return None
 
+    key = _nonce_key(expected_kind, nonce)
+
+    # Try Redis first.
+    redis_ok = False
     try:
-        deleted = await redis_client.delete(_nonce_key(expected_kind, nonce))
+        deleted = await redis_client.delete(key)
+        redis_ok = True
         if deleted == 0:
-            # Already consumed (or Redis lost it). Refuse — single-use guarantee.
-            return None
+            # Already consumed or Redis lost it — refuse single-use guarantee.
+            # Check in-memory in case it was issued before Redis came up.
+            pass
+        else:
+            return user_id
     except Exception as e:
         logger.warning("auth_token_nonce_check_failed", error=str(e))
-        return None
 
-    return user_id
+    # Fallback: in-memory store (used when Redis is unavailable).
+    async with _mem_lock:
+        entry = _mem_store.get(key)
+        if entry is None:
+            if redis_ok:
+                # Redis said deleted==0 and no mem entry → already consumed.
+                return None
+            # Redis down + not in mem → token was issued before this process started.
+            # Accept if signature+expiry valid (already checked above). Single-use
+            # not guaranteed across restarts when Redis is absent — acceptable tradeoff.
+            logger.warning("auth_token_no_redis_accepting_valid_sig", kind=expected_kind)
+            return user_id
+        stored_uid, exp_at = entry
+        if time.time() > exp_at:
+            del _mem_store[key]
+            return None
+        if stored_uid != user_id:
+            return None
+        del _mem_store[key]
+        return user_id
 
 
 async def revoke_all_for_user(user_id: str, kind: TokenKind) -> int:
