@@ -1,6 +1,6 @@
 // Auth Page — Login & Sign Up
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { signIn, signUp } from '../services/supabase';
 import { Brain, Loader2, Mail, Lock, ArrowRight, Sparkles, ShieldCheck } from 'lucide-react';
 
@@ -13,7 +13,6 @@ export default function AuthPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const navigate = useNavigate();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -24,7 +23,10 @@ export default function AuthPage() {
         try {
             if (isLogin) {
                 await signIn(email, password, mfaCode || undefined);
-                navigate('/search');
+                // Full reload so AppRouter re-reads session from localStorage.
+                // navigate() alone preserves stale session state in AppRouter.
+                window.location.assign('/search');
+                return;
             } else {
                 await signUp(email, password);
                 setSuccess('Account created! Check your email to verify, then log in.');
