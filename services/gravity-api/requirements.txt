@@ -21,7 +21,7 @@ anthropic>=0.34.0
 openai>=1.40.0
 google-genai>=0.8.0
 cohere>=5.0.0
-# voyageai>=0.3.0  # Fails to build on Python 3.14
+voyageai>=0.3.0  # Fly runs Python 3.12 — build OK. Local 3.14 fails.
 hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git
 
 # ML / Embeddings (optional — gracefully degrade if not available)
