@@ -431,6 +431,10 @@ async def password_reset_request(req: ResetRequest, request: Request):
 
     store = get_auth_store(request)
     user = await store.get_by_email(req.email)
+    if user is None:
+        # Legacy Supabase user — migrate on-the-fly so reset can proceed.
+        from app.core.security.supabase_migration import import_from_supabase_if_exists
+        user = await import_from_supabase_if_exists(store, req.email)
     if user is not None and not user.disabled:
         try:
             token = await auth_tokens.issue_token(user.user_id, "reset")
