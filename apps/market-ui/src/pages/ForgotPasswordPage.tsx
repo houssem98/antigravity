@@ -11,14 +11,15 @@ export default function ForgotPasswordPage() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        try {
-            await requestPasswordReset(email);
-        } catch (err) {
+        // Don't block UX on backend cold start — show the success state immediately
+        // and let the request complete in the background. Backend always returns
+        // 202 regardless of whether the email exists (anti-enumeration), so there's
+        // nothing actionable to wait for.
+        requestPasswordReset(email).catch((err) => {
             console.warn('reset_request_error', err);
-        } finally {
-            setSubmitted(true);
-            setLoading(false);
-        }
+        });
+        setSubmitted(true);
+        setLoading(false);
     };
 
     return (
