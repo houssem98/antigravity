@@ -54,3 +54,4 @@ TradingAgents-main/
 
 # ── Claude tool runtime ──
 .claude/scheduled_tasks.lock
+.env.production
