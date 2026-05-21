@@ -182,12 +182,18 @@ async def ensure_collection(collection_name: str | None = None):
         
         # Create payload indexes for fast filtering
         # `entitlements` is critical — every search query filters by it (plan §6.11).
+        # `chunk_level` is integer (RAPTOR chunk hierarchy); rest are KEYWORD.
         for field in ["ticker", "company_name", "filing_type", "document_id", "entitlements"]:
             await qdrant_client.create_payload_index(
                 collection_name=collection_name,
                 field_name=field,
                 field_schema=models.PayloadSchemaType.KEYWORD,
             )
+        await qdrant_client.create_payload_index(
+            collection_name=collection_name,
+            field_name="chunk_level",
+            field_schema=models.PayloadSchemaType.INTEGER,
+        )
             
         logger.info("qdrant_collection_created", collection=collection_name)
     except Exception as e:
