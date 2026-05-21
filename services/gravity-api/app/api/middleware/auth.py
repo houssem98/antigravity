@@ -75,12 +75,22 @@ async def _validate_api_key(api_key: str) -> dict | None:
 
 
 async def _validate_jwt(token: str) -> dict | None:
-    """Validate JWT Bearer token."""
+    """Validate JWT Bearer token issued by AuthStore.issue_access_token."""
     try:
-        from jose import jwt, JWTError
-        payload = jwt.decode(token, settings.anthropic_api_key, algorithms=["HS256"])
+        import os
+        from jose import jwt
+        secret = os.getenv("AUTH_JWT_SECRET", "")
+        if not secret:
+            return None
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        if payload.get("type") != "access":
+            return None
         return {
             "user_id": payload.get("sub", "unknown"),
+            "email": payload.get("email", ""),
+            "org_id": payload.get("org_id", ""),
+            "role": payload.get("role", "member"),
+            "entitlements": payload.get("entitlements", []),
             "tier": payload.get("tier", "free"),
         }
     except Exception:
