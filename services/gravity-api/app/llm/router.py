@@ -91,8 +91,8 @@ class LLMRouter:
 
         if settings.google_api_key:
             from app.llm.google_client import GoogleClient
-            self._clients["gemini_flash"] = GoogleClient("gemini-2.0-flash")
-            self._clients["gemini_pro"] = GoogleClient("gemini-2.0-flash")
+            self._clients["gemini_flash"] = GoogleClient("gemini-2.5-flash")
+            self._clients["gemini_pro"] = GoogleClient("gemini-2.5-pro")
 
         if settings.deepseek_api_key:
             from app.llm.deepseek_client import DeepSeekClient

@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning("pipeline_warmup_failed", error=str(_e))
 
+    # Startup: ensure Qdrant collection exists (non-fatal if Qdrant down)
+    try:
+        from app.db.qdrant import ensure_collection
+        await asyncio.wait_for(ensure_collection(), timeout=10.0)
+    except Exception as e:
+        logger.warning("qdrant_ensure_collection_failed", error=str(e))
+
     # Startup: create pageindex_registry table (non-fatal if Postgres unavailable)
     asyncio.create_task(_init_pageindex_registry())
 
