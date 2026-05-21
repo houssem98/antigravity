@@ -5,6 +5,12 @@
       "args": ["--palace", "~/.mempalace/antigravity"],
       "description": "Local-first AI memory system with semantic search",
       "disabled": false
+    },
+    "codegraph": {
+      "command": "npx",
+      "args": ["-y", "@colbymchenry/codegraph", "serve"],
+      "description": "Pre-indexed code knowledge graph (SQLite, tree-sitter, 19+ langs)",
+      "disabled": false
     }
   }
 }
