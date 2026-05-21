@@ -83,20 +83,26 @@ async def lifespan(app: FastAPI):
     # Start hourly routing-override recomputation task
     _override_task = asyncio.create_task(_hourly_routing_recompute())
 
-    # Start SEC EDGAR background polling (new filings every 60 s)
+    # Start SEC EDGAR background polling (new filings every 60 s).
+    # Opt-in via env: heavy on Voyage tokens + Anthropic credits, easy to flood
+    # the LLM budget on a fresh deploy. Set EDGAR_POLLING_ENABLED=true to turn on.
+    import os as _os
     _edgar_source = None
-    try:
-        from app.ingestion.sources.sec_edgar import SECEdgarSource
-        from app.ingestion.pipeline import IngestionPipeline
-        from app.db.redis import redis_client as _redis
-        _edgar_source = SECEdgarSource(
-            ingestion_pipeline=IngestionPipeline.create(),
-            redis_client=_redis,
-        )
-        await _edgar_source.start_background_polling()
-        logger.info("edgar_polling_started")
-    except Exception as e:
-        logger.warning("edgar_polling_failed_to_start", error=str(e))
+    if _os.getenv("EDGAR_POLLING_ENABLED", "").lower() == "true":
+        try:
+            from app.ingestion.sources.sec_edgar import SECEdgarSource
+            from app.ingestion.pipeline import IngestionPipeline
+            from app.db.redis import redis_client as _redis
+            _edgar_source = SECEdgarSource(
+                ingestion_pipeline=IngestionPipeline.create(),
+                redis_client=_redis,
+            )
+            await _edgar_source.start_background_polling()
+            logger.info("edgar_polling_started")
+        except Exception as e:
+            logger.warning("edgar_polling_failed_to_start", error=str(e))
+    else:
+        logger.info("edgar_polling_disabled", reason="EDGAR_POLLING_ENABLED not set")
 
     yield
 
