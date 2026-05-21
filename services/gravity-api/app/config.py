@@ -44,6 +44,7 @@ class Settings(BaseSettings):
 
     # ── Database URLs ───────────────────────────────────────────────────
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""  # required for Qdrant Cloud
     qdrant_collection: str = "gravity_chunks"
     elasticsearch_url: str = "http://localhost:9200"
     elasticsearch_index: str = "gravity_chunks"

@@ -68,7 +68,10 @@ class QdrantLazyClient:
             return
 
         try:
-            client = AsyncQdrantClient(url=settings.qdrant_url, timeout=5)
+            kwargs = {"url": settings.qdrant_url, "timeout": 5}
+            if settings.qdrant_api_key:
+                kwargs["api_key"] = settings.qdrant_api_key
+            client = AsyncQdrantClient(**kwargs)
             # Use get_collections to test the connection eagerly
             await client.get_collections()
             self._client = client
