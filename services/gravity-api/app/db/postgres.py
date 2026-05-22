@@ -31,15 +31,31 @@ async def init_pool() -> None:
         return
     try:
         import asyncpg  # type: ignore
-        # Fly attaches with sslmode=disable (internal Flycast network — no TLS needed).
-        # asyncpg uses ssl= kwarg, not query param, so strip the param and pass ssl=False.
-        no_ssl = "sslmode=disable" in db_url
+        # SSL handling per host:
+        #   - sslmode=disable  → no TLS (Fly internal Flycast network)
+        #   - external hosts   → require TLS (Supabase, RDS, etc.)
+        #   - localhost / *.internal → no TLS
+        no_ssl = (
+            "sslmode=disable" in db_url
+            or "@localhost" in db_url
+            or ".flycast" in db_url
+            or ".internal" in db_url
+        )
         dsn = db_url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
+        ssl_arg: object
+        if no_ssl:
+            ssl_arg = False
+        else:
+            import ssl as _ssl
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            ssl_arg = ctx
         _pool = await asyncpg.create_pool(
             dsn, min_size=1, max_size=5, command_timeout=30,
-            ssl=False if no_ssl else None,
+            ssl=ssl_arg,
         )
-        logger.info("postgres_pool_ready", dsn=dsn[:40] + "...")
+        logger.info("postgres_pool_ready", dsn=dsn[:40] + "...", ssl=not no_ssl)
     except Exception as e:
         logger.warning("postgres_pool_failed", error=str(e))
 
