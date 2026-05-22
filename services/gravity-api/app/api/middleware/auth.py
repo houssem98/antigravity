@@ -75,23 +75,49 @@ async def _validate_api_key(api_key: str) -> dict | None:
 
 
 async def _validate_jwt(token: str) -> dict | None:
-    """Validate JWT Bearer token issued by AuthStore.issue_access_token."""
-    try:
-        import os
-        from jose import jwt
-        secret = os.getenv("AUTH_JWT_SECRET", "")
-        if not secret:
-            return None
-        payload = jwt.decode(token, secret, algorithms=["HS256"])
-        if payload.get("type") != "access":
-            return None
-        return {
-            "user_id": payload.get("sub", "unknown"),
-            "email": payload.get("email", ""),
-            "org_id": payload.get("org_id", ""),
-            "role": payload.get("role", "member"),
-            "entitlements": payload.get("entitlements", []),
-            "tier": payload.get("tier", "free"),
-        }
-    except Exception:
-        return None
+    """
+    Validate JWT Bearer token. Tries two issuers:
+      1. Supabase Auth (SUPABASE_JWT_SECRET) — frontend default
+      2. AuthStore.issue_access_token (AUTH_JWT_SECRET) — legacy gravity-api
+    """
+    import os
+    from jose import jwt
+
+    # Try Supabase JWT first (current frontend issuer).
+    sb_secret = os.getenv("SUPABASE_JWT_SECRET", "")
+    if sb_secret:
+        try:
+            payload = jwt.decode(
+                token, sb_secret, algorithms=["HS256"],
+                audience="authenticated",
+            )
+            return {
+                "user_id": payload.get("sub", "unknown"),
+                "email": payload.get("email", ""),
+                "org_id": "",
+                "role": payload.get("role", "authenticated"),
+                "entitlements": ["public"],
+                "tier": "free",
+            }
+        except Exception:
+            pass
+
+    # Fallback: legacy gravity-api JWTs.
+    own_secret = os.getenv("AUTH_JWT_SECRET", "")
+    if own_secret:
+        try:
+            payload = jwt.decode(token, own_secret, algorithms=["HS256"])
+            if payload.get("type") != "access":
+                return None
+            return {
+                "user_id": payload.get("sub", "unknown"),
+                "email": payload.get("email", ""),
+                "org_id": payload.get("org_id", ""),
+                "role": payload.get("role", "member"),
+                "entitlements": payload.get("entitlements", []),
+                "tier": payload.get("tier", "free"),
+            }
+        except Exception:
+            pass
+
+    return None
