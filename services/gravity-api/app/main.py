@@ -3,6 +3,7 @@ Gravity Search — FastAPI Application Entry Point
 """
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -73,32 +74,19 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning("pipeline_warmup_failed", error=str(_e))
 
-    async def _warm_splade():
-        try:
-            from app.embeddings.splade_encoder import SpladeEncoder
-            from app.dependencies import _get_splade_encoder  # type: ignore
-        except Exception:
+    # SPLADE pre-warm skipped by default — loading the model alongside the
+    # voyageai + transformers + asyncpg pool blows past 4 GB on Fly. Set
+    # SPLADE_WARMUP_ENABLED=true to opt in once memory is bumped.
+    if os.getenv("SPLADE_WARMUP_ENABLED", "").lower() == "true":
+        async def _warm_splade():
             try:
                 from app.embeddings.splade_encoder import SpladeEncoder
-            except Exception as e:
-                logger.warning("splade_warmup_import_failed", error=str(e))
-                return
-            enc = SpladeEncoder()
-            try:
+                enc = SpladeEncoder()
                 await enc.encode_query("warm up")
                 logger.info("splade_warmed_up")
             except Exception as e:
                 logger.warning("splade_warmup_failed", error=str(e))
-            return
-        # Reach for shared encoder instance via dependencies if available.
-        try:
-            enc = _get_splade_encoder()  # type: ignore
-            await enc.encode_query("warm up")
-            logger.info("splade_warmed_up")
-        except Exception as e:
-            logger.warning("splade_warmup_failed", error=str(e))
-
-    asyncio.create_task(_warm_splade())
+        asyncio.create_task(_warm_splade())
 
     # Startup: ensure Qdrant collection exists (non-fatal if Qdrant down)
     try:
