@@ -40,22 +40,47 @@ export default function ResetPasswordPage() {
 
     useEffect(() => {
         if (SUPABASE_AUTH) {
-            // Wait for Supabase to consume the #access_token hash via detectSessionInUrl,
-            // then confirm a session exists before allowing password update.
+            // detectSessionInUrl consumes the recovery hash asynchronously and
+            // fires a PASSWORD_RECOVERY event when ready. Polling getSession()
+            // can miss the window, so subscribe to the auth state change and
+            // also kick off a short polling fallback for the case where the
+            // session was already established before the page mounted.
+            let unsubscribe: (() => void) | null = null;
+            let cancelled = false;
+
             (async () => {
                 const { supabase } = await import('../services/supabase');
-                // Try a few times — detectSessionInUrl runs async on mount.
-                for (let i = 0; i < 10; i++) {
+
+                const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+                    if (cancelled) return;
+                    if (event === 'PASSWORD_RECOVERY' || (session && event === 'SIGNED_IN')) {
+                        setHasSupabaseRecoverySession(true);
+                        setError('');
+                    }
+                });
+                unsubscribe = () => sub.subscription.unsubscribe();
+
+                // Fallback: session may already exist if detectSessionInUrl ran
+                // before the listener attached. Poll for ~10s then give up.
+                for (let i = 0; i < 50; i++) {
+                    if (cancelled) return;
                     const { data } = await supabase.auth.getSession();
                     if (data.session) {
                         setHasSupabaseRecoverySession(true);
+                        setError('');
                         return;
                     }
                     await new Promise(r => setTimeout(r, 200));
                 }
-                setError('Missing or invalid reset link. Request a new one.');
+                if (!cancelled) {
+                    setError(prev => prev || 'Missing or invalid reset link. Request a new one.');
+                }
             })();
-            return;
+
+            return () => {
+                cancelled = true;
+                if (unsubscribe) unsubscribe();
+            };
         }
         // Legacy gravity-api token flow.
         if (!queryToken) {
