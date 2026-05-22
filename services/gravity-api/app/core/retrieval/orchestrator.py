@@ -190,7 +190,7 @@ class RetrievalOrchestrator:
     _CHANNEL_TIMEOUTS: dict[str, float] = {
         "dense":       8.0,
         "bm25":        8.0,
-        "splade":      4.0,
+        "splade":      8.0,
         "graph":       4.0,
         "structured":  4.0,
         "page_index": 30.0,   # PageIndex navigates document trees — allow more time

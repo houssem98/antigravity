@@ -123,13 +123,41 @@ async def _current_user(
         raise HTTPException(status_code=401, detail="missing bearer token")
     token = authorization[7:].strip()
     store = get_auth_store(request)
+
+    # 1. Try legacy gravity-api JWT first (own AUTH_JWT_SECRET).
     claims = store.decode_token(token)
-    if claims is None or claims.get("type") != "access":
+    if claims is not None and claims.get("type") == "access":
+        user = await store.get_by_id(claims["sub"])
+        if user is None or user.disabled:
+            raise HTTPException(status_code=401, detail="user not found or disabled")
+        return user
+
+    # 2. Try Supabase JWT (ES256 via JWKS, or HS256 via SUPABASE_JWT_SECRET).
+    from app.api.middleware.auth import _validate_jwt
+    auth = await _validate_jwt(token)
+    if auth is None:
         raise HTTPException(status_code=401, detail="invalid or expired token")
-    user = await store.get_by_id(claims["sub"])
-    if user is None or user.disabled:
-        raise HTTPException(status_code=401, detail="user not found or disabled")
-    return user
+
+    # Materialize a UserRecord from the Supabase JWT claims. Look up by email
+    # (creates a thin record in mem if not in DB) so downstream code that
+    # expects a UserRecord keeps working.
+    email = (auth.get("email") or "").strip().lower()
+    if email:
+        user = await store.get_by_email(email)
+        if user is not None and not user.disabled:
+            return user
+    # No matching local row — synthesize a stub from the JWT claims.
+    sb_role = auth.get("role") or ""
+    # Supabase emits role="authenticated"; map to our local role taxonomy.
+    role = "member" if sb_role in ("", "authenticated") else sb_role
+    return UserRecord(
+        user_id=auth.get("user_id") or "supabase-user",
+        email=email,
+        password_hash="",
+        org_id=auth.get("org_id") or "",
+        role=role,
+        entitlements=auth.get("entitlements") or ["public"],
+    )
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
