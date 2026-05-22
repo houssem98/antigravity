@@ -41,6 +41,8 @@ function ProtectedRoute({ children, session }: { children: React.ReactNode; sess
 // never sent to the server — but it lingers in browser history.
 function scrubAuthHash(): { error?: string } {
     if (typeof window === 'undefined' || !window.location.hash) return {};
+    // Let the Supabase recovery flow consume the hash on /reset-password.
+    if (window.location.pathname === '/reset-password') return {};
     const hash = window.location.hash.startsWith('#')
         ? window.location.hash.slice(1)
         : window.location.hash;
