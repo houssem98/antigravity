@@ -59,17 +59,46 @@ async def lifespan(app: FastAPI):
     # Startup: verify all connections
     await _verify_connections()
 
-    # Pre-warm embedder + pipeline so the first real query doesn't time out
+    # Pre-warm embedder + pipeline so the first real query doesn't time out.
+    # Voyage embedder is fast; SPLADE downloads ~500MB of weights on first use,
+    # so we kick it off as a background task to avoid blocking startup and
+    # keep the health check passing.
     try:
         from app.dependencies import get_search_pipeline, get_embedder
-        get_embedder()  # initialise embedder (loads model into RAM)
-        get_search_pipeline()  # wire full pipeline
-        # Send one dummy embed to force model weight loading into memory
+        get_embedder()
+        get_search_pipeline()
         embedder = get_embedder()
         await embedder.embed_query("warm up")
         logger.info("pipeline_warmed_up")
     except Exception as _e:
         logger.warning("pipeline_warmup_failed", error=str(_e))
+
+    async def _warm_splade():
+        try:
+            from app.embeddings.splade_encoder import SpladeEncoder
+            from app.dependencies import _get_splade_encoder  # type: ignore
+        except Exception:
+            try:
+                from app.embeddings.splade_encoder import SpladeEncoder
+            except Exception as e:
+                logger.warning("splade_warmup_import_failed", error=str(e))
+                return
+            enc = SpladeEncoder()
+            try:
+                await enc.encode_query("warm up")
+                logger.info("splade_warmed_up")
+            except Exception as e:
+                logger.warning("splade_warmup_failed", error=str(e))
+            return
+        # Reach for shared encoder instance via dependencies if available.
+        try:
+            enc = _get_splade_encoder()  # type: ignore
+            await enc.encode_query("warm up")
+            logger.info("splade_warmed_up")
+        except Exception as e:
+            logger.warning("splade_warmup_failed", error=str(e))
+
+    asyncio.create_task(_warm_splade())
 
     # Startup: ensure Qdrant collection exists (non-fatal if Qdrant down)
     try:
