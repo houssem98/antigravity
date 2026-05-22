@@ -27,7 +27,10 @@ const _useSupabaseAuth =
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
-        detectSessionInUrl: false,
+        // Detect Supabase recovery / OAuth hash fragments when Supabase is the
+        // primary auth backend — needed for password reset email links which
+        // arrive as `#access_token=...&type=recovery`.
+        detectSessionInUrl: _useSupabaseAuth,
         persistSession: _useSupabaseAuth,
         autoRefreshToken: _useSupabaseAuth,
     },

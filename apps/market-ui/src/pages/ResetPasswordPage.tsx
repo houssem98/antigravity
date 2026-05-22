@@ -16,9 +16,17 @@ function scorePassword(pw: string): number {
     return Math.min(score, 4);
 }
 
+// When Supabase is the auth backend, the recovery link uses an #access_token
+// hash that the Supabase client auto-consumes via detectSessionInUrl. In that
+// mode there is no `?token=` query param — gating the form on `token` was
+// what produced the "Missing or invalid reset link" error after migration.
+const SUPABASE_AUTH =
+    !import.meta.env.VITE_DEV_AUTH_BYPASS &&
+    (import.meta.env.VITE_AUTH_BACKEND ?? 'gravity_api') === 'supabase';
+
 export default function ResetPasswordPage() {
     const [params] = useSearchParams();
-    const token = params.get('token') ?? '';
+    const queryToken = params.get('token') ?? '';
     const navigate = useNavigate();
 
     const [password, setPassword] = useState('');
@@ -26,14 +34,36 @@ export default function ResetPasswordPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [done, setDone] = useState(false);
+    const [hasSupabaseRecoverySession, setHasSupabaseRecoverySession] = useState(false);
 
     const score = useMemo(() => scorePassword(password), [password]);
 
     useEffect(() => {
-        if (!token) {
+        if (SUPABASE_AUTH) {
+            // Wait for Supabase to consume the #access_token hash via detectSessionInUrl,
+            // then confirm a session exists before allowing password update.
+            (async () => {
+                const { supabase } = await import('../services/supabase');
+                // Try a few times — detectSessionInUrl runs async on mount.
+                for (let i = 0; i < 10; i++) {
+                    const { data } = await supabase.auth.getSession();
+                    if (data.session) {
+                        setHasSupabaseRecoverySession(true);
+                        return;
+                    }
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                setError('Missing or invalid reset link. Request a new one.');
+            })();
+            return;
+        }
+        // Legacy gravity-api token flow.
+        if (!queryToken) {
             setError('Missing or invalid reset link. Request a new one.');
         }
-    }, [token]);
+    }, [queryToken]);
+
+    const canSubmit = SUPABASE_AUTH ? hasSupabaseRecoverySession : !!queryToken;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -48,7 +78,9 @@ export default function ResetPasswordPage() {
         }
         setLoading(true);
         try {
-            await confirmPasswordReset(token, password);
+            // queryToken is unused in Supabase mode — confirmPasswordReset
+            // ignores it and calls supabase.auth.updateUser() instead.
+            await confirmPasswordReset(queryToken, password);
             setDone(true);
             setTimeout(() => navigate('/auth', { replace: true }), 2200);
         } catch (err) {
@@ -141,7 +173,7 @@ export default function ResetPasswordPage() {
 
                             <button
                                 type="submit"
-                                disabled={loading || !token}
+                                disabled={loading || !canSubmit}
                                 className="w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium text-sm transition-all disabled:opacity-50 bg-gradient-to-r from-[#4285F4] via-[#9B72CB] to-[#D96570] text-white hover:shadow-lg hover:shadow-[#9B72CB]/20"
                             >
                                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Update password'}
