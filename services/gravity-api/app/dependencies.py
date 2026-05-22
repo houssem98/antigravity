@@ -56,9 +56,14 @@ def get_search_pipeline():
 
     logger.info("initializing_search_pipeline")
 
+    import os as _os
     router = get_llm_router()
     embedder = get_embedder()
-    splade = get_splade_encoder()
+    # SPLADE encoder loads ~500 MB of model weights — gate behind env flag so
+    # small Fly machines (4 GB) don't OOM. Channel falls back gracefully when
+    # absent (dense + bm25 hybrid still covers most queries).
+    _splade_enabled = _os.getenv("SPLADE_ENABLED", "").lower() == "true"
+    splade = get_splade_encoder() if _splade_enabled else None
 
     # Retrieval channels
     from app.core.retrieval.dense_search import DenseSearch
@@ -80,7 +85,7 @@ def get_search_pipeline():
 
     dense = DenseSearch(embedder=embedder, hyde=hyde)
     sparse = SparseSearch()
-    splade_search = SpladeSearch(splade_encoder=splade)
+    splade_search = SpladeSearch(splade_encoder=splade) if splade is not None else None
     graph = GraphSearch()
 
     # Structured search uses Gemini Flash for NL-to-SQL
