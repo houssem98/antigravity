@@ -40,6 +40,33 @@ export default function ResetPasswordPage() {
 
     useEffect(() => {
         if (SUPABASE_AUTH) {
+            // Surface any error in the recovery URL hash first (expired/used
+            // link arrives as #error=access_denied&error_code=otp_expired&...).
+            // Supabase's detectSessionInUrl won't create a session for these,
+            // so polling getSession would silently time out with a misleading
+            // "Missing or invalid" message.
+            const rawHash = typeof window !== 'undefined' && window.location.hash
+                ? window.location.hash.replace(/^#/, '')
+                : '';
+            const hashParams = new URLSearchParams(rawHash);
+            const hashError =
+                hashParams.get('error_description') ||
+                hashParams.get('error_code') ||
+                hashParams.get('error') ||
+                '';
+            if (hashError) {
+                const msg = hashError.replace(/\+/g, ' ');
+                const isExpired = /otp_expired|expired/i.test(hashError);
+                setError(
+                    isExpired
+                        ? 'Reset link has expired or was already used. Request a fresh one from the forgot-password page.'
+                        : `Reset link error: ${msg}. Request a fresh one.`,
+                );
+                // Strip the bad hash so a manual refresh doesn't repeat.
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                return;
+            }
+
             // detectSessionInUrl consumes the recovery hash asynchronously and
             // fires a PASSWORD_RECOVERY event when ready. Polling getSession()
             // can miss the window, so subscribe to the auth state change and
@@ -190,9 +217,19 @@ export default function ResetPasswordPage() {
                             </div>
 
                             {error && (
-                                <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-                                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                                    <span>{error}</span>
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                                        <span>{error}</span>
+                                    </div>
+                                    {!canSubmit && (
+                                        <Link
+                                            to="/forgot-password"
+                                            className="block text-center py-2 rounded-lg text-sm border border-[rgba(0,240,255,0.2)] text-[#00F0FF] hover:bg-[#0D1225]"
+                                        >
+                                            Request a fresh reset link →
+                                        </Link>
+                                    )}
                                 </div>
                             )}
 
