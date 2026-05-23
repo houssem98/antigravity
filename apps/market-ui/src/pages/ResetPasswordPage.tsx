@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Brain, Loader2, Lock, CheckCircle, AlertCircle } from 'lucide-react';
-import { confirmPasswordReset } from '../services/supabase';
+import { confirmPasswordReset, supabase } from '../services/supabase';
 
 const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Excellent'];
 const STRENGTH_COLORS = ['#D96570', '#D96570', '#E0A038', '#4285F4', '#22C55E'];
@@ -72,23 +72,20 @@ export default function ResetPasswordPage() {
             // can miss the window, so subscribe to the auth state change and
             // also kick off a short polling fallback for the case where the
             // session was already established before the page mounted.
-            let unsubscribe: (() => void) | null = null;
+            // Static import = client already initialized by the time the
+            // page mounts. detectSessionInUrl may have already processed the
+            // hash and fired PASSWORD_RECOVERY before our listener attaches,
+            // so do a synchronous getSession() first.
+            const sub = supabase.auth.onAuthStateChange((event, session) => {
+                if (event === 'PASSWORD_RECOVERY' || (session && event === 'SIGNED_IN')) {
+                    setHasSupabaseRecoverySession(true);
+                    setError('');
+                }
+            });
+
             let cancelled = false;
-
             (async () => {
-                const { supabase } = await import('../services/supabase');
-
-                const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-                    if (cancelled) return;
-                    if (event === 'PASSWORD_RECOVERY' || (session && event === 'SIGNED_IN')) {
-                        setHasSupabaseRecoverySession(true);
-                        setError('');
-                    }
-                });
-                unsubscribe = () => sub.subscription.unsubscribe();
-
-                // Fallback: session may already exist if detectSessionInUrl ran
-                // before the listener attached. Poll for ~10s then give up.
+                // Poll up to 10s in case session storage write races the mount.
                 for (let i = 0; i < 50; i++) {
                     if (cancelled) return;
                     const { data } = await supabase.auth.getSession();
@@ -106,7 +103,7 @@ export default function ResetPasswordPage() {
 
             return () => {
                 cancelled = true;
-                if (unsubscribe) unsubscribe();
+                sub.data.subscription.unsubscribe();
             };
         }
         // Legacy gravity-api token flow.
