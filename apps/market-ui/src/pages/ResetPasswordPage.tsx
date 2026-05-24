@@ -40,11 +40,10 @@ export default function ResetPasswordPage() {
 
     useEffect(() => {
         if (SUPABASE_AUTH) {
-            // Surface any error in the recovery URL hash first (expired/used
-            // link arrives as #error=access_denied&error_code=otp_expired&...).
-            // Supabase's detectSessionInUrl won't create a session for these,
-            // so polling getSession would silently time out with a misleading
-            // "Missing or invalid" message.
+            // Surface any error in the recovery URL hash for visibility, but
+            // do NOT short-circuit the session check — a user with an active
+            // regular session can still update their password via updateUser,
+            // even if the recovery link they just clicked was expired.
             const rawHash = typeof window !== 'undefined' && window.location.hash
                 ? window.location.hash.replace(/^#/, '')
                 : '';
@@ -59,23 +58,15 @@ export default function ResetPasswordPage() {
                 const isExpired = /otp_expired|expired/i.test(hashError);
                 setError(
                     isExpired
-                        ? 'Reset link has expired or was already used. Request a fresh one from the forgot-password page.'
-                        : `Reset link error: ${msg}. Request a fresh one.`,
+                        ? 'Reset link expired or already used.'
+                        : `Reset link error: ${msg}.`,
                 );
                 // Strip the bad hash so a manual refresh doesn't repeat.
                 window.history.replaceState(null, '', window.location.pathname + window.location.search);
-                return;
             }
 
-            // detectSessionInUrl consumes the recovery hash asynchronously and
-            // fires a PASSWORD_RECOVERY event when ready. Polling getSession()
-            // can miss the window, so subscribe to the auth state change and
-            // also kick off a short polling fallback for the case where the
-            // session was already established before the page mounted.
-            // Static import = client already initialized by the time the
-            // page mounts. detectSessionInUrl may have already processed the
-            // hash and fired PASSWORD_RECOVERY before our listener attaches,
-            // so do a synchronous getSession() first.
+            // Listen for PASSWORD_RECOVERY (when a valid recovery link is
+            // consumed) and SIGNED_IN. Either unlocks the form.
             const sub = supabase.auth.onAuthStateChange((event, session) => {
                 if (event === 'PASSWORD_RECOVERY' || (session && event === 'SIGNED_IN')) {
                     setHasSupabaseRecoverySession(true);
@@ -85,7 +76,15 @@ export default function ResetPasswordPage() {
 
             let cancelled = false;
             (async () => {
-                // Poll up to 10s in case session storage write races the mount.
+                // Synchronous check first — if user is already signed in
+                // (recovery session OR regular session), unlock immediately.
+                const { data: cur } = await supabase.auth.getSession();
+                if (cur.session) {
+                    setHasSupabaseRecoverySession(true);
+                    setError('');
+                    return;
+                }
+                // Otherwise poll up to 10s for a session to land (detectSessionInUrl race).
                 for (let i = 0; i < 50; i++) {
                     if (cancelled) return;
                     const { data } = await supabase.auth.getSession();
@@ -97,7 +96,7 @@ export default function ResetPasswordPage() {
                     await new Promise(r => setTimeout(r, 200));
                 }
                 if (!cancelled) {
-                    setError(prev => prev || 'Missing or invalid reset link. Request a new one.');
+                    setError(prev => prev || 'No active session. Open the reset link from your email, or sign in first.');
                 }
             })();
 
