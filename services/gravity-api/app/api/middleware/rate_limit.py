@@ -36,6 +36,28 @@ MINUTE_LIMITS: dict[str, int] = {
     "unlimited": 100_000,
 }
 
+# In-memory counter fallback when Redis is unavailable.
+# Per-process only; with multiple machines limits will under-count, but
+# this is still better than failing fully open (rate_limit disabled).
+_MEM_COUNTERS: dict[str, tuple[int, float]] = {}
+
+
+def _mem_incr(key: str, ttl_s: int) -> int:
+    """Increment in-memory counter; auto-expires after ttl_s."""
+    now = time.time()
+    val, exp = _MEM_COUNTERS.get(key, (0, 0.0))
+    if exp <= now:
+        val = 0
+        exp = now + ttl_s
+    val += 1
+    _MEM_COUNTERS[key] = (val, exp)
+    # Cheap GC: drop a few expired entries each call to bound memory.
+    if len(_MEM_COUNTERS) > 1024:
+        for k in [k for k, (_, e) in list(_MEM_COUNTERS.items())[:32] if e <= now]:
+            _MEM_COUNTERS.pop(k, None)
+    return val
+
+
 # Monthly quota limits (None = unlimited)
 MONTHLY_LIMITS: dict[str, int | None] = {
     "free": 100,
@@ -82,8 +104,10 @@ class RateLimiter:
             if minute_count == 1:
                 await redis_client.expire(minute_key, 120)
         except Exception as e:
+            # Redis down — fall back to per-process in-memory counter so we
+            # don't silently fail open (10/min becomes unlimited).
             logger.warning("rate_limit_redis_error", error=str(e))
-            return {"X-RateLimit-Limit": str(minute_limit), "X-RateLimit-Remaining": "1"}
+            minute_count = _mem_incr(minute_key, ttl_s=120)
 
         reset_at = (window_epoch + 1) * 60
         headers.update({
@@ -112,7 +136,7 @@ class RateLimiter:
                     await redis_client.expire(month_key, _month_ttl())
             except Exception as e:
                 logger.warning("monthly_quota_redis_error", error=str(e))
-                monthly_count = 0
+                monthly_count = _mem_incr(month_key, ttl_s=_month_ttl())
 
             headers.update({
                 "X-RateLimit-Monthly-Limit": str(monthly_limit),
