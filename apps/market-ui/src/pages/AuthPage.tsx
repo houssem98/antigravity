@@ -1,7 +1,7 @@
 // Auth Page — Login & Sign Up
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { signIn, signUp } from '../services/supabase';
+import { signIn, signUp, getSession, signOut } from '../services/supabase';
 import { Brain, Loader2, Mail, Lock, ArrowRight, Sparkles, ShieldCheck } from 'lucide-react';
 
 export default function AuthPage() {
@@ -13,6 +13,18 @@ export default function AuthPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+    const [existingEmail, setExistingEmail] = useState<string | null>(null);
+
+    useEffect(() => {
+        getSession()
+            .then((s: any) => setExistingEmail(s?.user?.email ?? null))
+            .catch(() => setExistingEmail(null));
+    }, []);
+
+    const handleSignOut = async () => {
+        try { await signOut(); } catch { /* ignore */ }
+        setExistingEmail(null);
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -70,6 +82,28 @@ export default function AuthPage() {
                     <h1 className="text-2xl font-bold text-[#F4F6FF]">AlphaSense AI</h1>
                     <p className="text-[#A7B0C8] mt-1 text-sm">Deep Market Intelligence</p>
                 </div>
+
+                {existingEmail && (
+                    <div className="mb-4 p-3 rounded-xl bg-[#0D1225] border border-[rgba(0,240,255,0.15)] text-xs text-[#A7B0C8] flex items-center justify-between gap-3">
+                        <span>
+                            Already signed in as <span className="text-[#F4F6FF]">{existingEmail}</span>
+                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <Link
+                                to="/search"
+                                className="px-3 py-1.5 rounded-md bg-[#00F0FF] text-[#070A12] text-xs font-semibold hover:bg-[#00F0FF]/90"
+                            >
+                                Open app
+                            </Link>
+                            <button
+                                onClick={handleSignOut}
+                                className="px-3 py-1.5 rounded-md border border-[rgba(255,255,255,0.15)] text-xs text-[#F4F6FF] hover:bg-white/5"
+                            >
+                                Sign out
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Auth Card */}
                 <div className="panel-bg panel-border rounded-2xl p-8">
