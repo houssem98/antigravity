@@ -106,7 +106,7 @@ export default function AppRouter() {
             <Routes>
                 {/* Public */}
                 <Route path="/" element={<LandingPage />} />
-                <Route path="/auth" element={session ? <Navigate to="/search" replace /> : <AuthPage />} />
+                <Route path="/auth" element={<AuthPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/verify-email" element={<VerifyEmailPage />} />
