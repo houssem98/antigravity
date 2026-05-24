@@ -1,8 +1,9 @@
-import { useRef, useLayoutEffect, useState } from 'react';
+import { useRef, useLayoutEffect, useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { Search, Sparkles, TrendingUp, BarChart3 } from 'lucide-react';
+import { getSession, signOut } from '../services/supabase';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -23,7 +24,17 @@ export default function HeroSection() {
   const microcopyRef = useRef<HTMLParagraphElement>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    getSession().then(s => setLoggedIn(!!s)).catch(() => setLoggedIn(false));
+  }, []);
+
+  const handleSwitchAccount = async () => {
+    try { await signOut(); } catch { /* ignore */ }
+    navigate('/auth');
+  };
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return;
@@ -88,12 +99,29 @@ export default function HeroSection() {
           <a href="#features" className="hover:text-white transition-colors">Product</a>
           <a href="#features" className="hover:text-white transition-colors">Data</a>
           <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
-          <Link
-            to="/auth"
-            className="px-5 py-2 rounded-full border border-[rgba(255,255,255,0.2)] text-white/80 hover:border-white/50 hover:text-white hover:bg-white/5 transition-all text-sm font-medium"
-          >
-            Sign in
-          </Link>
+          {loggedIn ? (
+            <>
+              <Link
+                to="/search"
+                className="px-5 py-2 rounded-full bg-[#00F0FF] text-[#070A12] hover:bg-[#00F0FF]/90 transition-all text-sm font-semibold"
+              >
+                Open app
+              </Link>
+              <button
+                onClick={handleSwitchAccount}
+                className="px-5 py-2 rounded-full border border-[rgba(255,255,255,0.2)] text-white/80 hover:border-white/50 hover:text-white hover:bg-white/5 transition-all text-sm font-medium"
+              >
+                Switch account
+              </button>
+            </>
+          ) : (
+            <Link
+              to="/auth"
+              className="px-5 py-2 rounded-full border border-[rgba(255,255,255,0.2)] text-white/80 hover:border-white/50 hover:text-white hover:bg-white/5 transition-all text-sm font-medium"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </nav>
 
