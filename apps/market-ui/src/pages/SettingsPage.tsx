@@ -3,8 +3,9 @@
 // read-only status view so operators can see what's wired up.
 
 import { useEffect, useState } from 'react';
-import { Key, CheckCircle, XCircle, Loader2, ShieldCheck } from 'lucide-react';
+import { Key, CheckCircle, XCircle, Loader2, ShieldCheck, LogOut } from 'lucide-react';
 import { fetchServerKeyStatus, type ServerKeyStatus } from '../services/apiKeys';
+import { getSession, signOut } from '../services/supabase';
 
 interface Row {
     id: keyof ServerKeyStatus['llm'] | 'tavily' | 'alphaVantage';
@@ -27,6 +28,18 @@ export default function SettingsPage() {
     const [status, setStatus] = useState<ServerKeyStatus | null>(null);
     const [loading, setLoading]   = useState(true);
     const [error, setError]       = useState<string | null>(null);
+    const [accountEmail, setAccountEmail] = useState<string | null>(null);
+    const [signingOut, setSigningOut] = useState(false);
+
+    useEffect(() => {
+        getSession().then((s: any) => setAccountEmail(s?.user?.email ?? null)).catch(() => {});
+    }, []);
+
+    const handleSignOut = async () => {
+        setSigningOut(true);
+        try { await signOut(); } catch { /* ignore */ }
+        window.location.assign('/auth');
+    };
 
     const load = async () => {
         setLoading(true);
@@ -149,6 +162,29 @@ export default function SettingsPage() {
                     >
                         Set up 2FA
                     </a>
+                </div>
+            </div>
+
+            <div className="mt-6 panel-bg panel-border rounded-xl p-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 className="text-sm font-medium mb-1">Account</h3>
+                        <p className="text-xs text-[color:var(--muted)]">
+                            {accountEmail
+                                ? <>Signed in as <span className="text-[color:var(--text)]">{accountEmail}</span></>
+                                : 'Not signed in'}
+                        </p>
+                    </div>
+                    {accountEmail && (
+                        <button
+                            onClick={handleSignOut}
+                            disabled={signingOut}
+                            className="shrink-0 px-4 py-2 rounded-xl border border-red-500/40 text-sm text-red-400 hover:bg-red-500/10 transition-all flex items-center gap-2 disabled:opacity-50"
+                        >
+                            {signingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4" />}
+                            Sign out
+                        </button>
+                    )}
                 </div>
             </div>
 
