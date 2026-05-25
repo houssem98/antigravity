@@ -39,6 +39,7 @@ export default function ResetPasswordPage() {
     const score = useMemo(() => scorePassword(password), [password]);
 
     useEffect(() => {
+        console.log("RESET_PAGE_BUILD_MARKER_777");
         if (SUPABASE_AUTH) {
             // Surface any error in the recovery URL hash for visibility, but
             // do NOT short-circuit the session check — a user with an active
