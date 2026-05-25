@@ -48,9 +48,12 @@ WATCHED_FILING_TYPES = [
     "424B4",     # IPO prospectus
 ]
 
-# Rate limiting: 10 req/s max
-_REQUEST_SEMAPHORE = asyncio.Semaphore(10)
-_POLL_INTERVAL_SECONDS = 60
+# Rate limiting: 2 concurrent ingests max (Voyage embed + Qdrant upsert per call
+# is heavy enough to starve the FastAPI event loop on small Fly machines —
+# 10 concurrent was tripping health checks). Polling interval bumped to 5 min.
+_REQUEST_SEMAPHORE = asyncio.Semaphore(2)
+_POLL_INTERVAL_SECONDS = int(__import__("os").getenv("EDGAR_POLL_INTERVAL_SECONDS", "300"))
+_INTER_FILING_SLEEP_S = float(__import__("os").getenv("EDGAR_INTER_FILING_SLEEP_S", "1.5"))
 
 
 class SECEdgarSource:
@@ -115,12 +118,14 @@ class SECEdgarSource:
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
     async def _poll_all_filing_types(self):
-        """Poll EDGAR RSS feeds for all watched filing types."""
-        tasks = [
-            self._poll_filing_type(filing_type)
-            for filing_type in WATCHED_FILING_TYPES
-        ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        """Poll EDGAR RSS feeds — serialize across filing types so we don't
+        fan out 9x parallel pipelines on a small Fly machine."""
+        for filing_type in WATCHED_FILING_TYPES:
+            try:
+                await self._poll_filing_type(filing_type)
+            except Exception as e:
+                logger.warning("edgar_filing_type_poll_failed", filing_type=filing_type, error=str(e))
+            await asyncio.sleep(0.5)  # yield to event loop between types
 
     async def _poll_filing_type(self, filing_type: str):
         """Poll EDGAR RSS feed for a specific filing type."""
@@ -135,12 +140,13 @@ class SECEdgarSource:
             if await self._is_seen(accession):
                 continue
 
-            # Ingest the filing
+            # Ingest the filing — sleep between to avoid event-loop starvation
             try:
                 await self._ingest_filing(filing)
                 await self._mark_seen(accession)
                 new_count += 1
                 asyncio.create_task(self._fire_webhooks(filing))
+                await asyncio.sleep(_INTER_FILING_SLEEP_S)
             except Exception as e:
                 logger.warning(
                     "edgar_ingest_failed",
