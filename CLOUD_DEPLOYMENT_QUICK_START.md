@@ -1,203 +1,171 @@
-# Cloud Deployment Quick Start
+# Cloud Deployment — Status & Quick Start
 
-**Goal:** Ship Antigravity to cloud. Free tier auto-enabled. Localhost safe.
-
----
-
-## What's Ready
-
-✅ **Free tier wired:**
-- 10 searches/day limit (enforced in `app/api/middleware/rate_limit.py`)
-- Auto-assigned on signup
-- No payment required
-
-✅ **Multi-provider billing:**
-- Paddle (Merchant of Record, works Tunisia ✓)
-- PayPal
-- Payoneer (manual)
-- Crypto (BTC/ETH/USDT)
-
-✅ **Config files created:**
-- `apps/market-ui/.env.production` (for Vercel)
-- `services/market-server/fly.toml` (for Fly.io)
-- `services/gravity-api/fly.toml` (already exists)
-
-✅ **Deploy scripts:**
-- `scripts/deploy-to-cloud.sh` (macOS/Linux)
-- `scripts/Deploy-ToCloud.ps1` (Windows)
-
-✅ **Localhost isolated:**
-- All hardcoded `localhost` URLs behind env var fallbacks
-- Local `.env` unchanged
-- Cloud uses Fly.io + Vercel URLs
+**Last updated:** 2026-05-25
+**Live URL:** https://market-ui-self.vercel.app
+**API:** https://gravity-api-prod.fly.dev
 
 ---
 
-## Deployment (Choose One)
+## Architecture (current)
 
-### Option A: Automated Script (Easiest)
+```
+Browser → Vercel (market-ui static SPA)
+            ├── Supabase Auth (login, session, JWT ES256)
+            ├── Supabase Postgres (research_reports, billing, auth.users)
+            └── Fly gravity-api-prod (FastAPI + ML)
+                  ├── Supabase Postgres (DATABASE_URL)
+                  ├── Qdrant Cloud (vectors, eu-central-1)
+                  ├── Voyage AI (voyage-finance-2 embeddings)
+                  ├── Google Gemini 2.5 (primary LLM, free tier)
+                  ├── Cohere rerank-v3.5
+                  ├── DeepSeek + Groq (fallback LLMs)
+                  └── Anthropic Claude (DEGRADED — no credit)
+            └── Fly market-server-prod (Express, auto-sleep)
+                  └── Crypto/social/LLM-chat sidecar APIs
+```
 
-**Linux/macOS:**
+---
+
+## Deployed ✅
+
+| Component | Provider | URL/ID | Cost |
+|---|---|---|---|
+| Frontend (market-ui) | Vercel | `market-ui-self.vercel.app` | $0 |
+| API backend (gravity-api) | Fly.io | `gravity-api-prod.fly.dev` (4GB, 2 cores, always-on) | ~$10-15/mo |
+| Sidecar (market-server) | Fly.io | `market-server-prod.fly.dev` (1GB, auto-sleep) | ~$0-2/mo |
+| Database | Supabase Postgres | `ueuznqilkhyszhgbmpyk.supabase.co` | $0 (free) |
+| Auth | Supabase Auth | (same project) | $0 (free, ES256 JWT) |
+| Vector DB | Qdrant Cloud | `343ab8f1-...eu-central-1.aws.cloud.qdrant.io` (1GB free) | $0 |
+| Email | Gmail SMTP via Supabase custom SMTP | `smtp.gmail.com:587` | $0 |
+| **Total** | | | **~$10-17/mo** |
+
+---
+
+## Working ✅
+
+- Signup / login via Supabase Auth (ES256 JWT)
+- gravity-api validates Supabase JWT via JWKS
+- Research history (85 reports for `jmonticarlo@yahoo.com`) loads
+- Search pipeline (Gemini 2.5 + Voyage + Qdrant + Cohere rerank)
+- Forgot password emails via Gmail SMTP (no more bounces)
+- Reset password flow (recovery session or any active session)
+- Settings page w/ Sign out button
+- Landing page w/ Open app / Switch account when authenticated
+- Rate limit (10/min free tier, in-memory fallback when Redis down)
+- SEC EDGAR background polling → auto-ingests to Qdrant
+
+---
+
+## Degraded / Pending ⚠️
+
+| Item | Status | Impact | Fix |
+|---|---|---|---|
+| **Anthropic credits** | $0 balance | HyDE + RAPTOR summaries fail (Gemini covers main flow) | https://console.anthropic.com/settings/billing |
+| **Redis** | Not provisioned | Rate limit + cache use in-memory fallback (per-machine) | Upstash Redis free tier |
+| **Elasticsearch** | Not provisioned | Sparse/BM25 channel disabled | Elastic Cloud trial 14d |
+| **Neo4j** | Not provisioned | Graph channel disabled | Neo4j Aura free |
+| **SPLADE** | Gated off (`SPLADE_ENABLED=false`) | Saves RAM, sparse-learned channel disabled | Bump machine to 8GB + enable |
+| **Custom domain** | Not configured | Still on `*.vercel.app` | Buy domain + Vercel → Settings → Domains |
+| **Payment providers** | Not configured | Free tier only, no upgrade path | Paddle/PayPal account setup |
+| **CI on push** | Disabled (workflows renamed `.disabled`) | No auto-tests, no auto-deploy on push | Fix GH Actions billing + restore workflows |
+
+---
+
+## Environment Variables
+
+### Vercel (production, market-ui)
+- `VITE_SUPABASE_URL=https://ueuznqilkhyszhgbmpyk.supabase.co`
+- `VITE_SUPABASE_ANON_KEY=sb_publishable_VA5WT8uZBRYb54U1sJG51g_LAf4nF8H`
+- `VITE_AUTH_BACKEND=supabase`
+- `VITE_GRAVITY_API_URL=https://gravity-api-prod.fly.dev`
+- `VITE_API_URL=https://market-server-prod.fly.dev`
+
+### Fly secrets (gravity-api-prod)
+- `DATABASE_URL=postgresql://postgres:...@db.ueuznqilkhyszhgbmpyk.supabase.co:5432/postgres`
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`
+- `QDRANT_URL`, `QDRANT_API_KEY`
+- `VOYAGE_API_KEY`, `COHERE_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`
+- `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` (no credit)
+- `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USER=houssemzitoub@gmail.com`, `SMTP_PASSWORD`, `EMAIL_FROM=Antigravity <houssemzitoub@gmail.com>`
+- `AUTH_JWT_SECRET` (legacy, kept for backward compat)
+- `EDGAR_POLLING_ENABLED=true`
+- `SPLADE_ENABLED=false`, `SPLADE_WARMUP_ENABLED=false`
+
+---
+
+## Common Commands
+
+### Deploy gravity-api
 ```bash
-bash scripts/deploy-to-cloud.sh
+cd services/gravity-api
+flyctl deploy --app gravity-api-prod --remote-only
 ```
 
-**Windows:**
-```powershell
-.\scripts\Deploy-ToCloud.ps1
-```
-
-Script handles: Fly.io setup + Vercel deploy + health checks.
-
-### Option B: Manual Steps
-
-See `DEPLOY_RUNBOOK.md` sections 0–8.
-
----
-
-## Before Running Script
-
-1. **Fly.io CLI installed:**
-   ```bash
-   brew install flyctl                    # macOS
-   # Windows: iwr https://fly.io/install.ps1 -useb | iex
-   fly auth login
-   ```
-
-2. **API keys ready (from local `.env`):**
-   - `ANTHROPIC_API_KEY`
-   - `COHERE_API_KEY`
-   - `VOYAGE_API_KEY`
-   - `DEEPSEEK_API_KEY`
-   - `GROQ_API_KEY`
-   - Paddle Vendor ID (optional)
-   - PayPal Client ID + Secret (optional)
-   - Payoneer email (optional)
-
-3. **External services provisioned (free tiers):**
-   - Qdrant Cloud (1 GB free)
-   - Elastic Cloud (trial)
-   - Neo4j Aura (free)
-
-4. **Git committed:**
-   ```bash
-   git add -A && git commit -m "Deploy: ship to cloud"
-   ```
-
----
-
-## What Happens During Deploy
-
-1. Creates Fly.io apps: `gravity-api-prod` + `market-server-prod`
-2. Sets secrets (LLM keys, payment provider creds)
-3. Deploys to Fly.io (auto-provisions Postgres + Redis)
-4. Builds market-ui Vite bundle
-5. Deploys to Vercel
-6. Health checks all endpoints
-7. Returns URLs for both services
-
----
-
-## After Deploy
-
-1. **Add custom domain:**
-   - Vercel → Settings → Domains → add `antigravity.fyi`
-   - Point DNS per Vercel instructions
-
-2. **Update CORS:**
-   ```bash
-   fly secrets set -a gravity-api-prod CORS_ORIGINS=https://antigravity.fyi,https://www.antigravity.fyi
-   fly deploy -a gravity-api-prod
-   ```
-
-3. **Test free tier:**
-   - Visit `https://antigravity.fyi/auth`
-   - Sign up → redirects to `/search`
-   - Verify "Free" plan shown at `/billing`
-   - Try 11 searches → 11th fails with 429
-
-4. **Configure payments:**
-   - Log in as admin
-   - Go to `/admin/billing`
-   - Edit plans/prices/providers/wallets
-   - Test one provider checkout
-
----
-
-## Rollback (If Needed)
-
-Localhost still works perfectly. To rollback:
-
+### Deploy market-ui (frontend)
 ```bash
-# Keep local dev running
-npm run dev  # Still uses http://localhost:3002 + http://localhost:8000
+vercel --prod --yes --force
+```
 
-# Or rollback Fly apps
-fly rollback -a gravity-api-prod
-fly rollback -a market-server-prod
+### Wake market-server (auto-stopped)
+```bash
+curl -s https://market-server-prod.fly.dev/api/health  # triggers auto-start (~5-10s)
+```
 
-# Or rollback Vercel
-# Vercel dashboard → Deployments → revert to previous
+### Watch Fly logs
+```bash
+flyctl logs -a gravity-api-prod
+```
+
+### Trigger Supabase password reset (admin, bypasses email rate limit)
+```bash
+SRK=$(flyctl ssh console -a gravity-api-prod --command "bash -c 'echo \$SUPABASE_SERVICE_ROLE_KEY'")
+curl -s -X POST "https://ueuznqilkhyszhgbmpyk.supabase.co/auth/v1/admin/generate_link" \
+  -H "apikey: $SRK" -H "Authorization: Bearer $SRK" -H "Content-Type: application/json" \
+  -d '{"type":"recovery","email":"user@example.com","redirect_to":"https://market-ui-self.vercel.app/reset-password"}'
 ```
 
 ---
 
-## Cost Summary
-
-| Service | Cost/mo |
-|---------|---------|
-| Fly.io (2 apps, shared CPU) | $5–15 |
-| Elastic Cloud (trial 14d) | $0–95 |
-| Qdrant Cloud free | $0 |
-| Neo4j Aura free | $0 |
-| Vercel Hobby | $0 |
-| **First month** | **~$5–110** |
-| **Month 2+** | **~$100–110** |
-
-No Stripe fees until you have customers. Free tier + payment splits offset costs.
-
----
-
-## Next: Local Testing
-
-After cloud deploy, keep running locally for dev:
+## Rollback
 
 ```bash
-# Terminal 1: Docker services
-make infra
-
-# Terminal 2: gravity-api
-cd services/gravity-api && python -m uvicorn app.main:app --reload --port 8000
-
-# Terminal 3: market-server
-cd services/market-server && npm run dev
-
-# Terminal 4: market-ui
-cd apps/market-ui && npm run dev
+# Vercel: dashboard → Deployments → "Promote to production" on older
+# Fly:
+flyctl releases -a gravity-api-prod              # list
+flyctl rollback v25 -a gravity-api-prod          # roll back to version
 ```
 
-Everything uses localhost fallbacks. Cloud doesn't interfere.
+---
+
+## Local dev (unaffected by cloud)
+
+```bash
+make infra            # Postgres/Redis/Qdrant/ES/Neo4j Docker stack
+make dev              # all 4 services hot-reload
+```
+
+Local uses `localhost:*` from `.env`. Cloud uses Fly + Vercel + Supabase URLs.
 
 ---
 
 ## Troubleshooting
 
-**Fly deploy fails:**
-```bash
-fly logs -a gravity-api-prod          # See error
-fly secrets list -a gravity-api-prod  # Check secrets set
-```
-
-**Market UI can't reach API:**
-Check Vercel env vars: Dashboard → Settings → Environment Variables
-- `VITE_GRAVITY_API_URL=https://gravity-api-prod.fly.dev`
-- `VITE_API_URL=https://market-server-prod.fly.dev`
-
-**Rate limit not working:**
-Check `app/api/middleware/rate_limit.py` — Redis cache key format.
+| Symptom | Cause | Fix |
+|---|---|---|
+| Reset link → "Missing or invalid reset link" | Stale recovery link (1h TTL) or no session | Request fresh link OR sign in first |
+| Search returns "No indexed documents found" | Qdrant collection empty | Wait for EDGAR polling OR manual ingest |
+| `/v1/search` returns 401 | JWT validation failed | Check `SUPABASE_JWT_SECRET` on Fly |
+| `/v1/search` returns 502 | Machine OOM-killed | Verify `SPLADE_ENABLED=false` |
+| `/api/crypto/*` slow on first call | market-server auto-stopped | First call wakes machine (~5-10s cold start) |
+| Forgot password email not received | User not in Supabase auth.users | Sign up first via `/auth` |
 
 ---
 
-## Support
+## Next Steps
 
-See `DEPLOY_RUNBOOK.md` for full details.
+Priority order:
+1. **Anthropic credits** → unlock full LLM router
+2. **Custom domain** → professional URL
+3. **Upstash Redis** → proper distributed rate limit + cache
+4. **Payment provider** → Paddle for monetization
+5. **ES Cloud + Neo4j Aura** → restore sparse + graph channels
