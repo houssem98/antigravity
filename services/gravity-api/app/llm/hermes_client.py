@@ -6,6 +6,7 @@ Hermes is optimized for the Hermes-3 model family, supporting advanced reasoning
 function calling, and multi-turn autonomy.
 """
 
+import asyncio
 import os
 import structlog
 from typing import Dict, Any, Optional
@@ -51,25 +52,35 @@ class HermesAgentClient:
                 "engine": "hermes",
             }
 
+        assert AIAgent is not None and self.api_key  # narrowed by HERMES_AVAILABLE + earlier check
         logger.info("hermes_agent_start", query=query, model=self.model)
 
-        agent = AIAgent(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            system_prompt=(
-                "You are an elite financial researcher powered by Hermes-3. "
-                "Use your tools to extract and synthesize data."
-            ),
-            context=context or {},
+        system_message = (
+            "You are an elite financial researcher powered by Hermes-3. "
+            "Use your tools to extract and synthesize data."
         )
 
+        def _run_sync() -> Dict[str, Any]:
+            agent = AIAgent(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                quiet_mode=True,
+                skip_memory=True,
+                skip_context_files=True,
+            )
+            return agent.run_conversation(
+                user_message=query,
+                system_message=system_message,
+            )
+
         try:
-            response = await agent.run(query)
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, _run_sync)
             return {
                 "status": "completed",
-                "session_id": getattr(response, "session_id", "hermes_live"),
-                "result": getattr(response, "content", str(response)),
+                "session_id": response.get("session_id", "hermes_live") if isinstance(response, dict) else "hermes_live",
+                "result": response.get("content", str(response)) if isinstance(response, dict) else str(response),
                 "engine": "hermes",
             }
         except Exception as e:
