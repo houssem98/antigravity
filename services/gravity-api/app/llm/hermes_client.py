@@ -68,6 +68,7 @@ class HermesAgentClient:
                 quiet_mode=True,
                 skip_memory=True,
                 skip_context_files=True,
+                enabled_toolsets=[],  # plain chat, no tool-use endpoints required
             )
             return agent.run_conversation(
                 user_message=query,
