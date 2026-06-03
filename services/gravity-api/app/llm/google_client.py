@@ -38,8 +38,11 @@ class GoogleClient(BaseLLMClient):
         config: LLMConfig | None = None,
     ) -> LLMResponse:
         from google.genai import types
+        from app.llm.headroom import compress_messages
         config = config or LLMConfig()
         client = self._get_client()
+
+        messages = await compress_messages(messages, self.model_id)
 
         system_instruction = None
         contents = []

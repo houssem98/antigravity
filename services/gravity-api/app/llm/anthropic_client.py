@@ -34,7 +34,9 @@ class AnthropicClient(BaseLLMClient):
         messages: list[LLMMessage],
         config: LLMConfig | None = None,
     ) -> LLMResponse:
+        from app.llm.headroom import compress_messages
         config = config or LLMConfig()
+        messages = await compress_messages(messages, self.model_id)
         system_msg = ""
         api_messages = []
 
