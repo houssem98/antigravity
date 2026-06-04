@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, WebSocket, WebSoc
 from pydantic import BaseModel, Field
 
 from app.api.schemas.search import SearchRequest, SearchResponse
-from app.api.middleware.auth import require_auth, _validate_api_key
+from app.api.middleware.auth import require_auth, _validate_api_key, _validate_jwt
 from app.api.middleware.rate_limit import check_rate_limit
 
 logger = structlog.get_logger()
@@ -120,15 +120,20 @@ async def search_stream(websocket: WebSocket):
     logger.info("websocket_connected")
 
     try:
-        # Require API key before proceeding (WebSocket limitation)
-        auth_header = websocket.headers.get("X-API-Key")
-        if not auth_header:
-            await websocket.close(code=1008, reason="X-API-Key header missing")
-            return
-            
-        auth_context = await _validate_api_key(auth_header)
+        # Browsers can't set custom headers on WebSocket connections, so accept
+        # credentials via query params (?token=<jwt> or ?api_key=<key>) as well
+        # as the X-API-Key header (for server-to-server / API clients).
+        api_key = websocket.headers.get("X-API-Key") or websocket.query_params.get("api_key")
+        token = websocket.query_params.get("token")
+
+        auth_context = None
+        if api_key:
+            auth_context = await _validate_api_key(api_key)
+        elif token:
+            auth_context = await _validate_jwt(token)
+
         if not auth_context and websocket.app.state.settings.app_env.value != "development":
-            await websocket.close(code=1008, reason="Invalid API key")
+            await websocket.close(code=1008, reason="Authentication required")
             return
             
         user_id = auth_context["user_id"] if auth_context else "dev_user"
