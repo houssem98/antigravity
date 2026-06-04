@@ -3,11 +3,15 @@
 // Streams tokens in real-time, populates sources and citations as they arrive.
 
 import { useState, useCallback, useRef } from 'react';
+import { getAccessToken } from '../services/supabase';
 
-const GRAVITY_WS =
-    typeof window !== 'undefined'
-        ? `ws://${window.location.hostname}:8000/v1/search/stream`
-        : 'ws://localhost:8000/v1/search/stream';
+// Derive the WS endpoint from VITE_GRAVITY_API_URL (the same var the REST
+// services use). http→ws, https→wss. Falls back to localhost:8000 for dev.
+const GRAVITY_WS = (() => {
+    const base = import.meta.env.VITE_GRAVITY_API_URL || 'http://localhost:8000';
+    const wsBase = base.replace(/^http/, 'ws').replace(/\/+$/, '');
+    return `${wsBase}/v1/search/stream`;
+})();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -144,8 +148,14 @@ export function useGravitySearch() {
 
         setState({ ...INITIAL_STATE, status: 'understanding' });
 
+        // Auth token captured once per search. Browsers can't set WS headers,
+        // so it is passed as a query param the backend reads.
+        let authToken = '';
+
         function connect() {
-            const ws = new WebSocket(`${GRAVITY_WS}?trace_id=${traceId}`);
+            const params = new URLSearchParams({ trace_id: traceId });
+            if (authToken) params.set('token', authToken);
+            const ws = new WebSocket(`${GRAVITY_WS}?${params.toString()}`);
             wsRef.current = ws;
 
             ws.onopen = () => {
@@ -234,7 +244,7 @@ export function useGravitySearch() {
                         return {
                             ...prev,
                             status: 'error',
-                            error: 'Could not connect to the Gravity backend (port 8000). Make sure the API is running.',
+                            error: 'Could not connect to the Gravity backend. Check VITE_GRAVITY_API_URL and that the API is reachable.',
                         };
                     });
                 }
@@ -243,7 +253,12 @@ export function useGravitySearch() {
             ws.onerror = () => { /* onclose handles reconnect */ };
         }
 
-        connect();
+        // Fetch the access token first, then open the socket. If token lookup
+        // fails, still connect — dev mode bypasses auth server-side.
+        getAccessToken()
+            .then(tok => { authToken = tok ?? ''; })
+            .catch(() => { /* connect without token */ })
+            .finally(() => { connect(); });
     }, []);
 
     const cancel = useCallback(() => {
