@@ -29,4 +29,4 @@ primary_region = "iad"
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 1024              # bump to 2048 if loading transformers / FinBERT
+  memory_mb = 2048              # 2GB: headroom for 10-K parse + RAPTOR + contextual enrich during ingest
