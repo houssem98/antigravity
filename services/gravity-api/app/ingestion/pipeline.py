@@ -83,9 +83,18 @@ class IngestionPipeline:
         structured_indexer = None
 
         try:
+            import os as _os
             from app.ingestion.indexing.vector_indexer import VectorIndexer
             embedder = get_embedder()
-            splade = get_splade_encoder()
+            # Only load the SPLADE encoder when explicitly enabled. The encoder
+            # lazy-loads a ~500MB BERT model on first encode_document(), which
+            # OOM-kills small (1GB) machines during ingestion. The SPLADE_ENABLED
+            # flag must gate indexing, not just warmup.
+            splade = (
+                get_splade_encoder()
+                if _os.getenv("SPLADE_ENABLED", "").lower() == "true"
+                else None
+            )
             vector_indexer = VectorIndexer(embedder=embedder, splade_encoder=splade)
         except Exception as e:
             logger.warning("vector_indexer_unavailable", error=str(e))
