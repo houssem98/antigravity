@@ -1,9 +1,10 @@
 """
 Gravity Search — OpenAI Embedder (failover)
 
-text-embedding-3-large with dimensions pinned to settings.embedding_dimensions
+text-embedding-3-small with dimensions pinned to settings.embedding_dimensions
 (1024) via the native `dimensions` parameter, so it is drop-in compatible with
 the existing Qdrant collection. 8191-token context handles long filing chunks.
+~$0.02/1M tokens — embedding a 10-K costs ~$0.01.
 """
 
 import structlog
@@ -18,7 +19,7 @@ class OpenAIEmbedder:
 
     name = "openai"
 
-    def __init__(self, model: str = "text-embedding-3-large"):
+    def __init__(self, model: str = "text-embedding-3-small"):
         from openai import AsyncOpenAI
 
         self.model = model
