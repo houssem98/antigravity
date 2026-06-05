@@ -15,14 +15,35 @@ _feedback_loop = None
 
 @lru_cache()
 def get_embedder():
+    """
+    Build a multi-provider embedder with automatic failover.
+
+    Providers are tried in priority order; if one is rate-limited / out of
+    credit / unreachable, the next takes over (per-provider circuit breaker).
+    All providers output settings.embedding_dimensions (1024) so they are
+    interchangeable against the same Qdrant collection. Local (self-hosted)
+    is always last so the app keeps working even with every API key dead.
+    """
     from app.config import settings
+    from app.embeddings.fallback_embedder import FallbackEmbedder
+
+    from typing import Callable
+    providers: list[tuple[str, Callable]] = []
     if settings.voyage_api_key:
         from app.embeddings.voyage_embedder import VoyageEmbedder
-        return VoyageEmbedder()
-    else:
-        from app.embeddings.local_embedder import LocalEmbedder
-        logger.warning("using_local_embedder", reason="no VOYAGE_API_KEY")
-        return LocalEmbedder()
+        providers.append(("voyage", VoyageEmbedder))
+    if settings.openai_api_key:
+        from app.embeddings.openai_embedder import OpenAIEmbedder
+        providers.append(("openai", OpenAIEmbedder))
+    if settings.google_api_key:
+        from app.embeddings.gemini_embedder import GeminiEmbedder
+        providers.append(("gemini", GeminiEmbedder))
+    # Local self-hosted fallback — no API key, always last resort.
+    from app.embeddings.local_embedder import LocalEmbedder
+    providers.append(("local", LocalEmbedder))
+
+    logger.info("embedder_chain", providers=[p[0] for p in providers])
+    return FallbackEmbedder(providers)
 
 
 @lru_cache()
