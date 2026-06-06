@@ -397,12 +397,14 @@ class IngestionPipeline:
             xbrl_facts=processed.xbrl_facts if processed.xbrl_facts else None,
         )
 
-        # Step 7: Save document record to PostgreSQL
+        # Step 7: Save document record + normalized text + chunks to PostgreSQL.
+        # raw_text is the normalized extracted text, so the corpus can be
+        # re-chunked / re-embedded later without re-downloading or re-parsing.
         saved = await self._save_document_record(
             document_id=document_id,
             metadata=metadata,
             processed=processed,
-            chunk_count=len(chunks),
+            chunks=chunks,
             source_url=source_url,
         )
 
@@ -606,33 +608,67 @@ class IngestionPipeline:
         document_id: str,
         metadata: DocumentMetadata,
         processed,
-        chunk_count: int,
+        chunks,
         source_url: str,
     ) -> bool:
-        """Save document metadata to PostgreSQL Document table."""
+        """
+        Persist the document, its normalized text (raw_text), and its chunks to
+        PostgreSQL. The normalized text + chunk rows form the re-embed/re-chunk
+        source of truth, so switching embedders or re-chunking never requires
+        re-downloading or re-parsing the original filing.
+        """
         if not self.db_session_factory:
             return False
 
         try:
-            from app.db.models import Document
-            from sqlalchemy import text
+            from app.db.models import Document, Chunk
+
+            # Only fields that exist on the model; extras go in metadata JSON.
+            doc_meta = {
+                "company_name": metadata.company_name,
+                "page_count": getattr(processed, "page_count", None),
+            }
 
             async with self.db_session_factory() as session:
-                doc = Document(
+                # Re-ingest safety: drop any prior rows for this document id.
+                existing = await session.get(Document, document_id)
+                if existing is not None:
+                    await session.delete(existing)  # cascades to chunks
+                    await session.flush()
+
+                session.add(Document(
                     id=document_id,
                     ticker=metadata.ticker,
-                    company_name=metadata.company_name,
                     filing_type=metadata.filing_type,
                     filing_date=metadata.filing_date or None,
                     fiscal_year=metadata.fiscal_year or None,
-                    title=processed.title or f"{metadata.ticker} {metadata.filing_type}",
+                    fiscal_quarter=getattr(metadata, "fiscal_quarter", None) or None,
+                    title=getattr(processed, "title", "") or f"{metadata.ticker} {metadata.filing_type}",
                     source_url=source_url or metadata.source_url,
-                    page_count=processed.page_count,
-                    chunk_count=chunk_count,
+                    raw_text=processed.text,
+                    doc_metadata=doc_meta,
+                    chunk_count=len(chunks),
                     status="indexed",
                     created_at=datetime.utcnow(),
-                )
-                session.add(doc)
+                ))
+
+                # Persist chunks (skip RAPTOR L0 summaries — they are derived).
+                for c in chunks:
+                    if getattr(c, "level", None) == 0:
+                        continue
+                    session.add(Chunk(
+                        id=c.id,
+                        document_id=document_id,
+                        text=c.text,
+                        text_with_metadata=c.text_with_metadata,
+                        chunk_level=c.level,
+                        section_name=c.section_name or "",
+                        page_number=c.page_number,
+                        token_count=c.token_count,
+                        position=c.position,
+                        chunk_metadata=c.metadata or {},
+                    ))
+
                 await session.commit()
             return True
         except Exception as e:
