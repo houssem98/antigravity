@@ -1,8 +1,9 @@
 # Cloud Deployment — Status & Quick Start
 
-**Last updated:** 2026-05-25
+**Last updated:** 2026-06-04
 **Live URL:** https://market-ui-self.vercel.app
 **API:** https://gravity-api-prod.fly.dev
+**Compression proxy:** https://headroom-proxy.fly.dev
 
 ---
 
@@ -19,10 +20,15 @@ Browser → Vercel (market-ui static SPA)
                   ├── Google Gemini 2.5 (primary LLM, free tier)
                   ├── Cohere rerank-v3.5
                   ├── DeepSeek + Groq (fallback LLMs)
-                  └── Anthropic Claude (DEGRADED — no credit)
+                  ├── Anthropic Claude (DEGRADED — no credit)
+                  └── headroom-proxy (compress LLM contexts ~85-92%)
             └── Fly market-server-prod (Express, auto-sleep)
                   └── Crypto/social/LLM-chat sidecar APIs
 ```
+
+LLM calls with >1500-token context (SEC synthesis, RAPTOR, multi-chunk search)
+route through headroom-proxy first → ~85-92% input-token cut → then to Gemini/
+Anthropic. Fail-open: proxy down → original context passes, generation never breaks.
 
 ---
 
@@ -37,7 +43,8 @@ Browser → Vercel (market-ui static SPA)
 | Auth | Supabase Auth | (same project) | $0 (free, ES256 JWT) |
 | Vector DB | Qdrant Cloud | `343ab8f1-...eu-central-1.aws.cloud.qdrant.io` (1GB free) | $0 |
 | Email | Gmail SMTP via Supabase custom SMTP | `smtp.gmail.com:587` | $0 |
-| **Total** | | | **~$10-17/mo** |
+| LLM compression | Fly headroom-proxy | `headroom-proxy.fly.dev` (1GB, warm) | ~$5/mo |
+| **Total** | | | **~$15-22/mo** |
 
 ---
 
@@ -52,7 +59,8 @@ Browser → Vercel (market-ui static SPA)
 - Settings page w/ Sign out button
 - Landing page w/ Open app / Switch account when authenticated
 - Rate limit (10/min free tier, in-memory fallback when Redis down)
-- SEC EDGAR background polling → auto-ingests to Qdrant
+- SEC EDGAR background polling → auto-ingests to Qdrant (gated EDGAR_POLLING_ENABLED, off by default — OOMs 4GB machine)
+- LLM context compression via headroom-proxy (~85-92% input-token cut)
 
 ---
 
@@ -88,8 +96,9 @@ Browser → Vercel (market-ui static SPA)
 - `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY` (no credit)
 - `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USER=houssemzitoub@gmail.com`, `SMTP_PASSWORD`, `EMAIL_FROM=Antigravity <houssemzitoub@gmail.com>`
 - `AUTH_JWT_SECRET` (legacy, kept for backward compat)
-- `EDGAR_POLLING_ENABLED=true`
+- `EDGAR_POLLING_ENABLED` (off by default — OOMs 4GB machine; needs 8GB to enable)
 - `SPLADE_ENABLED=false`, `SPLADE_WARMUP_ENABLED=false`
+- `HEADROOM_ENABLED=true`, `HEADROOM_URL=https://headroom-proxy.fly.dev`, `HEADROOM_MIN_TOKENS=1500`, `HEADROOM_TIMEOUT_S=20`
 
 ---
 
@@ -104,6 +113,14 @@ flyctl deploy --app gravity-api-prod --remote-only
 ### Deploy market-ui (frontend)
 ```bash
 vercel --prod --yes --force
+```
+
+### Deploy headroom compression proxy
+```bash
+cd infra/headroom
+flyctl deploy --app headroom-proxy
+# verify: curl -s https://headroom-proxy.fly.dev/health
+# stats:  curl -s https://headroom-proxy.fly.dev/stats
 ```
 
 ### Wake market-server (auto-stopped)
