@@ -124,21 +124,36 @@ async def download_ticker(
 async def main() -> None:
     ap = argparse.ArgumentParser(description="Download SEC filings to disk + manifest (no indexing)")
     ap.add_argument("--tickers", nargs="+", required=True, help="Tickers, e.g. AAPL MSFT NVDA")
-    ap.add_argument("--types", nargs="+", default=["10-K", "10-Q"], help="Filing types")
+    ap.add_argument("--types", nargs="+", default=None,
+                    help="Filing types (default: registry defaults). See app/core/filing_types.py")
+    ap.add_argument("--all-types", action="store_true",
+                    help="Download every supported filing type from the registry")
     ap.add_argument("--max-per-ticker", type=int, default=8, help="Max filings per ticker")
     ap.add_argument("--out", default="data/filings", help="Output dir (manifest.json lives here)")
     ap.add_argument("--since", type=int, default=None, help="Only filing_date year >= this")
     args = ap.parse_args()
 
+    from app.core.filing_types import (
+        normalize_filing_types, SUPPORTED_FILING_TYPES,
+    )
+    if args.all_types:
+        types = [f.code for f in SUPPORTED_FILING_TYPES]
+    else:
+        types, unknown = normalize_filing_types(args.types)
+        if unknown:
+            print(f"Unsupported filing types: {', '.join(unknown)} "
+                  f"(supported: {', '.join(f.code for f in SUPPORTED_FILING_TYPES)})")
+            sys.exit(1)
+
     out = Path(args.out)
     manifest = _load_manifest(out / "manifest.json")
     src = SECEdgarSource()
 
-    print(f"Downloading {args.tickers} | types={args.types} | max/ticker={args.max_per_ticker} -> {out}")
+    print(f"Downloading {args.tickers} | types={types} | max/ticker={args.max_per_ticker} -> {out}")
     t0 = time.time()
     totals = {"found": 0, "downloaded": 0, "skipped": 0, "failed": 0, "bytes": 0}
     for tk in args.tickers:
-        s = await download_ticker(src, out, manifest, tk, args.types, args.max_per_ticker, args.since)
+        s = await download_ticker(src, out, manifest, tk, types, args.max_per_ticker, args.since)
         print(f"  [{tk}] found={s['found']} downloaded={s['downloaded']} "
               f"skipped={s['skipped']} failed={s['failed']} ({s['bytes']/1e6:.1f} MB)")
         for k in totals:
