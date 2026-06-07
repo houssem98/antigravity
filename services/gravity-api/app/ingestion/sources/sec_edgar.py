@@ -129,11 +129,22 @@ class SECEdgarSource:
 
     async def _poll_filing_type(self, filing_type: str):
         """Poll EDGAR RSS feed for a specific filing type."""
+        from app.config import settings
+        watchlist = settings.edgar_watchlist_set
+
         filings = await self._fetch_rss_feed(filing_type)
         new_count = 0
+        skipped_offlist = 0
         for filing in filings:
             accession = filing.get("accession_number", "")
             if not accession:
+                continue
+
+            # Watchlist filter: when set, only ingest tracked tickers (cost control).
+            # Empty watchlist = firehose (every company). Don't mark off-list filings
+            # as seen, so expanding the watchlist later picks them up.
+            if watchlist and filing.get("ticker", "").upper() not in watchlist:
+                skipped_offlist += 1
                 continue
 
             # Redis dedup: skip already-seen filings
@@ -154,8 +165,9 @@ class SECEdgarSource:
                     error=str(e),
                 )
 
-        if new_count:
-            logger.info("edgar_new_filings", filing_type=filing_type, count=new_count)
+        if new_count or skipped_offlist:
+            logger.info("edgar_new_filings", filing_type=filing_type,
+                        count=new_count, skipped_offlist=skipped_offlist)
 
     async def _fire_webhooks(self, filing: dict):
         """POST filing.indexed event to all registered webhook URLs (fire-and-forget)."""

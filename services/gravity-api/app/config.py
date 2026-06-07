@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     raptor_cluster_threshold: float = 0.85  # Cosine similarity for clustering
     raptor_summary_max_tokens: int = 256    # Max tokens for generated summaries
 
+    # ── EDGAR live polling (daily-fresh corpus) ─────────────────────────
+    edgar_polling_enabled: bool = False   # EDGAR_POLLING_ENABLED — auto-ingest new filings
+    edgar_watchlist: str = ""             # EDGAR_WATCHLIST — comma-sep tickers; empty = all (firehose)
+    edgar_filing_types: str = "10-K,10-Q,8-K"  # forms to poll
+
+    @property
+    def edgar_watchlist_set(self) -> set[str]:
+        """Uppercased ticker watchlist; empty set = ingest every company."""
+        return {t.strip().upper() for t in self.edgar_watchlist.split(",") if t.strip()}
+
     # ── Earnings transcript sources
     alpha_vantage_api_key: str = ""     # ALPHA_VANTAGE_API_KEY
     quartr_api_key: str = ""            # QUARTR_API_KEY — paid; 14,500+ companies
