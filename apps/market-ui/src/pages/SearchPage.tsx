@@ -299,6 +299,61 @@ function SourceFilterBar({ active, onChange }: { active: SourceFilterId; onChang
     );
 }
 
+// ─── SEC filing-type sub-selector (customisable) ──────────────────────────────
+// Fetched from gravity-api's canonical registry so users pick exactly which SEC
+// forms to search (10-K, 8-K, DEF 14A, 13F-HR, ...). Shown when "SEC Filings" active.
+
+interface FilingTypeMeta {
+    code: string; label: string; category: string; description: string;
+    parsing: string; default: boolean;
+}
+
+const GRAVITY_API = import.meta.env.VITE_GRAVITY_API_URL || 'http://localhost:8000';
+
+function useFilingTypes(): FilingTypeMeta[] {
+    const [types, setTypes] = useState<FilingTypeMeta[]>([]);
+    useEffect(() => {
+        let alive = true;
+        fetch(`${GRAVITY_API}/v1/documents/filing-types`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (alive && d?.filing_types) setTypes(d.filing_types); })
+            .catch(() => { /* registry optional — falls back to defaults */ });
+        return () => { alive = false; };
+    }, []);
+    return types;
+}
+
+function FilingTypeSelector({
+    types, selected, onToggle,
+}: {
+    types: FilingTypeMeta[];
+    selected: Set<string>;
+    onToggle: (code: string) => void;
+}) {
+    if (types.length === 0) return null;
+    return (
+        <div className="flex items-center gap-1 flex-wrap max-w-4xl mx-auto mt-2 pl-1">
+            {types.map(t => {
+                const on = selected.has(t.code);
+                return (
+                    <button
+                        key={t.code}
+                        onClick={() => onToggle(t.code)}
+                        title={`${t.description} (${t.category})`}
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all border ${
+                            on
+                                ? 'bg-[var(--accent)]/15 border-[var(--accent)]/40 text-[var(--accent)]'
+                                : 'border-white/[0.06] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-white/[0.12]'
+                        }`}
+                    >
+                        {t.code}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
 // ─── Agent Trace Panel — live reasoning steps ─────────────────────────────────
 
 const AGENT_COLORS: Record<string, string> = {
@@ -477,6 +532,14 @@ export default function SearchPage() {
     const [chatHistory, setChatHistory] = useState<ChatTurn[]>([]);
     const [activeTab, setActiveTab] = useState<'answer' | 'sources' | 'data'>('answer');
     const [activeSource, setActiveSource] = useState<SourceFilterId>('all');
+    const filingTypes = useFilingTypes();
+    // User-selected SEC sub-types (empty = use the SEC Filings default set).
+    const [selectedFilingTypes, setSelectedFilingTypes] = useState<Set<string>>(new Set());
+    const toggleFilingType = (code: string) => setSelectedFilingTypes(prev => {
+        const next = new Set(prev);
+        next.has(code) ? next.delete(code) : next.add(code);
+        return next;
+    });
     const [openCitation, setOpenCitation] = useState<GravityCitation | null>(null);
     const [savedSearches, setSavedSearches] = useState<Set<string>>(new Set());
     const qaInputRef = useRef<HTMLInputElement>(null);
@@ -556,10 +619,15 @@ export default function SearchPage() {
             ]);
         }
 
-        // Build filters from active source selection
+        // Build filters from active source selection. For SEC Filings, honor the
+        // user's filing-type sub-selection (falls back to the default set if none).
         const filterConf = SOURCE_FILTERS.find(f => f.id === activeSource);
-        const filters: SearchFilters | undefined = filterConf && filterConf.types.length > 0
-            ? { document_types: [...filterConf.types] }
+        let docTypes: string[] = filterConf ? [...filterConf.types] : [];
+        if (activeSource === 'filings' && selectedFilingTypes.size > 0) {
+            docTypes = [...selectedFilingTypes];
+        }
+        const filters: SearchFilters | undefined = docTypes.length > 0
+            ? { document_types: docTypes }
             : undefined;
 
         setQaInput(q);
@@ -846,6 +914,14 @@ export default function SearchPage() {
                             </button>
                         )}
                     </div>
+                    {/* SEC filing-type sub-selector — only when "SEC Filings" active */}
+                    {activeSource === 'filings' && (
+                        <FilingTypeSelector
+                            types={filingTypes}
+                            selected={selectedFilingTypes}
+                            onToggle={toggleFilingType}
+                        />
+                    )}
                 </div>
 
                 <div className="flex-1 max-w-4xl mx-auto w-full px-6 py-6">
