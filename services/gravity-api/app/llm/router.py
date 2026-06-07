@@ -78,7 +78,7 @@ class LLMRouter:
 
     def _init_clients(self):
         """Initialize available LLM clients based on configured API keys."""
-        if settings.anthropic_api_key:
+        if settings.anthropic_api_key and settings.anthropic_enabled:
             from app.llm.anthropic_client import AnthropicClient
             self._clients["claude_haiku"] = AnthropicClient("claude-haiku-4-5-20251001")
             self._clients["claude_sonnet"] = AnthropicClient("claude-sonnet-4-6")

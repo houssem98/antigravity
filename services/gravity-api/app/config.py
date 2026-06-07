@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     raptor_cluster_threshold: float = 0.85  # Cosine similarity for clustering
     raptor_summary_max_tokens: int = 256    # Max tokens for generated summaries
 
+    # ── LLM provider gating ─────────────────────────────────────────────
+    # Anthropic key is configured but may have $0 credit. Keep it OUT of the
+    # router pool until credit exists, else the router can pick a dead Claude
+    # model and the whole search fails. Flip to true (ANTHROPIC_ENABLED=true)
+    # once billing is funded.
+    anthropic_enabled: bool = False
+
     # ── EDGAR live polling (daily-fresh corpus) ─────────────────────────
     edgar_polling_enabled: bool = False   # EDGAR_POLLING_ENABLED — auto-ingest new filings
     edgar_watchlist: str = ""             # EDGAR_WATCHLIST — comma-sep tickers; empty = all (firehose)
