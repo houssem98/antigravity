@@ -29,6 +29,10 @@ def get_embedder():
 
     from typing import Callable
     providers: list[tuple[str, Callable]] = []
+    # Cohere first: existing key (also used for rerank), 1024-dim, free trial/cheap.
+    if settings.cohere_api_key:
+        from app.embeddings.cohere_embedder import CohereEmbedder
+        providers.append(("cohere", CohereEmbedder))
     if settings.voyage_api_key:
         from app.embeddings.voyage_embedder import VoyageEmbedder
         providers.append(("voyage", VoyageEmbedder))
