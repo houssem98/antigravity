@@ -563,7 +563,13 @@ class IngestionPipeline:
                 xbrl_chunks: list[ChunkOutput] = []
                 for i, fact in enumerate(xbrl_facts):
                     sentence = fact.to_sentence(ticker=ticker, company=company)
-                    chunk_id = f"{document_id}:xbrl:{fact.local_name}:{fact.context_id}"
+                    # Qdrant point IDs must be int or UUID. Derive a deterministic
+                    # UUID5 from the composite key so re-ingest stays idempotent.
+                    import uuid as _uuid
+                    chunk_id = str(_uuid.uuid5(
+                        _uuid.NAMESPACE_URL,
+                        f"{document_id}:xbrl:{fact.local_name}:{fact.context_id}",
+                    ))
                     xbrl_chunks.append(ChunkOutput(
                         id=chunk_id,
                         document_id=document_id,
