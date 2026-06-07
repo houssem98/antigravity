@@ -29,6 +29,17 @@ async def get_db():
         yield session
 
 
+@router.get("/documents/filing-types")
+async def list_filing_types():
+    """
+    Canonical list of SEC filing types the pipeline supports. The UI renders this
+    as a user-selectable list; clients pass the chosen `code`s to the ingest
+    endpoints. `default: true` marks the types ingested when none are specified.
+    """
+    from app.core.filing_types import registry_payload, DEFAULT_FILING_TYPES
+    return {"filing_types": registry_payload(), "defaults": DEFAULT_FILING_TYPES}
+
+
 _ingestion_pipeline = None
 
 def get_ingestion_pipeline():
@@ -418,7 +429,18 @@ async def ingest_sec_bulk(
     if not ticker_list:
         raise HTTPException(status_code=400, detail="At least one ticker required")
 
-    types = [t.strip().upper() for t in filing_types.split(",") if t.strip()] or ["10-K", "10-Q"]
+    # Validate requested filing types against the canonical registry. Unknown
+    # codes are rejected so users get a clear error instead of silent no-ops.
+    from app.core.filing_types import normalize_filing_types, DEFAULT_FILING_TYPES
+    types, unknown = normalize_filing_types(
+        [t for t in filing_types.split(",")] if filing_types else None
+    )
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported filing types: {', '.join(unknown)}. "
+                   f"See GET /v1/documents/filing-types for the supported list.",
+        )
 
     logger.info("sec_bulk_ingest_request", tickers=len(ticker_list), types=types, workers=workers)
 
