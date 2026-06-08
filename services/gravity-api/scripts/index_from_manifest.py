@@ -49,6 +49,7 @@ def main() -> None:
     ap.add_argument("--tickers", nargs="+", default=None, help="Only index these tickers")
     ap.add_argument("--limit", type=int, default=None, help="Max filings to index this run")
     ap.add_argument("--timeout", type=float, default=300.0, help="Per-file ingest timeout (s)")
+    ap.add_argument("--concurrency", type=int, default=4, help="Parallel ingest requests")
     args = ap.parse_args()
 
     manifest_path = Path(args.manifest)
@@ -70,42 +71,61 @@ def main() -> None:
     if args.limit:
         items = items[: args.limit]
 
-    print(f"Indexing {len(items)} downloaded filings -> {url}")
+    print(f"Indexing {len(items)} downloaded filings -> {url} (concurrency={args.concurrency})")
     t0 = time.time()
-    done = failed = chunks_total = 0
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    lock = threading.Lock()
+    stats = {"done": 0, "failed": 0, "chunks": 0, "n": 0}
+    client = httpx.Client(timeout=args.timeout)
 
-    with httpx.Client(timeout=args.timeout) as client:
-        for k, rec in items:
-            fpath = Path(rec["path"])
-            if not fpath.exists():
-                rec["status"] = "missing_file"; failed += 1; continue
-            try:
-                with fpath.open("rb") as fh:
-                    files = {"file": (fpath.name, fh, "text/html")}
-                    data = {"ticker": rec.get("ticker", ""),
-                            "company_name": rec.get("company_name", "")}
-                    resp = client.post(url, headers=headers, files=files, data=data)
-                if resp.status_code != 200:
+    def work(item):
+        k, rec = item
+        fpath = Path(rec["path"])
+        if not fpath.exists():
+            with lock:
+                rec["status"] = "missing_file"; stats["failed"] += 1
+            return
+        try:
+            with fpath.open("rb") as fh:
+                files = {"file": (fpath.name, fh, "text/html")}
+                data = {"ticker": rec.get("ticker", ""),
+                        "company_name": rec.get("company_name", "")}
+                resp = client.post(url, headers=headers, files=files, data=data)
+            if resp.status_code != 200:
+                with lock:
                     rec["status"] = "index_failed"
                     rec["index_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                    failed += 1
-                else:
-                    body = resp.json()
-                    cc = int(body.get("chunk_count", 0))
+                    stats["failed"] += 1
+                    print(f"  [{rec.get('ticker')}] {fpath.name} -> HTTP {resp.status_code}")
+            else:
+                body = resp.json()
+                cc = int(body.get("chunk_count", 0))
+                with lock:
                     rec["status"] = "indexed" if cc > 0 else "indexed_zero_chunks"
                     rec["chunk_count"] = cc
                     rec["document_id"] = body.get("document_id", "")
                     rec["indexed_at"] = datetime.now(timezone.utc).isoformat()
-                    chunks_total += cc
-                    done += 1
+                    stats["chunks"] += cc; stats["done"] += 1
                     print(f"  [{rec.get('ticker')}] {fpath.name} -> {cc} chunks")
-            except Exception as e:
-                rec["status"] = "index_error"; rec["index_error"] = str(e)[:200]; failed += 1
-                print(f"  [{rec.get('ticker')}] {fpath.name} -> ERROR {str(e)[:120]}")
-            _save(manifest_path, manifest)  # checkpoint after each
+        except Exception as e:
+            with lock:
+                rec["status"] = "index_error"; rec["index_error"] = str(e)[:200]; stats["failed"] += 1
+                print(f"  [{rec.get('ticker')}] {fpath.name} -> ERROR {str(e)[:100]}")
+        finally:
+            with lock:
+                stats["n"] += 1
+                # checkpoint periodically (every 10) to limit disk churn under concurrency
+                if stats["n"] % 10 == 0:
+                    _save(manifest_path, manifest)
 
-    print(f"\nDONE in {time.time()-t0:.0f}s | indexed={done} failed={failed} "
-          f"| {chunks_total} chunks total")
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        list(ex.map(work, items))
+    client.close()
+    _save(manifest_path, manifest)
+
+    print(f"\nDONE in {time.time()-t0:.0f}s | indexed={stats['done']} failed={stats['failed']} "
+          f"| {stats['chunks']} chunks total")
 
 
 if __name__ == "__main__":
