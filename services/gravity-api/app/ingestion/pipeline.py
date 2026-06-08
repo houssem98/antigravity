@@ -159,31 +159,44 @@ class IngestionPipeline:
         except Exception as e:
             logger.warning("table_indexer_unavailable", error=str(e))
 
+        # BULK_FAST_INGEST: skip the LLM-heavy enrichers (RAPTOR + contextual
+        # retrieval). Each makes hundreds of LLM calls per filing (a context blurb
+        # per chunk + a summary per section), which dominates ingest latency and
+        # burns LLM quota during full-corpus indexing. Disable for bulk, re-enable
+        # for quality. Embeddings/retrieval still work without them.
+        import os as _os2
+        _fast_ingest = _os2.getenv("BULK_FAST_INGEST", "").lower() == "true"
+
         # RaptorIndexer -- builds Level 0 summary chunks for multi-granularity retrieval
         raptor_indexer = None
-        try:
-            from app.ingestion.indexing.raptor_indexer import RaptorIndexer
-            from app.llm.router import LLMRouter
-            _raptor_router = LLMRouter()
-            raptor_indexer = RaptorIndexer(
-                llm_client=_raptor_router.get_fast_client(),
-                embedder=get_embedder(),
-            )
-        except Exception as e:
-            logger.warning("raptor_indexer_unavailable", error=str(e))
+        if not _fast_ingest:
+            try:
+                from app.ingestion.indexing.raptor_indexer import RaptorIndexer
+                from app.llm.router import LLMRouter
+                _raptor_router = LLMRouter()
+                raptor_indexer = RaptorIndexer(
+                    llm_client=_raptor_router.get_fast_client(),
+                    embedder=get_embedder(),
+                )
+            except Exception as e:
+                logger.warning("raptor_indexer_unavailable", error=str(e))
 
         # ContextualRetrieval -- Anthropic Sept 2024: prepend per-chunk context
         # summary to text_with_metadata before embedding (-49% retrieval failures)
         contextual_retrieval = None
-        try:
-            from app.ingestion.processing.contextual_retrieval import ContextualRetrieval
-            from app.llm.router import LLMRouter as _CR_Router
-            _cr_router = _CR_Router()
-            contextual_retrieval = ContextualRetrieval(
-                llm_client=_cr_router.get_fast_client()
-            )
-        except Exception as e:
-            logger.warning("contextual_retrieval_unavailable", error=str(e))
+        if not _fast_ingest:
+            try:
+                from app.ingestion.processing.contextual_retrieval import ContextualRetrieval
+                from app.llm.router import LLMRouter as _CR_Router
+                _cr_router = _CR_Router()
+                contextual_retrieval = ContextualRetrieval(
+                    llm_client=_cr_router.get_fast_client()
+                )
+            except Exception as e:
+                logger.warning("contextual_retrieval_unavailable", error=str(e))
+
+        if _fast_ingest:
+            logger.info("bulk_fast_ingest_enabled", raptor=False, contextual=False)
 
         return cls(
             vector_indexer=vector_indexer,
