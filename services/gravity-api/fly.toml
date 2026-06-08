@@ -29,4 +29,4 @@ primary_region = "iad"
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 2048              # 2GB: headroom for 10-K parse + RAPTOR + contextual enrich during ingest
+  memory_mb = 4096              # 4GB: large 10-K/10-Q (40MB+ HTML) parse + chunk + embed during bulk ingest OOMs 2GB
