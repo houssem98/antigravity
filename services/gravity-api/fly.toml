@@ -28,5 +28,5 @@ primary_region = "iad"
 
 [[vm]]
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 2                      # 4GB requires >=2 shared CPUs on Fly
   memory_mb = 4096              # 4GB: large 10-K/10-Q (40MB+ HTML) parse + chunk + embed during bulk ingest OOMs 2GB
