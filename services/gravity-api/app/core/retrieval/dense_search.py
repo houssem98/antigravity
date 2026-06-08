@@ -22,7 +22,9 @@ class DenseSearch:
         query: str,
         filters: dict | None = None,
         top_k: int | None = None,
-        use_hyde: bool = True,
+        use_hyde: bool = False,  # default off: HyDE adds an LLM call that times out
+                                 # dense under parallel load on small boxes. Multi-query
+                                 # still opts in explicitly for medium/complex queries.
     ) -> list[RetrievalResult]:
         """
         Embed the query (via HyDE if available) and search for nearest neighbors.
