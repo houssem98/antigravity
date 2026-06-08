@@ -188,8 +188,8 @@ class RetrievalOrchestrator:
     # Per-channel timeout budgets (seconds).
     # BM25/dense increased to 8s to handle lazy-client cold-start on first query.
     _CHANNEL_TIMEOUTS: dict[str, float] = {
-        "dense":       8.0,
-        "bm25":        8.0,
+        "dense":      12.0,
+        "bm25":       12.0,
         "splade":      8.0,
         "graph":       4.0,
         "structured":  4.0,
