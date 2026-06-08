@@ -62,10 +62,13 @@ class LLMRouter:
         # Groq (llama-3.3-70b) and DeepSeek are last-resort fallbacks when
         # Anthropic credits are exhausted or primary models are unavailable.
         self._routing_table: dict[QueryComplexity, list[str]] = {
-            QueryComplexity.SIMPLE:  ["claude_haiku", "gemini_flash", "groq_fast", "deepseek", "claude_sonnet"],
-            QueryComplexity.MEDIUM:  ["claude_sonnet", "gemini_pro", "deepseek", "groq_large", "claude_haiku"],
-            QueryComplexity.COMPLEX: ["claude_opus", "claude_sonnet", "gpt5", "deepseek", "groq_large"],
-            QueryComplexity.MATH:    ["claude_opus", "gpt5", "deepseek", "claude_sonnet", "groq_large"],
+            # Groq first: it's the only currently-funded LLM (free tier, generous).
+            # Better models (Claude/GPT/Gemini-pro) kept as fallbacks and will be
+            # picked again once their billing is funded + registered.
+            QueryComplexity.SIMPLE:  ["groq_fast", "groq_large", "gemini_flash", "deepseek", "claude_haiku", "claude_sonnet"],
+            QueryComplexity.MEDIUM:  ["groq_large", "gemini_pro", "deepseek", "claude_sonnet", "claude_haiku"],
+            QueryComplexity.COMPLEX: ["groq_large", "gpt5", "deepseek", "claude_opus", "claude_sonnet"],
+            QueryComplexity.MATH:    ["groq_large", "gpt5", "deepseek", "claude_opus", "claude_sonnet"],
         }
 
         # Cost estimates per query by complexity
@@ -106,8 +109,13 @@ class LLMRouter:
         logger.info("llm_router_init", available_models=list(self._clients.keys()))
 
     async def classify_complexity(self, query: str) -> QueryComplexity:
-        """Classify query complexity using Gemini Flash (<10ms target)."""
-        classifier = self._clients.get("gemini_flash")
+        """Classify query complexity with the cheapest available LLM."""
+        classifier = (
+            self._clients.get("groq_fast")
+            or self._clients.get("gemini_flash")
+            or self._clients.get("claude_haiku")
+            or self._clients.get("deepseek")
+        )
         if not classifier:
             # Fallback: simple heuristic if no classifier available
             return self._heuristic_classify(query)
@@ -207,7 +215,7 @@ class LLMRouter:
 
     def get_fast_client(self) -> BaseLLMClient:
         """Get the fastest/cheapest available client (for query understanding, etc.)."""
-        for key in ["claude_haiku", "gemini_flash", "groq_fast", "deepseek", "gpt4o", "claude_sonnet"]:
+        for key in ["groq_fast", "gemini_flash", "claude_haiku", "deepseek", "gpt4o", "groq_large", "claude_sonnet"]:
             if key in self._clients:
                 return self._clients[key]
         return next(iter(self._clients.values()))
