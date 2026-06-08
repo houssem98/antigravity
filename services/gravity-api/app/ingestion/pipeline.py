@@ -112,14 +112,17 @@ class IngestionPipeline:
         except Exception as e:
             logger.warning("graph_indexer_unavailable", error=str(e))
 
-        try:
-            from app.ingestion.indexing.structured_indexer import StructuredIndexer
-            from app.llm.router import LLMRouter
-            router = LLMRouter()
-            fast_client = router.get_fast_client()
-            structured_indexer = StructuredIndexer(llm_client=fast_client)
-        except Exception as e:
-            logger.warning("structured_indexer_unavailable", error=str(e))
+        # structured extraction makes LLM calls per filing; skip during fast bulk.
+        import os as _os_si
+        if _os_si.getenv("BULK_FAST_INGEST", "").lower() != "true":
+            try:
+                from app.ingestion.indexing.structured_indexer import StructuredIndexer
+                from app.llm.router import LLMRouter
+                router = LLMRouter()
+                fast_client = router.get_fast_client()
+                structured_indexer = StructuredIndexer(llm_client=fast_client)
+            except Exception as e:
+                logger.warning("structured_indexer_unavailable", error=str(e))
 
         try:
             from app.db.postgres import async_session

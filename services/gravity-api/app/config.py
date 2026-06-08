@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     voyage_api_key: str = ""
     cohere_api_key: str = ""
+    jina_api_key: str = ""              # JINA_API_KEY — jina-embeddings-v3 (1024d)
 
     # ── Model Defaults ──────────────────────────────────────────────────
     default_reasoning_model: str = "claude-sonnet-4-5-20250929"
