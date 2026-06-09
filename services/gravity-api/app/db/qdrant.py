@@ -119,6 +119,18 @@ class QdrantLazyClient:
         client = await self.client
         return await client.create_payload_index(*args, **kwargs)
 
+    async def retrieve(self, *args, **kwargs):
+        client = await self.client
+        if isinstance(client, _MockQdrantClient):
+            return []
+        return await client.retrieve(*args, **kwargs)
+
+    async def scroll(self, *args, **kwargs):
+        client = await self.client
+        if isinstance(client, _MockQdrantClient):
+            return ([], None)
+        return await client.scroll(*args, **kwargs)
+
 
 # Module singleton
 qdrant_client = QdrantLazyClient()
