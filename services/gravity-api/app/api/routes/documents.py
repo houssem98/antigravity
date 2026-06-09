@@ -33,43 +33,64 @@ async def get_db():
 async def chunk_context(
     chunk_id: str,
     window: int = Query(default=1, ge=0, le=3),
-    db=Depends(get_db),
     auth: dict = Depends(require_auth),
 ):
     """
     Return a cited chunk plus its neighbouring chunks (same document + level) for
-    small-to-big context in the citation panel. {chunks: [{position, text,
-    section, is_cited}], document_id}. Empty if the chunk isn't persisted.
+    small-to-big context in the citation panel. Reads from Qdrant payloads (the
+    SQLAlchemy ORM is stubbed; chunks live only in Qdrant). {document_id,
+    chunks: [{position, text, section, is_cited}]}.
     """
-    from app.db.models import Chunk
-    from sqlalchemy import select, and_
+    from qdrant_client import models as qm
+    from app.db.qdrant import qdrant_client, collection_for_org
 
-    cited = (await db.execute(select(Chunk).where(Chunk.id == chunk_id))).scalar_one_or_none()
-    if cited is None:
+    collection = collection_for_org(None)
+    try:
+        cited_pts = await qdrant_client.retrieve(
+            collection_name=collection, ids=[chunk_id], with_payload=True,
+        )
+    except Exception as e:
+        logger.warning("chunk_context_retrieve_failed", error=str(e))
         return {"document_id": None, "chunks": []}
 
-    lo, hi = (cited.position or 0) - window, (cited.position or 0) + window
-    rows = (await db.execute(
-        select(Chunk).where(and_(
-            Chunk.document_id == cited.document_id,
-            Chunk.chunk_level == cited.chunk_level,
-            Chunk.position >= lo,
-            Chunk.position <= hi,
-        )).order_by(Chunk.position)
-    )).scalars().all()
+    if not cited_pts:
+        return {"document_id": None, "chunks": []}
 
-    return {
-        "document_id": cited.document_id,
-        "chunks": [
-            {
-                "position": c.position,
-                "text": c.text,
-                "section": c.section_name or "",
-                "is_cited": c.id == chunk_id,
-            }
-            for c in rows
-        ],
-    }
+    p = cited_pts[0].payload or {}
+    doc_id = p.get("document_id")
+    pos = p.get("position")
+    level = p.get("chunk_level")
+    if doc_id is None or pos is None:
+        return {"document_id": doc_id, "chunks": [
+            {"position": pos, "text": p.get("text", ""), "section": p.get("section", ""), "is_cited": True}
+        ]}
+
+    must = [
+        qm.FieldCondition(key="document_id", match=qm.MatchValue(value=doc_id)),
+        qm.FieldCondition(key="position", range=qm.Range(gte=pos - window, lte=pos + window)),
+    ]
+    if level is not None:
+        must.append(qm.FieldCondition(key="chunk_level", match=qm.MatchValue(value=level)))
+
+    try:
+        found, _ = await qdrant_client.scroll(
+            collection_name=collection,
+            scroll_filter=qm.Filter(must=must),
+            with_payload=True, with_vectors=False, limit=2 * window + 2,
+        )
+    except Exception as e:
+        logger.warning("chunk_context_scroll_failed", error=str(e))
+        found = cited_pts
+
+    rows = sorted(
+        ({"position": (pt.payload or {}).get("position", 0),
+          "text": (pt.payload or {}).get("text", ""),
+          "section": (pt.payload or {}).get("section", ""),
+          "is_cited": str(pt.id) == chunk_id}
+         for pt in found),
+        key=lambda r: r["position"],
+    )
+    return {"document_id": doc_id, "chunks": rows}
 
 
 @router.get("/documents/filing-types")
