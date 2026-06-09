@@ -115,6 +115,42 @@ function AnswerText({ text, citations, onCitationOpen }: {
     );
 }
 
+// ─── Source pills (document-copilot style, our colors) ────────────────────────
+// Numbered chips under the answer; click opens the right-side context panel.
+
+function SourcePills({ citations, onOpen }: {
+    citations: GravityCitation[];
+    onOpen: (c: GravityCitation) => void;
+}) {
+    if (!citations.length) return null;
+    return (
+        <div>
+            <p className="text-[10px] text-[var(--text-3)] uppercase tracking-wider mb-2">Sources</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {citations.map(c => (
+                    <button
+                        key={c.citation_number}
+                        onClick={() => onOpen(c)}
+                        title={c.document_title}
+                        className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-left hover:border-[var(--accent)]/30 hover:bg-white/[0.04] transition-colors"
+                    >
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] text-[10px] font-bold flex items-center justify-center">
+                            {c.citation_number}
+                        </span>
+                        <span className="min-w-0">
+                            <span className="flex items-center gap-1.5">
+                                {c.ticker && <span className="text-[11px] font-mono font-semibold text-[var(--accent)]">{c.ticker}</span>}
+                                {c.is_verified && <CheckCircle className="w-3 h-3 text-green-400 flex-shrink-0" />}
+                            </span>
+                            <span className="block text-[10px] text-[var(--text-3)] truncate">{c.document_title}</span>
+                        </span>
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 // ─── Source card ──────────────────────────────────────────────────────────────
 
 function SourceCard({ source, index }: { source: GravitySource; index: number }) {
@@ -443,20 +479,32 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-                {/* Source metadata */}
-                <div className="flex flex-wrap gap-2">
-                    {citation.ticker && (
-                        <span className="px-2 py-0.5 rounded bg-[var(--accent)]/10 text-[var(--accent)] text-xs font-mono">{citation.ticker}</span>
-                    )}
-                    {citation.section && (
-                        <span className="px-2 py-0.5 rounded bg-white/[0.04] text-[var(--text-2)] text-xs">{citation.section}</span>
-                    )}
-                    {citation.is_verified && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/10 text-green-400 text-xs">
-                            <CheckCircle className="w-3 h-3" /> Verified
-                        </span>
-                    )}
-                </div>
+                {/* Source metadata — ticker · form · filed date (parsed from title) */}
+                {(() => {
+                    const fm = citation.document_title.match(/\b(10-K|10-Q|8-K|DEF 14A|S-1|20-F|6-K|40-F|13F-HR|SC 13[DG]|4)\b/);
+                    const dm = citation.document_title.match(/\d{4}-\d{2}-\d{2}/);
+                    return (
+                        <div className="flex flex-wrap gap-2">
+                            {citation.ticker && (
+                                <span className="px-2 py-0.5 rounded bg-[var(--accent)]/10 text-[var(--accent)] text-xs font-mono">{citation.ticker}</span>
+                            )}
+                            {fm && (
+                                <span className="px-2 py-0.5 rounded bg-white/[0.06] text-white text-xs font-medium">{fm[0]}</span>
+                            )}
+                            {dm && (
+                                <span className="px-2 py-0.5 rounded bg-white/[0.04] text-[var(--text-2)] text-xs">Filed {dm[0]}</span>
+                            )}
+                            {citation.section && (
+                                <span className="px-2 py-0.5 rounded bg-white/[0.04] text-[var(--text-2)] text-xs">{citation.section}</span>
+                            )}
+                            {citation.is_verified && (
+                                <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/10 text-green-400 text-xs">
+                                    <CheckCircle className="w-3 h-3" /> Verified
+                                </span>
+                            )}
+                        </div>
+                    );
+                })()}
 
                 {/* Passage */}
                 <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
@@ -1059,6 +1107,11 @@ export default function SearchPage() {
                                             </div>
                                         }
                                     </div>
+
+                                    {/* Source pills — click opens the right-side context panel */}
+                                    {qaState.citations.length > 0 && (
+                                        <SourcePills citations={qaState.citations} onOpen={setOpenCitation} />
+                                    )}
 
                                     {/* Follow-up queries */}
                                     {qaState.followUpQueries.length > 0 && (
