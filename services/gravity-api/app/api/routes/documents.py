@@ -79,18 +79,27 @@ async def chunk_context(
         logger.warning("chunk_context_scroll_failed", error=str(e))
         found = cited_pts
 
-    near = [
-        pt for pt in found
-        if abs(((pt.payload or {}).get("position", -999)) - pos) <= window
-    ]
-    rows = sorted(
-        ({"position": (pt.payload or {}).get("position", 0),
-          "text": (pt.payload or {}).get("text", ""),
-          "section": (pt.payload or {}).get("section", ""),
-          "is_cited": str(pt.id) == chunk_id}
-         for pt in near),
-        key=lambda r: r["position"],
-    )
+    # Keep prose chunks near the cited position; drop XBRL-fact chunks (which share
+    # positions with prose and would duplicate each row), then dedupe to one per
+    # position (the cited chunk always wins its slot).
+    by_pos: dict[int, dict] = {}
+    for pt in found:
+        pl = pt.payload or {}
+        ppos = pl.get("position", -999)
+        if abs(ppos - pos) > window:
+            continue
+        is_cited = str(pt.id) == chunk_id
+        if (pl.get("section") == "XBRL Financial Data") and not is_cited:
+            continue
+        if ppos in by_pos and not is_cited:
+            continue  # keep first prose / the cited one
+        by_pos[ppos] = {
+            "position": ppos,
+            "text": pl.get("text", ""),
+            "section": pl.get("section", ""),
+            "is_cited": is_cited,
+        }
+    rows = sorted(by_pos.values(), key=lambda r: r["position"])
     return {"document_id": doc_id, "chunks": rows}
 
 
