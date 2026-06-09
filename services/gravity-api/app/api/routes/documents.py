@@ -64,29 +64,31 @@ async def chunk_context(
             {"position": pos, "text": p.get("text", ""), "section": p.get("section", ""), "is_cited": True}
         ]}
 
-    # position is the global chunk order within a document (across levels), so
-    # position±window gives the truly adjacent chunks — do NOT filter by level.
-    must = [
-        qm.FieldCondition(key="document_id", match=qm.MatchValue(value=doc_id)),
-        qm.FieldCondition(key="position", range=qm.Range(gte=pos - window, lte=pos + window)),
-    ]
-
+    # Range filter on `position` needs a payload index (not created), so filter by
+    # document_id only and slice ±window in Python. position is the global chunk
+    # order within a document, so neighbours are position±1 (any level).
     try:
         found, _ = await qdrant_client.scroll(
             collection_name=collection,
-            scroll_filter=qm.Filter(must=must),
-            with_payload=True, with_vectors=False, limit=2 * window + 2,
+            scroll_filter=qm.Filter(must=[
+                qm.FieldCondition(key="document_id", match=qm.MatchValue(value=doc_id)),
+            ]),
+            with_payload=True, with_vectors=False, limit=2000,
         )
     except Exception as e:
         logger.warning("chunk_context_scroll_failed", error=str(e))
         found = cited_pts
 
+    near = [
+        pt for pt in found
+        if abs(((pt.payload or {}).get("position", -999)) - pos) <= window
+    ]
     rows = sorted(
         ({"position": (pt.payload or {}).get("position", 0),
           "text": (pt.payload or {}).get("text", ""),
           "section": (pt.payload or {}).get("section", ""),
           "is_cited": str(pt.id) == chunk_id}
-         for pt in found),
+         for pt in near),
         key=lambda r: r["position"],
     )
     return {"document_id": doc_id, "chunks": rows}
