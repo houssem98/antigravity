@@ -172,14 +172,11 @@ async def search_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("websocket_disconnected")
     except Exception as e:
-        import traceback as _tb
         logger.error("websocket_error", error=str(e), exc_info=True)
         try:
             await websocket.send_json({
                 "type": "error",
-                "data": {"message": "Internal server error",
-                         "detail": f"{type(e).__name__}: {e}",
-                         "where": _tb.format_exc().strip().splitlines()[-3:]},
+                "data": {"message": "Internal server error"},
             })
         except Exception:
             pass
