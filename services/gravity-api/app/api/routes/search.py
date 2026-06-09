@@ -132,7 +132,8 @@ async def search_stream(websocket: WebSocket):
         elif token:
             auth_context = await _validate_jwt(token)
 
-        if not auth_context and websocket.app.state.settings.app_env.value != "development":
+        from app.config import settings as _settings
+        if not auth_context and _settings.app_env.value != "development":
             await websocket.close(code=1008, reason="Authentication required")
             return
             
