@@ -65,10 +65,10 @@ class LLMRouter:
             # Groq first: it's the only currently-funded LLM (free tier, generous).
             # Better models (Claude/GPT/Gemini-pro) kept as fallbacks and will be
             # picked again once their billing is funded + registered.
-            QueryComplexity.SIMPLE:  ["groq_fast", "groq_large", "gemini_flash", "deepseek", "claude_haiku", "claude_sonnet"],
-            QueryComplexity.MEDIUM:  ["groq_large", "gemini_pro", "deepseek", "claude_sonnet", "claude_haiku"],
-            QueryComplexity.COMPLEX: ["groq_large", "gpt5", "deepseek", "claude_opus", "claude_sonnet"],
-            QueryComplexity.MATH:    ["groq_large", "gpt5", "deepseek", "claude_opus", "claude_sonnet"],
+            QueryComplexity.SIMPLE:  ["gpt4o", "groq_fast", "groq_large", "gemini_flash", "deepseek", "claude_haiku"],
+            QueryComplexity.MEDIUM:  ["gpt4o", "groq_large", "gpt5", "gemini_pro", "deepseek", "claude_sonnet"],
+            QueryComplexity.COMPLEX: ["gpt5", "gpt4o", "groq_large", "deepseek", "claude_opus", "claude_sonnet"],
+            QueryComplexity.MATH:    ["gpt5", "gpt4o", "groq_large", "deepseek", "claude_opus"],
         }
 
         # Cost estimates per query by complexity
@@ -89,8 +89,10 @@ class LLMRouter:
 
         if settings.openai_api_key:
             from app.llm.openai_client import OpenAIClient
-            self._clients["gpt5"] = OpenAIClient("gpt-5.2")
-            self._clients["gpt4o"] = OpenAIClient("gpt-4o")
+            # Valid, funded models with high TPM (Groq free tier 413s on big
+            # multi-source prompts). gpt-4o-mini is cheap + the default generator.
+            self._clients["gpt5"] = OpenAIClient("gpt-4o")
+            self._clients["gpt4o"] = OpenAIClient("gpt-4o-mini")
 
         if settings.google_api_key:
             from app.llm.google_client import GoogleClient
