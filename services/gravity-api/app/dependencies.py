@@ -29,7 +29,11 @@ def get_embedder():
 
     from typing import Callable
     providers: list[tuple[str, Callable]] = []
-    # Jina first: generous free tier, 1024-dim, used for bulk indexing.
+    # OpenAI first: funded, high rate limits, 1024-dim — reliable for bulk indexing.
+    if settings.openai_api_key:
+        from app.embeddings.openai_embedder import OpenAIEmbedder
+        providers.append(("openai", OpenAIEmbedder))
+    # Jina next: generous free tier, 1024-dim.
     if settings.jina_api_key:
         from app.embeddings.jina_embedder import JinaEmbedder
         providers.append(("jina", JinaEmbedder))
