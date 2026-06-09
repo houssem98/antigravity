@@ -210,6 +210,7 @@ function YouTubeHoverEmbed({ videoId, thumbnailUrl, title }: { videoId: string; 
   const [muted, setMuted]   = React.useState(!userHasInteracted);
   const [paused, setPaused] = React.useState(false);
   const [ready, setReady]   = React.useState(false);
+  const [embedFailed, setEmbedFailed] = React.useState(false);
 
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const mountRef   = React.useRef<HTMLDivElement>(null);
@@ -263,8 +264,21 @@ function YouTubeHoverEmbed({ videoId, thumbnailUrl, title }: { videoId: string; 
           rel: 0,
           playsinline: 1,
           start: resumeAt,
+          enablejsapi: 1,
+          origin: window.location.origin,
         },
         events: {
+          onError: (e: any) => {
+            // YT errors: 2=invalid, 5=html5 player, 100=not found/private,
+            // 101/150=embed disabled by uploader.
+            const code = e?.data;
+            console.warn('[YouTubeHoverEmbed] error', { videoId, code });
+            // Mark embed unavailable so the wrapper falls back to opening on youtube.com
+            setReady(false);
+            setEmbedFailed(true);
+            setMode('idle');
+            destroyPlayer();
+          },
           onReady: (e: any) => {
             try {
               if (userHasInteracted) { e.target.unMute(); e.target.setVolume(80); setMuted(false); }
@@ -327,6 +341,11 @@ function YouTubeHoverEmbed({ videoId, thumbnailUrl, title }: { videoId: string; 
   // resumes playback from the paused frame unless the user explicitly paused.
   const onWrapperClick = (e: React.MouseEvent) => {
     e.stopPropagation(); // don't let the card's link handler open YouTube in a new tab
+    // Embed previously failed → open on youtube.com so user can still watch
+    if (embedFailed) {
+      window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank', 'noopener,noreferrer');
+      return;
+    }
     if (mode === 'idle') { setMode('active'); return; }
     if (ready && paused && !userPausedRef.current) {
       try { playerRef.current?.playVideo?.(); } catch { /* ignore */ }
@@ -424,6 +443,12 @@ function YouTubeHoverEmbed({ videoId, thumbnailUrl, title }: { videoId: string; 
               <PlayCircle className="w-8 h-8 text-white" />
             </div>
           </div>
+          {embedFailed && (
+            <div className="absolute top-1.5 left-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider"
+              style={{ background: '#000000cc', color: '#FFAA00', border: '1px solid #FFAA0040', letterSpacing: '0.08em' }}>
+              OPEN ON YOUTUBE
+            </div>
+          )}
           {saved && saved > 1 ? (
             <div className="absolute bottom-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider"
               style={{ background: '#000000cc', color: '#fff', letterSpacing: '0.08em' }}>
