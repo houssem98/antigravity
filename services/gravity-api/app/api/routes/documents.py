@@ -59,18 +59,17 @@ async def chunk_context(
     p = cited_pts[0].payload or {}
     doc_id = p.get("document_id")
     pos = p.get("position")
-    level = p.get("chunk_level")
     if doc_id is None or pos is None:
         return {"document_id": doc_id, "chunks": [
             {"position": pos, "text": p.get("text", ""), "section": p.get("section", ""), "is_cited": True}
         ]}
 
+    # position is the global chunk order within a document (across levels), so
+    # position±window gives the truly adjacent chunks — do NOT filter by level.
     must = [
         qm.FieldCondition(key="document_id", match=qm.MatchValue(value=doc_id)),
         qm.FieldCondition(key="position", range=qm.Range(gte=pos - window, lte=pos + window)),
     ]
-    if level is not None:
-        must.append(qm.FieldCondition(key="chunk_level", match=qm.MatchValue(value=level)))
 
     try:
         found, _ = await qdrant_client.scroll(
