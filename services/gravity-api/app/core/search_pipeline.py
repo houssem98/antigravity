@@ -1178,13 +1178,10 @@ class SearchPipeline:
                     pass  # Audit failure must never affect the user
 
         except Exception as e:
-            import traceback as _tb
             logger.error("search_error", trace_id=trace_id, error=str(e), exc_info=True)
             yield SearchEvent(
                 type="error",
                 data={"message": "An error occurred during search. Please try again.",
-                      "detail": f"{type(e).__name__}: {e}",
-                      "where": _tb.format_exc().strip().splitlines()[-3:],
                       "trace_id": trace_id},
                 trace_id=trace_id,
             )
