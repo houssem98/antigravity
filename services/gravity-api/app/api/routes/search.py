@@ -132,7 +132,8 @@ async def search_stream(websocket: WebSocket):
         elif token:
             auth_context = await _validate_jwt(token)
 
-        if not auth_context and websocket.app.state.settings.app_env.value != "development":
+        from app.config import settings as _settings
+        if not auth_context and _settings.app_env.value != "development":
             await websocket.close(code=1008, reason="Authentication required")
             return
             
@@ -171,7 +172,7 @@ async def search_stream(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("websocket_disconnected")
     except Exception as e:
-        logger.error("websocket_error", error=str(e))
+        logger.error("websocket_error", error=str(e), exc_info=True)
         try:
             await websocket.send_json({
                 "type": "error",

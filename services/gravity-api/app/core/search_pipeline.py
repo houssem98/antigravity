@@ -349,8 +349,14 @@ class SearchPipeline:
             )
 
             # ── Stage 2: Semantic Cache Check ───────────────────────────
+            # Cache failures (e.g. Redis without RediSearch/vector ops) must
+            # never break search — treat any error as a cache miss.
             if self.cache:
-                cached = await self.cache.get(query)
+                try:
+                    cached = await self.cache.get(query)
+                except Exception as e:
+                    logger.warning("cache_get_skip", trace_id=trace_id, error=str(e))
+                    cached = None
                 if cached:
                     logger.info("cache_hit", trace_id=trace_id)
                     yield SearchEvent(type="answer", data=cached, trace_id=trace_id)
@@ -1033,10 +1039,13 @@ class SearchPipeline:
 
             # ── Stage 9: Cache Result ───────────────────────────────────
             if self.cache:
-                await self.cache.set(query, {
-                    "answer": validated_answer,
-                    "sources": source_data,
-                })
+                try:
+                    await self.cache.set(query, {
+                        "answer": validated_answer,
+                        "sources": source_data,
+                    })
+                except Exception as e:
+                    logger.warning("cache_set_skip", trace_id=trace_id, error=str(e))
 
             # Store in memory palace (fire-and-forget, non-blocking)
             try:

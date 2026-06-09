@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     cohere_api_key: str = ""
     jina_api_key: str = ""              # JINA_API_KEY — jina-embeddings-v3 (1024d)
+    openrouter_api_key: str = ""        # OPENROUTER_API_KEY — Hermes + OSS models
+    together_api_key: str = ""          # TOGETHER_API_KEY — Hermes hosted
+
+    # ── Hermes Integration (Phase 0 feature flags) ───────────────────────
+    # Master kill switch. False = Hermes route disabled, all queries use existing pipeline.
+    hermes_enabled: bool = False
+    # 0-100. Percent of qualifying queries to route to Hermes. 0 = off, 100 = all qualifying.
+    hermes_route_percentage: int = 0
+    # Query complexity tiers eligible for Hermes routing.
+    # Allowed values: "simple", "summarization", "factual"
+    hermes_route_for: str = "simple,summarization"
+    hermes_model: str = "nousresearch/hermes-4-70b"
+    hermes_base_url: str = "https://openrouter.ai/api/v1"
 
     # ── Model Defaults ──────────────────────────────────────────────────
     default_reasoning_model: str = "claude-sonnet-4-5-20250929"
