@@ -26,7 +26,7 @@ import { runResearchGraph } from '../services/researchGraph';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
 import BlueprintReview from '../components/research/BlueprintReview';
-import { supabase } from '../services/supabase';
+import { supabase, getAccessToken } from '../services/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -463,6 +463,71 @@ function AgentTracePanel({ steps, complete, totalIterations, totalCostUsd }: {
 
 // ─── Citation side panel ──────────────────────────────────────────────────────
 
+// ─── Source context — cited chunk + neighbours (small-to-big) ─────────────────
+
+interface ContextChunk { position: number; text: string; section: string; is_cited: boolean; }
+
+function SourceContext({ citation }: { citation: GravityCitation }) {
+    const [chunks, setChunks] = useState<ContextChunk[] | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let alive = true;
+        setLoading(true); setChunks(null);
+        (async () => {
+            try {
+                const tok = await getAccessToken();
+                const res = await fetch(
+                    `${GRAVITY_API}/v1/documents/chunk/${encodeURIComponent(citation.chunk_id)}/context?window=1`,
+                    { headers: tok ? { Authorization: `Bearer ${tok}` } : {} },
+                );
+                const data = res.ok ? await res.json() : null;
+                if (alive) setChunks(data?.chunks?.length ? data.chunks : null);
+            } catch {
+                if (alive) setChunks(null);
+            } finally {
+                if (alive) setLoading(false);
+            }
+        })();
+        return () => { alive = false; };
+    }, [citation.chunk_id]);
+
+    // Fallback: no neighbours persisted → show the cited passage alone.
+    const rows: ContextChunk[] = chunks ?? [
+        { position: 0, text: citation.text, section: citation.section, is_cited: true },
+    ];
+
+    return (
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+            <div className="flex items-center justify-between mb-3">
+                <p className="text-xs text-[var(--text-3)] uppercase tracking-wider">Source Context</p>
+                {loading && <div className="w-3 h-3 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />}
+            </div>
+            <p className="text-[10px] text-[var(--text-3)] mb-3">Neighbouring chunks are shown around the cited passage for continuity.</p>
+            <div className="space-y-2">
+                {rows.map((c, i) => (
+                    <div
+                        key={i}
+                        className={c.is_cited
+                            ? 'rounded-lg border border-[var(--accent)]/40 bg-[var(--accent)]/[0.06] p-3'
+                            : 'rounded-lg border border-white/[0.05] bg-white/[0.01] p-3'}
+                    >
+                        <div className="flex items-center gap-2 mb-1.5">
+                            <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${c.is_cited ? 'bg-[var(--accent)]/20 text-[var(--accent)]' : 'bg-white/[0.05] text-[var(--text-3)]'}`}>
+                                {c.is_cited ? 'Cited passage' : (i === 0 ? 'Previous' : 'Next')}
+                            </span>
+                            {c.section && <span className="text-[10px] text-[var(--text-3)] truncate">{c.section}</span>}
+                        </div>
+                        <p className={`text-xs leading-relaxed ${c.is_cited ? 'text-[var(--text)]' : 'text-[var(--text-2)]'}`}>
+                            {c.is_cited ? `"${c.text}"` : c.text}
+                        </p>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClose: () => void }) {
     return (
         <div className="fixed inset-y-0 right-0 w-[400px] max-w-full z-50 flex flex-col" style={{ background: 'var(--bg)', borderLeft: '1px solid rgba(255,255,255,0.08)' }}>
@@ -506,13 +571,8 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
                     );
                 })()}
 
-                {/* Passage */}
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
-                    <p className="text-xs text-[var(--text-3)] uppercase tracking-wider mb-3">Source Passage</p>
-                    <blockquote className="text-sm text-[var(--text)] leading-relaxed border-l-2 border-[var(--accent)]/40 pl-4">
-                        "{citation.text}"
-                    </blockquote>
-                </div>
+                {/* Source context — cited passage + neighbouring chunks */}
+                <SourceContext citation={citation} />
 
                 {/* Link to full doc */}
                 <a

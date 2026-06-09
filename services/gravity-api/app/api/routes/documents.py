@@ -29,6 +29,49 @@ async def get_db():
         yield session
 
 
+@router.get("/documents/chunk/{chunk_id}/context")
+async def chunk_context(
+    chunk_id: str,
+    window: int = Query(default=1, ge=0, le=3),
+    db=Depends(get_db),
+    auth: dict = Depends(require_auth),
+):
+    """
+    Return a cited chunk plus its neighbouring chunks (same document + level) for
+    small-to-big context in the citation panel. {chunks: [{position, text,
+    section, is_cited}], document_id}. Empty if the chunk isn't persisted.
+    """
+    from app.db.models import Chunk
+    from sqlalchemy import select, and_
+
+    cited = (await db.execute(select(Chunk).where(Chunk.id == chunk_id))).scalar_one_or_none()
+    if cited is None:
+        return {"document_id": None, "chunks": []}
+
+    lo, hi = (cited.position or 0) - window, (cited.position or 0) + window
+    rows = (await db.execute(
+        select(Chunk).where(and_(
+            Chunk.document_id == cited.document_id,
+            Chunk.chunk_level == cited.chunk_level,
+            Chunk.position >= lo,
+            Chunk.position <= hi,
+        )).order_by(Chunk.position)
+    )).scalars().all()
+
+    return {
+        "document_id": cited.document_id,
+        "chunks": [
+            {
+                "position": c.position,
+                "text": c.text,
+                "section": c.section_name or "",
+                "is_cited": c.id == chunk_id,
+            }
+            for c in rows
+        ],
+    }
+
+
 @router.get("/documents/filing-types")
 async def list_filing_types():
     """
