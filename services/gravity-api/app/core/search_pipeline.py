@@ -703,13 +703,23 @@ class SearchPipeline:
                 # Stream tokens — try each client in fallback order.
                 # Credit/rate-limit errors are raised on the first iteration
                 # (before any tokens), so fallback is always clean.
+                #
+                # The model emits a JSON envelope ({"answer":"...", ...}); we must
+                # never stream that raw JSON to the client. Extract the prose value
+                # of the "answer" field incrementally and stream only its deltas, so
+                # the client sees clean markdown as it arrives.
                 for _client in clients_ordered:
+                    _sent_answer = ""
                     try:
                         async for token in _client.generate_stream(
                             messages=[system_msg, user_msg], config=gen_config
                         ):
                             full_response += token
-                            yield SearchEvent(type="token", data={"token": token}, trace_id=trace_id)
+                            _clean = _extract_partial_answer(full_response)
+                            if len(_clean) > len(_sent_answer):
+                                _delta = _clean[len(_sent_answer):]
+                                _sent_answer = _clean
+                                yield SearchEvent(type="token", data={"token": _delta}, trace_id=trace_id)
                         routing_decision = RoutingDecision(
                             complexity=routing_decision.complexity,
                             primary_model=_client.model_id,
@@ -1280,3 +1290,46 @@ def _extract_confidence(answer: str) -> str:
     elif '"confidence": "low"' in answer_lower or '"confidence":"low"' in answer_lower:
         return "LOW"
     return "MEDIUM"
+
+
+_ANSWER_KEY_RE = re.compile(r'"answer"\s*:\s*"')
+
+
+def _extract_partial_answer(raw: str) -> str:
+    """
+    Pull the prose value of the JSON ``"answer"`` field out of a possibly
+    partial (mid-stream) LLM envelope, decoding escape sequences to real text.
+
+    The model is prompted to emit a JSON object ({"answer": "...", ...}); we must
+    never stream that envelope to the client. Given the response accumulated so
+    far, return the clean answer text available so far. If the response is plain
+    text (not a JSON envelope), return it unchanged.
+    """
+    s = raw.lstrip()
+    if not s.startswith("{"):
+        return raw  # plain-text answer — stream as-is
+    m = _ANSWER_KEY_RE.search(s)
+    if not m:
+        return ""  # JSON started but the answer field hasn't appeared yet
+    rest = s[m.end():]
+    out: list[str] = []
+    i = 0
+    closed = False
+    _esc = {"n": "\n", "t": "\t", "r": "\n", '"': '"', "\\": "\\", "/": "/"}
+    while i < len(rest):
+        ch = rest[i]
+        if ch == "\\" and i + 1 < len(rest):
+            out.append(_esc.get(rest[i + 1], rest[i + 1]))
+            i += 2
+            continue
+        if ch == '"':  # unescaped quote ends the answer value
+            closed = True
+            break
+        out.append(ch)
+        i += 1
+    res = "".join(out)
+    # Hold back a dangling escape backslash at the buffer boundary so we don't
+    # emit a stray '\' that the next chunk will complete into an escape.
+    if not closed and res.endswith("\\"):
+        res = res[:-1]
+    return res
