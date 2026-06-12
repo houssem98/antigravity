@@ -544,6 +544,8 @@ function SourceContext({ citation }: { citation: GravityCitation }) {
     useEffect(() => {
         let alive = true;
         setLoading(true); setChunks(null);
+        // No chunk id → nothing to fetch; fall back to the cited passage.
+        if (!citation.chunk_id) { setLoading(false); return; }
         (async () => {
             try {
                 const tok = await getAccessToken();
@@ -564,7 +566,7 @@ function SourceContext({ citation }: { citation: GravityCitation }) {
 
     // Fallback: no neighbours persisted → show the cited passage alone.
     const rows: ContextChunk[] = chunks ?? [
-        { position: 0, text: citation.text, section: citation.section, is_cited: true },
+        { position: 0, text: citation.text ?? '', section: citation.section ?? '', is_cited: true },
     ];
 
     return (
@@ -606,7 +608,7 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
                     <span className="w-5 h-5 rounded-full bg-[var(--accent)]/20 text-[var(--accent)] text-[10px] font-bold flex items-center justify-center">
                         {citation.citation_number}
                     </span>
-                    <span className="text-xs font-semibold text-white truncate max-w-[280px]">{citation.document_title}</span>
+                    <span className="text-xs font-semibold text-white truncate max-w-[280px]">{citation.document_title || citation.ticker || `Source [${citation.citation_number}]`}</span>
                 </div>
                 <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
                     <X className="w-4 h-4 text-[var(--text-2)]" />
@@ -616,8 +618,9 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
                 {/* Source metadata — ticker · form · filed date (parsed from title) */}
                 {(() => {
-                    const fm = citation.document_title.match(/\b(10-K|10-Q|8-K|DEF 14A|S-1|20-F|6-K|40-F|13F-HR|SC 13[DG]|4)\b/);
-                    const dm = citation.document_title.match(/\d{4}-\d{2}-\d{2}/);
+                    const docTitle = citation.document_title ?? '';
+                    const fm = docTitle.match(/\b(10-K|10-Q|8-K|DEF 14A|S-1|20-F|6-K|40-F|13F-HR|SC 13[DG]|4)\b/);
+                    const dm = docTitle.match(/\d{4}-\d{2}-\d{2}/);
                     return (
                         <div className="flex flex-wrap gap-2">
                             {citation.ticker && (
@@ -646,7 +649,7 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
 
                 {/* Link to full doc */}
                 <a
-                    href={`/documents?ticker=${citation.ticker}&title=${encodeURIComponent(citation.document_title)}`}
+                    href={`/documents?ticker=${citation.ticker ?? ''}&title=${encodeURIComponent(citation.document_title ?? '')}`}
                     className="flex items-center gap-2 text-xs text-[var(--accent)] hover:text-[var(--accent)] transition-colors"
                 >
                     <ExternalLink className="w-3.5 h-3.5" />
