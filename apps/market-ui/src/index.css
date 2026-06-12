@@ -375,6 +375,61 @@
     100% { background: transparent; }
   }
   .tick-flash { animation: tick-flash 600ms ease-out; }
+
+  /* ── AURORA — slow drifting atmospheric depth behind hero surfaces ─── */
+  @keyframes aurora-a {
+    0%, 100% { transform: translate3d(-6%, -4%, 0) scale(1);    }
+    50%      { transform: translate3d(7%, 6%, 0)  scale(1.18);  }
+  }
+  @keyframes aurora-b {
+    0%, 100% { transform: translate3d(6%, 3%, 0)  scale(1.12);  }
+    50%      { transform: translate3d(-7%, -7%, 0) scale(1);     }
+  }
+  .aurora { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+  .aurora::before, .aurora::after {
+    content: ""; position: absolute; border-radius: 9999px; filter: blur(64px); opacity: 0.42;
+  }
+  .aurora::before {
+    width: 40rem; height: 40rem; left: 6%; top: -24%;
+    background: radial-gradient(circle, color-mix(in oklch, var(--accent) 40%, transparent), transparent 62%);
+    animation: aurora-a 20s ease-in-out infinite;
+  }
+  .aurora::after {
+    width: 34rem; height: 34rem; right: 4%; top: -14%;
+    background: radial-gradient(circle, color-mix(in oklch, oklch(0.785 0.170 72) 30%, transparent), transparent 62%);
+    animation: aurora-b 26s ease-in-out infinite;
+  }
+
+  /* ── Streaming caret — premium answer-in-progress marker ─── */
+  @keyframes caret-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .stream-caret {
+    display: inline-block; width: 7px; height: 1.05em; margin-left: 2px;
+    vertical-align: text-bottom; border-radius: 1px;
+    background: var(--accent);
+    box-shadow: 0 0 8px color-mix(in oklch, var(--accent) 60%, transparent);
+    animation: caret-pulse 1s ease-in-out infinite;
+  }
+
+  /* ── Sheen sweep on reveal — one-shot premium highlight ─── */
+  @keyframes sheen-once {
+    from { transform: translateX(-130%); }
+    to   { transform: translateX(130%);  }
+  }
+  .sheen-once { position: relative; overflow: hidden; isolation: isolate; }
+  .sheen-once::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; mix-blend-mode: overlay;
+    background: linear-gradient(115deg, transparent 38%, color-mix(in oklch, white 26%, transparent) 50%, transparent 62%);
+    transform: translateX(-130%);
+    animation: sheen-once 1100ms cubic-bezier(0.2, 0.8, 0.2, 1) 200ms both;
+  }
+
+  /* ── Focus halo for the composer input ─── */
+  .input-halo { transition: box-shadow 220ms cubic-bezier(0.2,0.8,0.2,1), border-color 180ms; }
+  .input-halo:focus-within {
+    border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 14%, transparent),
+                0 8px 28px -10px color-mix(in oklch, var(--accent) 50%, transparent);
+  }
 }
 
 ::-webkit-scrollbar       { width: 8px; height: 8px; }

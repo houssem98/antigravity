@@ -223,6 +223,10 @@ export function useGravitySearch() {
                                     cacheHit: data.cache_hit ?? false,
                                 };
                             case 'error':
+                                // Late-stage errors (citation/metadata tail, or a
+                                // duplicate run on reconnect) must not bury an answer
+                                // that already streamed in successfully.
+                                if (prev.finalAnswer || prev.streamingAnswer) return prev;
                                 return { ...prev, status: 'error', error: data.message ?? 'Search failed' };
                             default:
                                 return prev;
@@ -232,22 +236,27 @@ export function useGravitySearch() {
             };
 
             ws.onclose = () => {
-                if (reconnectRef.current < 3) {
-                    const delay = 1000 * Math.pow(2, reconnectRef.current++);
-                    setTimeout(connect, delay);
-                } else {
-                    setState(prev => {
-                        if (prev.status === 'complete' || prev.status === 'error') return prev;
-                        if (prev.finalAnswer || prev.streamingAnswer || prev.sources.length > 0) {
-                            return { ...prev, status: 'complete' };
-                        }
-                        return {
-                            ...prev,
-                            status: 'error',
-                            error: 'Could not connect to the Gravity backend. Check VITE_GRAVITY_API_URL and that the API is reachable.',
-                        };
-                    });
-                }
+                setState(prev => {
+                    // Terminal already, or an answer/sources arrived → clean finish.
+                    // Do NOT reconnect: the server closes the socket after delivering
+                    // the answer, and reconnecting re-sends the query (a full re-run
+                    // that also surfaces spurious tail errors). Mark complete instead.
+                    if (prev.status === 'complete' || prev.status === 'error') return prev;
+                    if (prev.finalAnswer || prev.streamingAnswer || prev.sources.length > 0) {
+                        return { ...prev, status: 'complete' };
+                    }
+                    // No data yet → genuine early drop. Retry with backoff.
+                    if (reconnectRef.current < 3) {
+                        const delay = 1000 * Math.pow(2, reconnectRef.current++);
+                        setTimeout(connect, delay);
+                        return prev;
+                    }
+                    return {
+                        ...prev,
+                        status: 'error',
+                        error: 'Could not connect to the Gravity backend. Check VITE_GRAVITY_API_URL and that the API is reachable.',
+                    };
+                });
             };
 
             ws.onerror = () => { /* onclose handles reconnect */ };
