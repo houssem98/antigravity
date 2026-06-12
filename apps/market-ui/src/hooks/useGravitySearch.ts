@@ -123,6 +123,48 @@ export interface SearchFilters {
     sections?: string[];
 }
 
+// ─── Answer cleaner ─────────────────────────────────────────────────────────
+// Some models wrap their output as a JSON object ({"answer":"...\\n\\n| … |"})
+// or emit literal escape sequences instead of real newlines. Unwrap to clean
+// markdown so the renderer can parse tables/headings. Handles complete payloads
+// and partial (mid-stream) ones.
+
+function decodeEscapes(s: string): string {
+    if (s.includes('\\n') || s.includes('\\t') || s.includes('\\"') || s.includes('\\r')) {
+        return s
+            .replace(/\\r\\n/g, '\n')
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+    }
+    return s;
+}
+
+export function cleanAnswer(raw: string): string {
+    if (!raw) return raw;
+    const trimmed = raw.trimStart();
+    if (trimmed.startsWith('{')) {
+        // Complete JSON object → pull the answer-like field.
+        try {
+            const o = JSON.parse(trimmed);
+            const inner = o.answer ?? o.response ?? o.text ?? o.content ?? o.markdown;
+            if (typeof inner === 'string') return decodeEscapes(inner);
+        } catch { /* partial/streaming or trailing junk — fall through */ }
+        // Live/partial extraction of the answer string value.
+        const key = trimmed.match(/"(?:answer|response|text|content|markdown)"\s*:\s*"/);
+        if (key) {
+            let rest = trimmed.slice((key.index ?? 0) + key[0].length);
+            // Cut at the closing unescaped quote that ends the value, if present.
+            const end = rest.search(/(?<!\\)"\s*[,}]/);
+            if (end >= 0) rest = rest.slice(0, end);
+            return decodeEscapes(rest);
+        }
+    }
+    return decodeEscapes(raw);
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useGravitySearch() {
@@ -185,7 +227,7 @@ export function useGravitySearch() {
                                 return {
                                     ...prev,
                                     status: 'complete',
-                                    finalAnswer: data.answer ?? '',
+                                    finalAnswer: cleanAnswer(data.answer ?? ''),
                                     streamingAnswer: '',
                                     citations: data.citations ?? [],
                                     confidence: data.confidence ?? 0,
