@@ -12,7 +12,7 @@ import {
     Settings as SettingsIcon, Bookmark, BookmarkCheck, X, ExternalLink, Grid3x3,
 } from 'lucide-react';
 import GridView from '../components/grid/GridView';
-import { useGravitySearch, type GravityCitation, type GravitySource, type GravityMetric, type ChartSpec, type SearchFilters } from '../hooks/useGravitySearch';
+import { useGravitySearch, cleanAnswer, type GravityCitation, type GravitySource, type GravityMetric, type ChartSpec, type SearchFilters } from '../hooks/useGravitySearch';
 import {
     LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer, Legend,
@@ -130,6 +130,7 @@ function AnswerText({ text, citations, onCitationOpen }: {
     const citationMap = new Map(citations.map(c => [c.citation_number, c]));
     const onOpen = onCitationOpen ?? (() => {});
     const cite = (children: ReactNode) => injectCitations(children, citationMap, onOpen);
+    const md = cleanAnswer(text);
 
     return (
         <div className="text-[var(--text)] text-[13.5px] leading-7 space-y-3.5 break-words">
@@ -178,7 +179,7 @@ function AnswerText({ text, citations, onCitationOpen }: {
                     ),
                 }}
             >
-                {text}
+                {md}
             </ReactMarkdown>
         </div>
     );
