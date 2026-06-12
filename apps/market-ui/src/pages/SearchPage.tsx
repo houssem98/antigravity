@@ -1,7 +1,9 @@
 // Unified Search Page — QA (Gravity WebSocket) + Deep Research (Gemini Pipeline)
 // User toggles between ⚡ Quick Answer and 📄 Deep Research before searching.
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, Children, type ReactNode } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useResearchStore } from '../stores/researchStore';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
@@ -26,7 +28,13 @@ import { runResearchGraph } from '../services/researchGraph';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
 import BlueprintReview from '../components/research/BlueprintReview';
+import QaSearchProgress from '../components/qa/QaSearchProgress';
 import { supabase, getAccessToken } from '../services/supabase';
+import {
+    listQaConversations, createQaConversation, loadQaTurns, saveQaTurn,
+    deleteQaConversation, conversationTitle,
+    type QaConversationMeta,
+} from '../services/qaHistory';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,26 +99,87 @@ function CitationBadge({ citation, onOpen }: { citation: GravityCitation; onOpen
 
 // ─── Answer renderer with inline citation badges ──────────────────────────────
 
+// Replace inline [N] markers in any direct string child with a clickable citation
+// badge. Applied at every text-bearing element so badges work inside paragraphs,
+// list items, table cells, headings, and emphasis alike.
+function injectCitations(
+    children: ReactNode,
+    citationMap: Map<number, GravityCitation>,
+    onOpen: (c: GravityCitation) => void,
+): ReactNode {
+    return Children.map(children, (child) => {
+        if (typeof child !== 'string') return child;
+        const parts = child.split(/(\[\d+\])/g);
+        return parts.map((part, i) => {
+            const m = part.match(/^\[(\d+)\]$/);
+            if (!m) return part;
+            const num = parseInt(m[1], 10);
+            const c = citationMap.get(num);
+            return c
+                ? <CitationBadge key={i} citation={c} onOpen={onOpen} />
+                : <sup key={i} className="text-[var(--accent)] text-xs">[{num}]</sup>;
+        });
+    });
+}
+
 function AnswerText({ text, citations, onCitationOpen }: {
     text: string;
     citations: GravityCitation[];
     onCitationOpen?: (c: GravityCitation) => void;
 }) {
     const citationMap = new Map(citations.map(c => [c.citation_number, c]));
-    const parts = text.split(/(\[\d+\])/g);
+    const onOpen = onCitationOpen ?? (() => {});
+    const cite = (children: ReactNode) => injectCitations(children, citationMap, onOpen);
+
     return (
-        <div className="prose prose-invert prose-sm max-w-none text-[var(--text)] leading-7">
-            {parts.map((part, i) => {
-                const match = part.match(/^\[(\d+)\]$/);
-                if (match) {
-                    const num = parseInt(match[1]);
-                    const citation = citationMap.get(num);
-                    return citation
-                        ? <CitationBadge key={i} citation={citation} onOpen={onCitationOpen ?? (() => {})} />
-                        : <sup key={i} className="text-[var(--accent)] text-xs">[{num}]</sup>;
-                }
-                return <span key={i}>{part}</span>;
-            })}
+        <div className="text-[var(--text)] text-[13.5px] leading-7 space-y-3.5 break-words">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                    p: ({ children }) => <p className="leading-7">{cite(children)}</p>,
+                    strong: ({ children }) => <strong className="font-semibold text-white">{cite(children)}</strong>,
+                    em: ({ children }) => <em className="italic">{cite(children)}</em>,
+                    a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer"
+                           className="text-[var(--accent)] underline decoration-[var(--accent)]/40 hover:decoration-[var(--accent)]">
+                            {cite(children)}
+                        </a>
+                    ),
+                    ul: ({ children }) => <ul className="list-disc pl-5 space-y-1.5 marker:text-[var(--text-3)]">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 space-y-1.5 marker:text-[var(--text-3)]">{children}</ol>,
+                    li: ({ children }) => <li className="leading-7">{cite(children)}</li>,
+                    h1: ({ children }) => <h1 className="font-display text-lg font-semibold text-white mt-5 mb-2">{cite(children)}</h1>,
+                    h2: ({ children }) => <h2 className="font-display text-base font-semibold text-white mt-5 mb-2">{cite(children)}</h2>,
+                    h3: ({ children }) => <h3 className="font-display text-sm font-semibold text-white/90 mt-4 mb-1.5 uppercase tracking-wide">{cite(children)}</h3>,
+                    blockquote: ({ children }) => (
+                        <blockquote className="pl-3 border-l border-white/15 text-[var(--text-2)] italic">{children}</blockquote>
+                    ),
+                    hr: () => <hr className="border-white/[0.08] my-4" />,
+                    code: ({ children }) => (
+                        <code className="font-mono text-[12px] bg-white/[0.06] text-[var(--accent)] px-1 py-0.5 rounded">{children}</code>
+                    ),
+                    pre: ({ children }) => (
+                        <pre className="font-mono text-[12px] bg-white/[0.03] border border-white/[0.06] rounded-lg p-3 overflow-x-auto">{children}</pre>
+                    ),
+                    table: ({ children }) => (
+                        <div className="overflow-x-auto rounded-lg border border-white/[0.08] my-3">
+                            <table className="w-full text-[12.5px] border-collapse">{children}</table>
+                        </div>
+                    ),
+                    thead: ({ children }) => <thead className="bg-white/[0.04]">{children}</thead>,
+                    tr: ({ children }) => <tr className="border-b border-white/[0.06] last:border-0">{children}</tr>,
+                    th: ({ children }) => (
+                        <th className="px-3 py-2 text-left font-semibold text-[var(--text-2)] uppercase tracking-wider text-[11px] whitespace-nowrap">
+                            {cite(children)}
+                        </th>
+                    ),
+                    td: ({ children }) => (
+                        <td className="px-3 py-2 text-[var(--text)] align-top whitespace-nowrap">{cite(children)}</td>
+                    ),
+                }}
+            >
+                {text}
+            </ReactMarkdown>
         </div>
     );
 }
@@ -132,7 +201,7 @@ function SourcePills({ citations, onOpen }: {
                         key={c.citation_number}
                         onClick={() => onOpen(c)}
                         title={c.document_title}
-                        className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-left hover:border-[var(--accent)]/30 hover:bg-white/[0.04] transition-colors"
+                        className="shiny chrome press flex items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--line)] bg-white/[0.02] px-2.5 py-2 text-left hover:border-[color-mix(in_oklch,var(--accent)_40%,transparent)] transition-colors"
                     >
                         <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] text-[10px] font-bold flex items-center justify-center">
                             {c.citation_number}
@@ -636,7 +705,7 @@ export default function SearchPage() {
 
     // ── QA state ──────────────────────────────────────────────────────────────
     const [qaInput, setQaInput] = useState('');
-    const [conversationId] = useState<string>(() => crypto.randomUUID());
+    const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
     const [chatHistory, setChatHistory] = useState<ChatTurn[]>([]);
     const [activeTab, setActiveTab] = useState<'answer' | 'sources' | 'data'>('answer');
     const [activeSource, setActiveSource] = useState<SourceFilterId>('all');
@@ -651,7 +720,15 @@ export default function SearchPage() {
     const [openCitation, setOpenCitation] = useState<GravityCitation | null>(null);
     const [savedSearches, setSavedSearches] = useState<Set<string>>(new Set());
     const qaInputRef = useRef<HTMLInputElement>(null);
-    const { state: qaState, displayAnswer, search: qaSearch, cancel: qaCancel } = useGravitySearch();
+    const { state: qaState, displayAnswer, search: qaSearch, cancel: qaCancel, reset: qaReset } = useGravitySearch();
+
+    // ── QA history (persistent — Supabase qa_conversations/qa_turns) ──────────
+    const [qaConversations, setQaConversations] = useState<QaConversationMeta[]>([]);
+    const [activeQaId, setActiveQaId] = useState<string | null>(null);
+    const [qaSidebarSearch, setQaSidebarSearch] = useState('');
+    const [currentQuery, setCurrentQuery] = useState<string | null>(null); // live exchange question
+    const completedRef = useRef(false);                     // dedupe the complete→persist effect
+    const threadEndRef = useRef<HTMLDivElement>(null);
 
     // ── Research state (global store — survives route changes) ────────────────
     const [researchInput, setResearchInput] = useState('');
@@ -690,6 +767,7 @@ export default function SearchPage() {
     // ── Init ──────────────────────────────────────────────────────────────────
     useEffect(() => {
         fetchHistory();
+        loadQaConversations();
         const q = searchParams.get('q');
         const m = searchParams.get('mode');
         if (m === 'research') setMode('research');
@@ -709,21 +787,24 @@ export default function SearchPage() {
     // ── QA handlers ───────────────────────────────────────────────────────────
 
     const handleQaSubmit = (q: string) => {
-        if (!q.trim()) return;
+        if (!q.trim() || isQaSearching) return;
 
-        // Save previous turn to history if an answer exists
-        if (displayAnswer) {
+        // Commit the previous finished exchange into the thread before starting
+        // a new one. The live block always renders only the current exchange.
+        if (currentQuery && qaState.finalAnswer) {
+            const finished = currentQuery;
+            const finishedAnswer = qaState.finalAnswer;
             setChatHistory(prev => [
                 ...prev,
-                { role: 'user', content: qaInput },
+                { role: 'user', content: finished },
                 {
                     role: 'assistant',
-                    content: qaState.finalAnswer || displayAnswer,
+                    content: finishedAnswer,
                     citations: qaState.citations,
                     sources: qaState.sources,
                     structuredData: qaState.structuredData,
                     chartSpecs: qaState.chartSpecs,
-                }
+                },
             ]);
         }
 
@@ -738,11 +819,115 @@ export default function SearchPage() {
             ? { document_types: docTypes }
             : undefined;
 
-        setQaInput(q);
+        setCurrentQuery(q.trim());
+        completedRef.current = false;
+        setQaInput('');
         setActiveTab('answer');
         setOpenCitation(null);
         qaSearch(q.trim(), conversationId, filters);
+        requestAnimationFrame(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
     };
+
+    // ── QA history handlers ────────────────────────────────────────────────────
+
+    const loadQaConversations = useCallback(async () => {
+        const rows = await listQaConversations();
+        setQaConversations(rows);
+    }, []);
+
+    // On completion, persist the exchange (create the conversation row on first
+    // answer). Display is handled by the live block — this only touches the DB.
+    useEffect(() => {
+        if (qaState.status !== 'complete' || completedRef.current) return;
+        const answer = qaState.finalAnswer;
+        const userQ = currentQuery;
+        if (!answer || !userQ) return;
+        completedRef.current = true;
+
+        const assistantTurn = {
+            role: 'assistant' as const,
+            content: answer,
+            citations: qaState.citations,
+            sources: qaState.sources,
+            structuredData: qaState.structuredData,
+            chartSpecs: qaState.chartSpecs,
+            followUpQueries: qaState.followUpQueries,
+        };
+
+        (async () => {
+            let convId = activeQaId;
+            if (!convId) {
+                convId = await createQaConversation(conversationTitle(userQ));
+                if (convId) {
+                    setActiveQaId(convId);
+                    setConversationId(convId);
+                    await loadQaConversations();
+                }
+            }
+            if (!convId) return;
+            await saveQaTurn(convId, { role: 'user', content: userQ });
+            await saveQaTurn(convId, assistantTurn);
+        })();
+
+        requestAnimationFrame(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+    }, [qaState.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleNewQa = () => {
+        qaReset();
+        setChatHistory([]);
+        setActiveQaId(null);
+        setConversationId(crypto.randomUUID());
+        setCurrentQuery(null);
+        setQaInput('');
+        completedRef.current = false;
+        setOpenCitation(null);
+        setTimeout(() => qaInputRef.current?.focus(), 50);
+    };
+
+    const handleLoadQaConversation = async (id: string) => {
+        if (activeQaId === id) return;
+        qaReset();
+        setOpenCitation(null);
+        setCurrentQuery(null);
+        const turns = await loadQaTurns(id);
+        setChatHistory(turns.map(t => ({
+            role: t.role,
+            content: t.content,
+            citations: t.citations,
+            sources: t.sources,
+            structuredData: t.structuredData,
+            chartSpecs: t.chartSpecs,
+        })));
+        setActiveQaId(id);
+        setConversationId(id);
+        completedRef.current = false;
+    };
+
+    const handleDeleteQaConversation = async (id: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        await deleteQaConversation(id);
+        setQaConversations(prev => prev.filter(c => c.id !== id));
+        if (activeQaId === id) handleNewQa();
+    };
+
+    // Group QA conversations by recency for the sidebar.
+    const qaGrouped = (() => {
+        const q = qaSidebarSearch.toLowerCase();
+        const filtered = q ? qaConversations.filter(c => c.title.toLowerCase().includes(q)) : qaConversations;
+        const now = Date.now();
+        const groups: { label: string; items: QaConversationMeta[] }[] = [
+            { label: 'Today', items: [] }, { label: 'Yesterday', items: [] },
+            { label: 'Previous 7 days', items: [] }, { label: 'Older', items: [] },
+        ];
+        filtered.forEach(c => {
+            const d = Math.floor((now - new Date(c.created_at).getTime()) / 86400000);
+            if (d <= 0) groups[0].items.push(c);
+            else if (d === 1) groups[1].items.push(c);
+            else if (d < 7) groups[2].items.push(c);
+            else groups[3].items.push(c);
+        });
+        return groups.filter(g => g.items.length > 0);
+    })();
 
     const handleSaveSearch = async (q: string) => {
         if (!q.trim() || savedSearches.has(q)) return;
@@ -945,12 +1130,16 @@ export default function SearchPage() {
 
     // ── QA MODE ───────────────────────────────────────────────────────────────
     if (mode === 'qa') {
+        const hasThread = chatHistory.length > 0 || currentQuery !== null;
+        const dataCount = qaState.chartSpecs.length > 0
+            ? ` · ${qaState.chartSpecs.length} chart${qaState.chartSpecs.length > 1 ? 's' : ''}`
+            : qaState.structuredData.length > 0 ? ` (${qaState.structuredData.length})` : '';
         return (
-            <div className="flex flex-col h-full min-h-[calc(100vh-64px)]">
+            <div className="flex h-[calc(100vh-64px)] bg-[var(--bg)]">
                 {/* Citation side panel overlay */}
                 {openCitation && (
                     <>
-                        <div className="fixed inset-0 z-40 bg-black/30" onClick={() => setOpenCitation(null)} />
+                        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px]" onClick={() => setOpenCitation(null)} />
                         <CitationPanel citation={openCitation} onClose={() => setOpenCitation(null)} />
                     </>
                 )}
@@ -968,306 +1157,421 @@ export default function SearchPage() {
                     />
                 )}
 
-                {/* Search bar + Mode toggle */}
-                <div className="border-b border-white/[0.05] px-6 py-3 bg-[var(--bg)]">
-                    <div className="flex gap-3 max-w-4xl mx-auto items-center">
-                        <ModeToggle mode={mode} onChange={setMode} />
-                        <form
-                            onSubmit={e => { e.preventDefault(); handleQaSubmit(qaInput); }}
-                            className="flex gap-3 flex-1"
+                {/* ═══════════════ HISTORY SIDEBAR ═══════════════ */}
+                <aside className="w-[256px] flex-shrink-0 flex-col hidden md:flex border-r border-[var(--line)]">
+                    <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                        <span className="label" style={{ letterSpacing: '0.12em' }}>Quick Answer</span>
+                        <button
+                            onClick={handleNewQa}
+                            title="New conversation"
+                            className="press w-7 h-7 rounded-[var(--radius)] flex items-center justify-center text-[var(--text-3)] hover:text-[var(--text)] hover:bg-white/[0.05] transition-colors"
                         >
-                            <div className="flex-1 relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-2)]" />
-                                <input
-                                    ref={qaInputRef}
-                                    value={qaInput}
-                                    onChange={e => setQaInput(e.target.value)}
-                                    placeholder="Ask anything about any company, filing, or market trend…"
-                                    className="w-full pl-10 pr-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-xl text-sm text-white placeholder:text-[var(--text-3)] focus:outline-none focus:border-[var(--accent)]/40 transition-colors"
-                                />
-                            </div>
-                            {isQaSearching ? (
-                                <button
-                                    type="button"
-                                    onClick={qaCancel}
-                                    className="px-4 py-2.5 rounded-xl border border-red-500/30 text-red-400 text-sm hover:bg-red-500/10 transition-colors"
-                                >
-                                    Cancel
-                                </button>
-                            ) : (
-                                <button
-                                    type="submit"
-                                    disabled={!qaInput.trim()}
-                                    className="px-5 py-2.5 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-                                >
-                                    <Zap className="w-4 h-4" /> Search
-                                </button>
-                            )}
-                        </form>
+                            <Edit3 className="w-3.5 h-3.5" />
+                        </button>
                     </div>
-                    {/* Source filter bar */}
-                    <div className="flex items-center justify-between max-w-4xl mx-auto mt-2">
-                        <SourceFilterBar active={activeSource} onChange={id => { setActiveSource(id); }} />
-                        {/* Save search button */}
-                        {qaInput.trim() && (
-                            <button
-                                onClick={() => handleSaveSearch(qaInput)}
-                                title={savedSearches.has(qaInput) ? 'Search saved' : 'Save search'}
-                                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs border border-white/[0.08] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-white/[0.15] transition-all"
-                            >
-                                {savedSearches.has(qaInput)
-                                    ? <><BookmarkCheck className="w-3.5 h-3.5 text-[var(--accent)]" /> Saved</>
-                                    : <><Bookmark className="w-3.5 h-3.5" /> Save</>
-                                }
-                            </button>
-                        )}
+
+                    <div className="px-3 pb-2">
+                        <button
+                            onClick={handleNewQa}
+                            className="press w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius)] text-[13px] text-[var(--text-2)] hover:text-[var(--text)] border border-[var(--line)] hover:border-[var(--line-strong)] transition-colors"
+                        >
+                            <Plus className="w-3.5 h-3.5" />
+                            New conversation
+                        </button>
                     </div>
-                    {/* SEC filing-type sub-selector — only when "SEC Filings" active */}
-                    {activeSource === 'filings' && (
-                        <FilingTypeSelector
-                            types={filingTypes}
-                            selected={selectedFilingTypes}
-                            onToggle={toggleFilingType}
-                        />
-                    )}
-                </div>
 
-                <div className="flex-1 max-w-4xl mx-auto w-full px-6 py-6">
-                    {/* Chat History */}
-                    {chatHistory.length > 0 && (
-                        <div className="space-y-6 mb-8">
-                            {chatHistory.map((turn, i) => (
-                                <div key={i} className={turn.role === 'user' ? 'flex justify-end' : ''}>
-                                    {turn.role === 'user' ? (
-                                        <div className="bg-[var(--accent)]/15 text-[var(--accent)] px-4 py-2.5 rounded-2xl max-w-[85%] text-sm">
-                                            {turn.content}
-                                        </div>
-                                    ) : (
-                                        <div className="bg-white/[0.02] border border-white/[0.06] p-5 rounded-2xl w-full">
-                                            <AnswerText text={turn.content} citations={turn.citations || []} onCitationOpen={setOpenCitation} />
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Idle state — example queries */}
-                    {qaState.status === 'idle' && chatHistory.length === 0 && (
-                        <div className="relative">
-                            <div
-                                aria-hidden
-                                className="pointer-events-none absolute -inset-x-24 -top-10 h-[360px] -z-10"
-                                style={{
-                                    background: 'radial-gradient(58% 100% at 50% 0%, color-mix(in oklch, var(--accent) 10%, transparent) 0%, transparent 72%)',
-                                }}
+                    <div className="px-3 pb-2">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius)] bg-white/[0.03] border border-transparent focus-within:border-[var(--line)]">
+                            <Search className="w-3.5 h-3.5 text-[var(--text-4)] flex-shrink-0" />
+                            <input
+                                value={qaSidebarSearch}
+                                onChange={e => setQaSidebarSearch(e.target.value)}
+                                placeholder="Search history…"
+                                className="flex-1 bg-transparent text-[12px] text-[var(--text-2)] placeholder:text-[var(--text-4)] outline-none"
                             />
-                            <div className="stagger space-y-7 pt-4">
-                                <div className="text-center">
-                                    <div className="inline-flex items-center gap-2 mb-4 text-[10px] font-mono uppercase tracking-[0.26em] text-[var(--text-3)]">
-                                        <span className="pulse-dot text-[var(--accent)]">●</span>
-                                        <span>Retrieval online · 5 channels</span>
-                                    </div>
-                                    <h1 className="font-display font-medium text-[clamp(28px,4vw,44px)] leading-[1.02] tracking-[-0.02em] text-[var(--text)]">
-                                        What would you like to know?
-                                    </h1>
-                                    <p className="mt-3 text-[12px] text-[var(--text-3)] max-w-[46ch] mx-auto leading-relaxed">
-                                        Cross-channel retrieval over filings, transcripts, news &amp; broker notes — every claim cited.
-                                    </p>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    {QA_EXAMPLES.map(q => (
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto px-2 pb-3">
+                        {qaConversations.length === 0 ? (
+                            <p className="text-center text-[11px] text-[var(--text-4)] py-10">No conversations yet</p>
+                        ) : (
+                            qaGrouped.map(group => (
+                                <div key={group.label} className="mb-1">
+                                    <p className="label px-2 py-1.5" style={{ fontSize: '10px' }}>{group.label}</p>
+                                    {group.items.map(c => (
                                         <button
-                                            key={q}
-                                            onClick={() => handleQaSubmit(q)}
-                                            className="group text-left px-4 py-3.5 rounded-lg border border-white/[0.06] bg-white/[0.015] text-[13px] text-[var(--text-2)] hover:border-[var(--accent)]/30 hover:text-white hover:bg-white/[0.03] transition-all flex items-center gap-3"
+                                            key={c.id}
+                                            onClick={() => handleLoadQaConversation(c.id)}
+                                            className={`group w-full flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius)] text-left transition-colors text-[12.5px] leading-snug ${activeQaId === c.id
+                                                ? 'bg-white/[0.07] text-[var(--text)]'
+                                                : 'text-[var(--text-2)] hover:bg-white/[0.04] hover:text-[var(--text)]'
+                                                }`}
                                         >
-                                            <span className="flex items-center justify-center w-5 flex-shrink-0">
-                                                <span className="h-px w-4 bg-[var(--text-4)] group-hover:w-5 group-hover:bg-[var(--accent)] transition-all duration-200" />
+                                            <span className="flex-1 truncate">{c.title}</span>
+                                            <span
+                                                onClick={(e) => handleDeleteQaConversation(c.id, e)}
+                                                title="Delete"
+                                                className="opacity-0 group-hover:opacity-100 flex-shrink-0 p-1 rounded hover:bg-white/10 transition-all"
+                                            >
+                                                <Trash2 className="w-3 h-3 text-[var(--text-4)] hover:text-[var(--down)]" />
                                             </span>
-                                            <span className="leading-snug">{q}</span>
                                         </button>
                                     ))}
                                 </div>
-                            </div>
-                        </div>
-                    )}
+                            ))
+                        )}
+                    </div>
 
-                    {/* Status indicator */}
-                    {isQaSearching && (
-                        <div className="flex items-center gap-3 mb-6 text-sm text-[var(--text-2)]">
-                            <div className="w-4 h-4 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />
-                            {STATUS_LABELS[qaState.status] ?? 'Working…'}
-                        </div>
-                    )}
+                    <div className="px-3 py-3 border-t border-[var(--line)]">
+                        <Link
+                            to="/settings"
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius)] text-[12.5px] text-[var(--text-3)] hover:text-[var(--text)] hover:bg-white/[0.04] transition-colors"
+                        >
+                            <SettingsIcon className="w-3.5 h-3.5" />
+                            Settings &amp; help
+                        </Link>
+                    </div>
+                </aside>
 
-                    {/* Results */}
-                    {(displayAnswer || qaState.sources.length > 0) && (
-                        <>
-                            {/* Tabs */}
-                            <div className="flex gap-1 mb-5 border-b border-white/[0.06]">
-                                {([
-                                    { key: 'answer', label: 'Answer', icon: Zap },
-                                    { key: 'sources', label: `Sources (${qaState.sources.length})`, icon: FileText },
-                                    { key: 'data', label: `Data${qaState.chartSpecs.length > 0 ? ` · ${qaState.chartSpecs.length} chart${qaState.chartSpecs.length > 1 ? 's' : ''}` : qaState.structuredData.length > 0 ? ` (${qaState.structuredData.length})` : ''}`, icon: Database },
-                                ] as const).map(({ key, label, icon: Icon }) => (
-                                    <button
-                                        key={key}
-                                        onClick={() => setActiveTab(key)}
-                                        className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${activeTab === key
-                                            ? 'border-[var(--accent)] text-[var(--accent)]'
-                                            : 'border-transparent text-[var(--text-2)] hover:text-white'
-                                            }`}
-                                    >
-                                        <Icon className="w-3.5 h-3.5" />
-                                        {label}
-                                    </button>
-                                ))}
+                {/* ═══════════════ MAIN ═══════════════ */}
+                <div className="flex-1 flex flex-col min-w-0">
 
-                                {/* Metadata */}
-                                {qaState.status === 'complete' && (
-                                    <div className="ml-auto flex items-center gap-3 text-[10px] text-[var(--text-3)] pb-1">
-                                        {qaState.cacheHit && <span className="text-yellow-500">⚡ Cached</span>}
-                                        {qaState.latencyMs && (
-                                            <span className="flex items-center gap-1">
-                                                <Clock className="w-3 h-3" />{qaState.latencyMs}ms
-                                            </span>
-                                        )}
-                                        {qaState.modelUsed && (
-                                            <span className="flex items-center gap-1">
-                                                <Cpu className="w-3 h-3" />{qaState.modelUsed}
-                                            </span>
-                                        )}
-                                        {qaState.confidence > 0 && (
-                                            <span className={qaState.confidence > 0.8 ? 'text-green-400' : qaState.confidence > 0.6 ? 'text-yellow-400' : 'text-red-400'}>
-                                                {Math.round(qaState.confidence * 100)}% confidence
-                                            </span>
-                                        )}
-                                    </div>
+                    {/* Top bar — mode toggle + live result metadata */}
+                    <div className="border-b border-[var(--line)] px-6 py-2.5 flex items-center gap-3">
+                        <ModeToggle mode={mode} onChange={setMode} />
+                        {currentQuery && qaState.status === 'complete' && (
+                            <div className="ml-auto flex items-center gap-3 text-[11px] text-[var(--text-3)] font-num">
+                                {qaState.cacheHit && <span className="flex items-center gap-1 text-[var(--up)]">⚡ Cached</span>}
+                                {qaState.latencyMs && (
+                                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{qaState.latencyMs}ms</span>
+                                )}
+                                {qaState.modelUsed && (
+                                    <span className="flex items-center gap-1"><Cpu className="w-3 h-3" />{qaState.modelUsed}</span>
+                                )}
+                                {qaState.confidence > 0 && (
+                                    <span className={qaState.confidence > 0.8 ? 'up' : qaState.confidence > 0.6 ? '' : 'down'}>
+                                        {Math.round(qaState.confidence * 100)}% conf
+                                    </span>
                                 )}
                             </div>
+                        )}
+                    </div>
 
-                            {/* Answer tab */}
-                            {activeTab === 'answer' && (
-                                <div className="space-y-6">
-                                    {/* Agentic reasoning trace — shown when pipeline runs in agentic mode */}
-                                    <AgentTracePanel
-                                        steps={qaState.agentSteps}
-                                        complete={qaState.agentTraceComplete}
-                                        totalIterations={qaState.totalIterations}
-                                        totalCostUsd={qaState.totalCostUsd}
-                                    />
+                    {/* Thread (scrollable) */}
+                    <div className="flex-1 overflow-y-auto">
+                        <div className="max-w-3xl mx-auto w-full px-6 py-7">
 
-                                    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5">
-                                        {displayAnswer
-                                            ? <AnswerText text={displayAnswer} citations={qaState.citations} onCitationOpen={setOpenCitation} />
-                                            : <div className="flex items-center gap-2 text-sm text-[var(--text-2)]">
-                                                <div className="w-3 h-3 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />
-                                                Generating answer…
+                            {/* Idle hero — premium attract state */}
+                            {!hasThread && (
+                                <div className="relative pt-4">
+                                    <div aria-hidden className="aurora" />
+                                    <div className="relative stagger space-y-8 pt-6">
+                                        <div className="text-center">
+                                            {/* Brand mark with slow glint */}
+                                            <div className="flex justify-center mb-5">
+                                                <div className="glint chrome w-12 h-12 rounded-[var(--radius-lg)] flex items-center justify-center"
+                                                    style={{ background: 'color-mix(in oklch, var(--accent) 18%, var(--surface))', border: '1px solid color-mix(in oklch, var(--accent) 38%, transparent)' }}>
+                                                    <Sparkles className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                                                </div>
                                             </div>
-                                        }
-                                    </div>
 
-                                    {/* Source pills — click opens the right-side context panel */}
-                                    {qaState.citations.length > 0 && (
-                                        <SourcePills citations={qaState.citations} onOpen={setOpenCitation} />
-                                    )}
+                                            <div className="inline-flex items-center gap-2 mb-4 label">
+                                                <span className="pulse-dot text-[var(--accent)]">●</span>
+                                                <span>Retrieval online · 5 channels</span>
+                                            </div>
+                                            <h1 className="font-display font-semibold text-[clamp(30px,4.2vw,48px)] leading-[1.02] tracking-[-0.025em] text-[var(--text)]">
+                                                Ask anything.<br />
+                                                <span className="text-[var(--text-2)]">Every claim cited.</span>
+                                            </h1>
+                                            <p className="mt-4 text-[13px] text-[var(--text-3)] max-w-[50ch] mx-auto leading-relaxed">
+                                                Institutional-grade answers over SEC filings, earnings transcripts, news &amp; broker notes — synthesized across five retrieval channels in real time.
+                                            </p>
 
-                                    {/* Follow-up queries */}
-                                    {qaState.followUpQueries.length > 0 && (
+                                            {/* Capability chips */}
+                                            <div className="flex flex-wrap items-center justify-center gap-2 mt-6">
+                                                {[
+                                                    { icon: Database, text: '5 retrieval channels' },
+                                                    { icon: CheckCircle, text: 'Source-verified citations' },
+                                                    { icon: Zap, text: 'Sub-second answers' },
+                                                ].map(({ icon: Ic, text }) => (
+                                                    <span key={text} className="chrome inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] text-[var(--text-2)]"
+                                                        style={{ background: 'color-mix(in oklch, var(--surface) 70%, transparent)', border: '1px solid var(--line)' }}>
+                                                        <Ic className="w-3 h-3" style={{ color: 'var(--accent)' }} />
+                                                        {text}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Example query cards — shiny premium */}
                                         <div>
-                                            <p className="text-xs text-[var(--text-3)] mb-2 uppercase tracking-wider">Follow-up</p>
-                                            <div className="flex flex-col gap-1.5">
-                                                {qaState.followUpQueries.map(q => (
+                                            <p className="label mb-3 text-center" style={{ letterSpacing: '0.14em' }}>Try one of these</p>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                {QA_EXAMPLES.map((q, i) => (
                                                     <button
                                                         key={q}
                                                         onClick={() => handleQaSubmit(q)}
-                                                        className="text-left text-sm text-[var(--text-2)] hover:text-[var(--accent)] flex items-center gap-2 group transition-colors"
+                                                        className="shiny chrome press group relative text-left rounded-[var(--radius-lg)] border border-[var(--line)] p-3.5 hover:border-[color-mix(in_oklch,var(--accent)_45%,transparent)] transition-colors overflow-hidden"
+                                                        style={{ background: 'color-mix(in oklch, var(--surface) 55%, transparent)' }}
                                                     >
-                                                        <ChevronRight className="w-4 h-4 text-[var(--text-3)] group-hover:text-[var(--accent)] flex-shrink-0" />
-                                                        {q}
+                                                        <div className="flex items-start gap-3">
+                                                            <span className="font-num text-[10px] text-[var(--text-4)] mt-0.5 tabular-nums flex-shrink-0">
+                                                                {String(i + 1).padStart(2, '0')}
+                                                            </span>
+                                                            <span className="text-[13px] text-[var(--text-2)] group-hover:text-[var(--text)] leading-snug transition-colors">{q}</span>
+                                                            <ChevronRight className="w-4 h-4 ml-auto flex-shrink-0 text-[var(--text-4)] group-hover:text-[var(--accent)] group-hover:translate-x-0.5 transition-all" />
+                                                        </div>
                                                     </button>
                                                 ))}
                                             </div>
                                         </div>
-                                    )}
+                                    </div>
                                 </div>
                             )}
 
-                            {/* Sources tab */}
-                            {activeTab === 'sources' && (
-                                <div className="space-y-2">
-                                    {qaState.sources.length === 0
-                                        ? <p className="text-sm text-[var(--text-3)] text-center py-8">No sources retrieved yet</p>
-                                        : qaState.sources.map((s, i) => <SourceCard key={s.chunk_id} source={s} index={i} />)
-                                    }
+                            {/* Committed past turns */}
+                            {chatHistory.length > 0 && (
+                                <div className="space-y-7 mb-7">
+                                    {chatHistory.map((turn, i) => turn.role === 'user' ? (
+                                        <div key={i} className="flex justify-end">
+                                            <div className="font-display text-[15px] text-[var(--text)] bg-white/[0.04] border border-[var(--line)] px-4 py-2 rounded-[var(--radius-lg)] max-w-[85%]">
+                                                {turn.content}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div key={i} className="space-y-3">
+                                            <AnswerText text={turn.content} citations={turn.citations || []} onCitationOpen={setOpenCitation} />
+                                            {(turn.citations?.length ?? 0) > 0 && (
+                                                <SourcePills citations={turn.citations!} onOpen={setOpenCitation} />
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             )}
 
-                            {/* Data tab */}
-                            {activeTab === 'data' && (
-                                <div className="space-y-4">
-                                    {qaState.chartSpecs.length === 0 && qaState.structuredData.length === 0 && (
-                                        <p className="text-sm text-[var(--text-3)] text-center py-8">No structured financial data for this query</p>
+                            {/* Live exchange — current question + streaming/finished answer */}
+                            {currentQuery && (
+                                <div className="space-y-4 rise-in">
+                                    <div className="flex justify-end">
+                                        <div className="font-display text-[15px] text-[var(--text)] bg-white/[0.04] border border-[var(--line)] px-4 py-2 rounded-[var(--radius-lg)] max-w-[85%]">
+                                            {currentQuery}
+                                        </div>
+                                    </div>
+
+                                    {/* Stage pipeline + terminal live-log while retrieving */}
+                                    {isQaSearching && !displayAnswer && (
+                                        <QaSearchProgress
+                                            status={qaState.status}
+                                            sourcesCount={qaState.sources.length}
+                                            citationsCount={qaState.citations.length}
+                                            agentSteps={qaState.agentSteps}
+                                        />
                                     )}
 
-                                    {/* Charts */}
-                                    {qaState.chartSpecs.length > 0 && (
-                                        <div className="space-y-4">
-                                            {qaState.chartSpecs.map(spec => (
-                                                <DataChart
-                                                    key={spec.chart_id}
-                                                    spec={spec}
-                                                    structuredData={qaState.structuredData}
-                                                />
-                                            ))}
+                                    {(displayAnswer || (!isQaSearching && qaState.sources.length > 0)) && (
+                                        <>
+                                            {/* Tabs */}
+                                            <div className="flex gap-1 border-b border-[var(--line)]">
+                                                {([
+                                                    { key: 'answer', label: 'Answer', icon: Zap },
+                                                    { key: 'sources', label: `Sources (${qaState.sources.length})`, icon: FileText },
+                                                    { key: 'data', label: `Data${dataCount}`, icon: Database },
+                                                ] as const).map(({ key, label, icon: Icon }) => (
+                                                    <button
+                                                        key={key}
+                                                        onClick={() => setActiveTab(key)}
+                                                        className={`flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium border-b-2 -mb-px transition-colors ${activeTab === key
+                                                            ? 'border-[var(--accent)] text-[var(--accent)]'
+                                                            : 'border-transparent text-[var(--text-3)] hover:text-[var(--text)]'
+                                                            }`}
+                                                    >
+                                                        <Icon className="w-3.5 h-3.5" />
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            {/* Answer tab */}
+                                            {activeTab === 'answer' && (
+                                                <div className="space-y-5">
+                                                    <AgentTracePanel
+                                                        steps={qaState.agentSteps}
+                                                        complete={qaState.agentTraceComplete}
+                                                        totalIterations={qaState.totalIterations}
+                                                        totalCostUsd={qaState.totalCostUsd}
+                                                    />
+
+                                                    {displayAnswer
+                                                        ? <div className="sheen-once chrome rounded-[var(--radius-lg)] border border-[var(--line)] p-5"
+                                                               style={{ background: 'color-mix(in oklch, var(--surface) 42%, transparent)' }}>
+                                                            <AnswerText text={displayAnswer} citations={qaState.citations} onCitationOpen={setOpenCitation} />
+                                                            {isQaSearching && <span className="stream-caret" />}
+                                                          </div>
+                                                        : <div className="flex items-center gap-2 text-[13px] text-[var(--text-2)] py-2">
+                                                            <span className="w-3 h-3 rounded-full border-2 border-[var(--accent)] border-t-transparent animate-spin" />
+                                                            Generating answer…
+                                                        </div>
+                                                    }
+
+                                                    {qaState.citations.length > 0 && (
+                                                        <SourcePills citations={qaState.citations} onOpen={setOpenCitation} />
+                                                    )}
+
+                                                    {qaState.followUpQueries.length > 0 && (
+                                                        <div className="pt-1">
+                                                            <p className="label mb-2">Follow-up</p>
+                                                            <div className="flex flex-col">
+                                                                {qaState.followUpQueries.map(q => (
+                                                                    <button
+                                                                        key={q}
+                                                                        onClick={() => handleQaSubmit(q)}
+                                                                        className="row-hot text-left text-[13px] text-[var(--text-2)] hover:text-[var(--accent)] flex items-center gap-2 group py-1.5 px-2 -mx-2 rounded-[var(--radius)] transition-colors"
+                                                                    >
+                                                                        <ChevronRight className="w-4 h-4 text-[var(--text-4)] group-hover:text-[var(--accent)] flex-shrink-0" />
+                                                                        {q}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Sources tab */}
+                                            {activeTab === 'sources' && (
+                                                <div className="space-y-2">
+                                                    {qaState.sources.length === 0
+                                                        ? <p className="text-[13px] text-[var(--text-3)] text-center py-8">No sources retrieved yet</p>
+                                                        : qaState.sources.map((s, i) => <SourceCard key={s.chunk_id} source={s} index={i} />)
+                                                    }
+                                                </div>
+                                            )}
+
+                                            {/* Data tab */}
+                                            {activeTab === 'data' && (
+                                                <div className="space-y-4">
+                                                    {qaState.chartSpecs.length === 0 && qaState.structuredData.length === 0 && (
+                                                        <p className="text-[13px] text-[var(--text-3)] text-center py-8">No structured financial data for this query</p>
+                                                    )}
+                                                    {qaState.chartSpecs.length > 0 && (
+                                                        <div className="space-y-4">
+                                                            {qaState.chartSpecs.map(spec => (
+                                                                <DataChart key={spec.chart_id} spec={spec} structuredData={qaState.structuredData} />
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {qaState.structuredData.length > 0 && (
+                                                        <div className="overflow-x-auto rounded-[var(--radius)] border border-[var(--line)]">
+                                                            <table className="w-full text-[12.5px]">
+                                                                <thead>
+                                                                    <tr className="border-b border-[var(--line)] bg-white/[0.02]">
+                                                                        {['Entity', 'Metric', 'Value', 'Period'].map(h => (
+                                                                            <th key={h} className="label px-4 py-2.5 text-left">{h}</th>
+                                                                        ))}
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody className="divide-y divide-[var(--line)]">
+                                                                    {qaState.structuredData.map((m, i) => (
+                                                                        <tr key={i} className="row-hot">
+                                                                            <td className="px-4 py-2.5">
+                                                                                {(m.entity || m.ticker) && (
+                                                                                    <span className="font-num text-[11px] text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">
+                                                                                        {m.entity ?? m.ticker}
+                                                                                    </span>
+                                                                                )}
+                                                                            </td>
+                                                                            <td className="px-4 py-2.5 text-[var(--text-2)]">{m.metric}</td>
+                                                                            <td className="px-4 py-2.5 font-num text-[var(--text)]">
+                                                                                {typeof m.value === 'number' ? m.value.toLocaleString() : m.value}
+                                                                                {m.unit && <span className="ml-1 text-[11px] text-[var(--text-3)]">{m.unit}</span>}
+                                                                            </td>
+                                                                            <td className="px-4 py-2.5 text-[var(--text-3)] font-num">{m.period ?? '—'}</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {/* Error — only when no answer streamed */}
+                                    {qaState.status === 'error' && !displayAnswer && (
+                                        <div className="rounded-[var(--radius)] border border-[var(--down)]/25 bg-[var(--down)]/[0.06] p-4 text-[13px] text-[var(--down)]">
+                                            {qaState.error ?? 'Search failed. Make sure the Gravity backend is running on port 8000.'}
                                         </div>
                                     )}
-
-                                    {/* Data table */}
-                                    {qaState.structuredData.length > 0 && (
-                                        <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
-                                            <table className="w-full text-sm">
-                                                <thead>
-                                                    <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                                        {['Entity', 'Metric', 'Value', 'Period'].map(h => (
-                                                            <th key={h} className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-3)]">{h}</th>
-                                                        ))}
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-white/[0.04]">
-                                                    {qaState.structuredData.map((m, i) => (
-                                                        <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                                            <td className="px-4 py-2.5">
-                                                                {(m.entity || m.ticker) && (
-                                                                    <span className="text-xs text-[var(--accent)] bg-[var(--accent)]/10 px-1.5 py-0.5 rounded">
-                                                                        {m.entity ?? m.ticker}
-                                                                    </span>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-4 py-2.5 text-[var(--text-2)]">{m.metric}</td>
-                                                            <td className="px-4 py-2.5 font-mono text-white">
-                                                                {typeof m.value === 'number' ? m.value.toLocaleString() : m.value}
-                                                                {m.unit && <span className="ml-1 text-xs text-[var(--text-3)]">{m.unit}</span>}
-                                                            </td>
-                                                            <td className="px-4 py-2.5 text-[var(--text-3)]">{m.period ?? '—'}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    )}
                                 </div>
                             )}
-                        </>
-                    )}
 
-                    {/* Error */}
-                    {qaState.status === 'error' && (
-                        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
-                            {qaState.error ?? 'Search failed. Make sure the Gravity backend is running on port 8000.'}
+                            <div ref={threadEndRef} />
                         </div>
-                    )}
+                    </div>
+
+                    {/* Composer (sticky bottom) */}
+                    <div className="border-t border-[var(--line)] bg-[var(--bg)] px-6 py-3">
+                        <div className="max-w-3xl mx-auto w-full">
+                            <form
+                                onSubmit={e => { e.preventDefault(); handleQaSubmit(qaInput); }}
+                                className="flex gap-2.5 items-center"
+                            >
+                                <div className="flex-1 relative input-halo rounded-[var(--radius-lg)] border border-[var(--line)]" style={{ background: 'color-mix(in oklch, var(--surface) 60%, transparent)' }}>
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-3)]" />
+                                    <input
+                                        ref={qaInputRef}
+                                        value={qaInput}
+                                        onChange={e => setQaInput(e.target.value)}
+                                        placeholder={hasThread ? 'Ask a follow-up…' : 'Ask anything about any company, filing, or market trend…'}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-transparent border-0 rounded-[var(--radius-lg)] text-[13.5px] text-[var(--text)] placeholder:text-[var(--text-4)] focus:outline-none"
+                                    />
+                                </div>
+                                {isQaSearching ? (
+                                    <button
+                                        type="button"
+                                        onClick={qaCancel}
+                                        className="press px-4 py-2.5 rounded-[var(--radius-lg)] border border-[var(--down)]/30 text-[var(--down)] text-[13px] hover:bg-[var(--down)]/10 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="submit"
+                                        disabled={!qaInput.trim()}
+                                        className="press cta-glow shiny glint px-5 py-2.5 rounded-[var(--radius-lg)] bg-[var(--accent)] text-[var(--accent-ink)] text-[13px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all flex items-center gap-1.5"
+                                    >
+                                        <Zap className="w-4 h-4" /> Ask
+                                    </button>
+                                )}
+                            </form>
+
+                            <div className="flex items-center justify-between mt-2 gap-2">
+                                <SourceFilterBar active={activeSource} onChange={id => setActiveSource(id)} />
+                                {qaInput.trim() && (
+                                    <button
+                                        onClick={() => handleSaveSearch(qaInput)}
+                                        title={savedSearches.has(qaInput) ? 'Search saved' : 'Save search'}
+                                        className="press flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius)] text-[11px] border border-[var(--line)] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-[var(--line-strong)] transition-all flex-shrink-0"
+                                    >
+                                        {savedSearches.has(qaInput)
+                                            ? <><BookmarkCheck className="w-3.5 h-3.5 text-[var(--accent)]" /> Saved</>
+                                            : <><Bookmark className="w-3.5 h-3.5" /> Save</>
+                                        }
+                                    </button>
+                                )}
+                            </div>
+
+                            {activeSource === 'filings' && (
+                                <FilingTypeSelector
+                                    types={filingTypes}
+                                    selected={selectedFilingTypes}
+                                    onToggle={toggleFilingType}
+                                />
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
         );
