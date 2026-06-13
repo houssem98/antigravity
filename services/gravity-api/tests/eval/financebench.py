@@ -62,7 +62,7 @@ _TOKEN           = ""   # Bearer token (signup) for authed prod runs
 NUMERIC_TOLERANCE = 0.02    # 2% — standard for financial reporting variance
 ROUGE_THRESHOLD   = 0.70    # ROUGE-L threshold for fuzzy match
 REQUEST_TIMEOUT   = 60.0    # seconds per question
-CONCURRENCY       = 4       # parallel requests (keep low to avoid rate limits)
+CONCURRENCY       = int(_os.getenv("FB_CONCURRENCY", "4"))  # set 1 for clean, rate-limit-free runs
 
 # ─── Question categories in FinanceBench ──────────────────────────────────────
 
@@ -223,6 +223,22 @@ class EvalReport:
     @property
     def citation_rate(self) -> float:
         return self.citation_hits / max(self.total, 1)
+
+    @staticmethod
+    def is_correct(r) -> bool:
+        """Type-aware correctness: numeric questions pass on numeric_match
+        (unit-normalized, 2% tolerance) — not exact text — so '60,922 million'
+        correctly credits '60.92 billion'. Text questions pass on fuzzy/exact."""
+        if _has_number(r.expected):
+            return r.numeric_match
+        return r.fuzzy_match or r.exact_match
+
+    @property
+    def accuracy(self) -> float:
+        scored = [r for r in self.results if not r.error]
+        if not scored:
+            return 0.0
+        return sum(1 for r in scored if self.is_correct(r)) / len(scored)
 
     @property
     def p50_latency(self) -> float:
@@ -603,8 +619,11 @@ def print_report(report: EvalReport):
             print(f"    {cat:<22} EM={em:.0%}  FM={fm:.0%}  n={n}")
         print()
 
-    # Show failures for targeted debugging
-    failures = [r for r in report.results if not r.fuzzy_match and not r.error]
+    # Show failures for targeted debugging — type-aware (numeric Qs judged on
+    # numeric_match, not exact text), so unit-equivalent answers aren't false fails.
+    print(f"  ACCURACY (type-aware): {report.accuracy:.0%}  "
+          f"[numeric {report.numeric_rate:.0%} · citation {report.citation_rate:.0%}]")
+    failures = [r for r in report.results if not r.error and not report.is_correct(r)]
     if failures:
         print(f"  FAILURES TO FIX ({len(failures)}):")
         for r in failures[:10]:
