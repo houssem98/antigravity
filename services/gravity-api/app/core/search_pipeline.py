@@ -447,10 +447,15 @@ class SearchPipeline:
                     reranker=self.reranker,
                     max_steps=2,  # Budget: max 2 follow-up steps in fast-path
                 )
+                # Scope to the resolved company so iterative retrieval can't
+                # drift onto another company's filings (same fix as single-pass).
+                _irag_filters = dict(filters or {})
+                if len(_cache_tickers) == 1 and not _irag_filters.get("companies"):
+                    _irag_filters["companies"] = _cache_tickers
                 irag_result = await irag.retrieve(
                     query=query,
                     query_plan=query_plan,
-                    filters=filters or {},
+                    filters=_irag_filters,
                 )
                 top_passages = irag_result.all_passages[:settings.max_context_passages]
                 total_cost += irag_result.cost_usd
