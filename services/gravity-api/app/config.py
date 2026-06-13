@@ -81,7 +81,8 @@ class Settings(BaseSettings):
     on_demand_ingest_timeout_s: int = 75        # per-ticker budget inside a query
     on_demand_ingest_filing_types: str = "10-K,10-Q,8-K"
     on_demand_ingest_max_filings: int = 6       # most-recent filings per type
-    on_demand_index_settle_s: int = 3           # wait for ES/Qdrant to make new chunks searchable before retry
+    on_demand_index_settle_s: int = 3           # wait between retry polls for ES/Qdrant to index new chunks
+    on_demand_retry_attempts: int = 4           # poll retrieval up to N times (×settle) before unscoped fallback
 
     # ── Cache Config ────────────────────────────────────────────────────
     semantic_cache_ttl: int = 3600
