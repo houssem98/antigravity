@@ -55,7 +55,21 @@ def get_embedder():
     providers.append(("local", LocalEmbedder))
 
     logger.info("embedder_chain", providers=[p[0] for p in providers])
-    return FallbackEmbedder(providers)
+    base = FallbackEmbedder(providers)
+
+    # Wrap in the content-hash cache so repeated/overlapping text is embedded
+    # once — pushes the embedding rate-limit ceiling far away.
+    if getattr(settings, "embedding_cache_enabled", True):
+        try:
+            from app.db.redis import redis_client
+            from app.embeddings.cached_embedder import CachedEmbedder
+            return CachedEmbedder(
+                base, redis=redis_client,
+                ttl=getattr(settings, "embedding_cache_ttl", 2_592_000),
+            )
+        except Exception as e:
+            logger.warning("embedding_cache_unavailable", error=str(e))
+    return base
 
 
 @lru_cache()
