@@ -45,6 +45,22 @@ STRICT RULES:
    Use conditional for guidance. Active voice only.
 9. GUIDANCE: Append "(mgmt guidance)", "(consensus est.)", or "(projected)" after any forward figure.
    Never state guidance as a confirmed reported result.
+10. NUMERIC PRECISION — the figure must match the question on ALL THREE axes:
+   a. PERIOD: use the EXACT fiscal year/quarter asked. If the context shows several
+      periods, pick the requested one — never an adjacent year/quarter. State which
+      period the figure is for.
+   b. LINE ITEM: use the EXACT metric. These are NOT interchangeable — do not
+      substitute one for another:
+        operating cash flow ≠ free cash flow ≠ net income;
+        ROE ≠ ROTCE ≠ ROA; capital expenditures = "purchases/additions to PP&E";
+        total revenue ≠ segment/product revenue; gross margin % ≠ operating margin %;
+        total debt ≠ long-term debt ≠ net debt; cash & equivalents ≠ cash + short-term investments.
+   c. DEFINITION: if a metric has a standard definition (e.g. FCF = operating cash
+      flow − capex), compute only from values present in the sources; otherwise quote
+      the reported figure.
+   If the EXACT (period × line item) figure is NOT in the sources, say you cannot find
+   it for that period — DO NOT substitute a different period, a related metric, or an
+   approximation. A precise "not found" beats a confident wrong number.
 
 Output ONLY valid JSON — no text outside the JSON:
 {
