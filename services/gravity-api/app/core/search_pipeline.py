@@ -456,7 +456,7 @@ class SearchPipeline:
                 # Multi-entity: comparison queries ("Apple vs Microsoft") get
                 # one independent retrieval pass per company then merged.
                 _companies = query_plan.get("entities", {}).get("companies", [])
-                _tickers = [e.get("ticker") for e in _companies if e.get("ticker")]
+                _tickers = [e.get("ticker") for e in _companies if isinstance(e, dict) and e.get("ticker")]
                 _channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
 
                 if len(_tickers) >= 2 and complexity in ("medium", "complex"):
@@ -468,10 +468,16 @@ class SearchPipeline:
                         complexity=complexity,
                     )
                 else:
+                    # Scope a single-company query to its resolved ticker so
+                    # semantic search can't drift onto another company's filings
+                    # (e.g. "Amazon revenue growth" matching Kroger's MD&A).
+                    _eff_filters = dict(filters or {})
+                    if len(_tickers) == 1 and not _eff_filters.get("companies"):
+                        _eff_filters["companies"] = _tickers
                     retrieval_results = await self.retrieval.search(
                         query=query,
                         expanded_terms=query_plan.get("expanded_terms", {}),
-                        filters=filters or {},
+                        filters=_eff_filters,
                         channels=_channels,
                         complexity=complexity,
                     )
@@ -535,12 +541,15 @@ class SearchPipeline:
                                 _odi.ensure_indexed(_tk, _od_ft, settings.on_demand_ingest_max_filings),
                                 timeout=settings.on_demand_ingest_timeout_s,
                             )
-                        # Retry retrieval once now that the filings are indexed.
+                        # Retry retrieval once now that the filings are indexed,
+                        # scoped to the freshly-ingested ticker(s).
                         _od_channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+                        _od_filters = dict(filters or {})
+                        _od_filters["companies"] = _od_tickers
                         retrieval_results = await self.retrieval.search(
                             query=query,
                             expanded_terms=query_plan.get("expanded_terms", {}),
-                            filters=filters or {},
+                            filters=_od_filters,
                             channels=_od_channels,
                             complexity=complexity,
                         )
