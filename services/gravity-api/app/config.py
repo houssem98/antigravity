@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     rerank_top_k: int = 30
     max_context_passages: int = 15
 
+    # ── On-demand ingestion (corpus-miss → index the company live) ──────
+    on_demand_ingest_enabled: bool = True       # master switch
+    on_demand_ingest_timeout_s: int = 75        # per-ticker budget inside a query
+    on_demand_ingest_filing_types: str = "10-K,10-Q,8-K"
+    on_demand_ingest_max_filings: int = 6       # most-recent filings per type
+
     # ── Cache Config ────────────────────────────────────────────────────
     semantic_cache_ttl: int = 3600
     semantic_cache_threshold: float = 0.95
