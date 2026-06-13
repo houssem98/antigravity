@@ -1442,14 +1442,21 @@ def _normalize_citations(raw_citations: list, passages: list) -> list[dict]:
             continue
         seen.add(key)
 
+        _tk = c.get("ticker") or _pf("ticker")
+        _sec = c.get("section") or _pf("section")
         out.append({
+            # Frontend/WS shape …
             "citation_number": num,
             "chunk_id": chunk_id,
             "text": text,
             "document_title": doc_title,
-            "ticker": c.get("ticker") or _pf("ticker"),
-            "section": c.get("section") or _pf("section"),
+            "ticker": _tk,
+            "section": _sec,
             "is_verified": bool(c.get("entailed", c.get("is_verified", False))),
+            # … plus REST SearchResponse.Citation required fields (id, source).
+            "id": num,
+            "source": doc_title,
+            "date": c.get("filing_date") or _pf("filing_date"),
         })
 
     out.sort(key=lambda x: x["citation_number"])
