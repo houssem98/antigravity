@@ -112,9 +112,9 @@ class OnDemandIngestor:
                     )
                 else:
                     continue
-                if r and r.get("status") != "error":
+                if r and not r.get("error"):
                     result["ok"] += 1
-                    result["chunks"] += r.get("chunks_indexed", 0)
+                    result["chunks"] += r.get("chunk_count", 0)
                 else:
                     result["errors"] += 1
                 await asyncio.sleep(0.15)  # EDGAR ≤10 req/s
