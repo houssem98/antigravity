@@ -548,40 +548,35 @@ class SearchPipeline:
                                 timeout=settings.on_demand_ingest_timeout_s,
                             )
                         # Retry retrieval now the filings are indexed. Freshly
-                        # written chunks aren't searchable instantly, so poll a few
-                        # times; if the ticker-scoped query still finds nothing,
-                        # fall back to an unscoped pass (the chunks now exist, so a
-                        # semantic match surfaces them even without the filter).
-                        # Force the text channels: we just ingested filing text,
-                        # so dense/bm25/splade are what surface it (a structured-only
-                        # plan would find nothing).
+                        # written chunks aren't searchable instantly (ES refresh /
+                        # Qdrant index lag), so poll the TICKER-SCOPED query a few
+                        # times. We never drop the company scope: an unscoped pass
+                        # would surface another company's filings and the LLM would
+                        # answer the wrong company (e.g. oil&gas text labelled as
+                        # "Rocket Lab"). If the scope still finds nothing, return
+                        # the not-found message — the chunks are indexed and the
+                        # next ask resolves instantly.
+                        # Force the text channels: we just ingested filing text.
                         _od_channels = ["dense", "bm25", "splade"]
                         _od_scoped = dict(filters or {})
                         _od_scoped["companies"] = _od_tickers
 
-                        async def _od_retrieve(_f):
+                        for _attempt in range(max(1, settings.on_demand_retry_attempts)):
+                            await asyncio.sleep(settings.on_demand_index_settle_s)
                             _rr = await self.retrieval.search(
                                 query=query,
                                 expanded_terms=query_plan.get("expanded_terms", {}),
-                                filters=_f,
+                                filters=_od_scoped,
                                 channels=_od_channels,
                                 complexity=complexity,
                             )
                             _fused2 = authority_aware_rrf(_rr, k=settings.rrf_k, authority_weight=0.15)
                             if self.reranker and len(_fused2) > 0:
-                                _ranked = await self.reranker.rerank(query=query, passages=_fused2[:settings.rerank_top_k])
+                                top_passages = (await self.reranker.rerank(query=query, passages=_fused2[:settings.rerank_top_k]))[:settings.max_context_passages]
                             else:
-                                _ranked = _fused2
-                            return _ranked[:settings.max_context_passages]
-
-                        for _attempt in range(max(1, settings.on_demand_retry_attempts)):
-                            await asyncio.sleep(settings.on_demand_index_settle_s)
-                            top_passages = await _od_retrieve(_od_scoped)
+                                top_passages = _fused2[:settings.max_context_passages]
                             if top_passages:
                                 break
-                        if not top_passages:
-                            # filter may not match brand-new chunks → unscoped retry
-                            top_passages = await _od_retrieve(filters or {})
                         logger.info(
                             "on_demand_ingest_retry",
                             trace_id=trace_id, tickers=_od_tickers, found=len(top_passages),
