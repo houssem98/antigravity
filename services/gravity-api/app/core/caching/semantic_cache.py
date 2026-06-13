@@ -31,22 +31,33 @@ class SemanticCache:
         self.ttl = ttl or settings.semantic_cache_ttl
         self.threshold = threshold or settings.semantic_cache_threshold
 
-    async def get(self, query: str) -> dict | None:
+    @staticmethod
+    def _ns(tickers: list[str] | None) -> str:
+        """Namespace cache by the resolved company set so a query about one
+        company can never semantically match a cached answer for another — the
+        query *template* ("revenue growth for X in 2025") is >0.95 similar across
+        companies, so a global cache returns the wrong company's answer."""
+        if not tickers:
+            return "_"
+        return "|".join(sorted({t.upper() for t in tickers if t}))
+
+    async def get(self, query: str, tickers: list[str] | None = None) -> dict | None:
         """Check if a similar query exists in cache. Returns cached result or None."""
         try:
+            ns = self._ns(tickers)
             # Quick exact-match check first (cheap)
             query_hash = hashlib.md5(query.lower().strip().encode()).hexdigest()
-            exact = await redis_client.get(f"{CACHE_PREFIX}exact:{query_hash}")
+            exact = await redis_client.get(f"{CACHE_PREFIX}exact:{ns}:{query_hash}")
             if exact:
                 logger.info("cache_hit", type="exact")
                 return json.loads(exact)
 
-            # Semantic similarity check (more expensive)
+            # Semantic similarity check (more expensive) — scan ONLY this
+            # company namespace so cross-company false hits are impossible.
             query_embedding = await self.embedder.embed_query(query)
 
-            # Get all cached query embeddings
             keys = []
-            async for key in redis_client.scan_iter(f"{CACHE_EMBEDDING_PREFIX}*", count=100):
+            async for key in redis_client.scan_iter(f"{CACHE_EMBEDDING_PREFIX}{ns}:*", count=100):
                 keys.append(key)
 
             if not keys:
@@ -80,34 +91,37 @@ class SemanticCache:
             logger.warning("cache_get_error", error=str(e))
             return None
 
-    async def set(self, query: str, result: dict) -> None:
-        """Cache a query result with both exact and semantic matching."""
+    async def set(self, query: str, result: dict, tickers: list[str] | None = None) -> None:
+        """Cache a query result with both exact and semantic matching, scoped to
+        the resolved company namespace."""
         try:
+            ns = self._ns(tickers)
             query_hash = hashlib.md5(query.lower().strip().encode()).hexdigest()
 
-            # Store exact match
+            # Store exact match (namespaced)
             await redis_client.setex(
-                f"{CACHE_PREFIX}exact:{query_hash}",
+                f"{CACHE_PREFIX}exact:{ns}:{query_hash}",
                 self.ttl,
                 json.dumps(result),
             )
 
-            # Store result by hash
+            # Store result keyed by the embedding's namespaced key so get() can
+            # map embedding-key → result-key by simple prefix swap.
             await redis_client.setex(
-                f"{CACHE_PREFIX}{query_hash}",
+                f"{CACHE_PREFIX}{ns}:{query_hash}",
                 self.ttl,
                 json.dumps(result),
             )
 
-            # Store embedding for semantic matching
+            # Store embedding for semantic matching (namespaced)
             query_embedding = await self.embedder.embed_query(query)
             await redis_client.setex(
-                f"{CACHE_EMBEDDING_PREFIX}{query_hash}",
+                f"{CACHE_EMBEDDING_PREFIX}{ns}:{query_hash}",
                 self.ttl,
                 json.dumps(query_embedding),
             )
 
-            logger.debug("cache_set", query_hash=query_hash)
+            logger.debug("cache_set", ns=ns, query_hash=query_hash)
 
         except Exception as e:
             logger.warning("cache_set_error", error=str(e))

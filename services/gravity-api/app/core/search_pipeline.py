@@ -353,12 +353,19 @@ class SearchPipeline:
                 latency_ms=round(understanding_ms, 1),
             )
 
+            # Resolved company tickers — used to namespace the semantic cache so
+            # a query about one company can't return another company's answer.
+            _cache_tickers = [
+                c.get("ticker") for c in query_plan.get("entities", {}).get("companies", [])
+                if isinstance(c, dict) and c.get("ticker")
+            ]
+
             # ── Stage 2: Semantic Cache Check ───────────────────────────
             # Cache failures (e.g. Redis without RediSearch/vector ops) must
             # never break search — treat any error as a cache miss.
             if self.cache:
                 try:
-                    cached = await self.cache.get(query)
+                    cached = await self.cache.get(query, tickers=_cache_tickers)
                 except Exception as e:
                     logger.warning("cache_get_skip", trace_id=trace_id, error=str(e))
                     cached = None
@@ -1134,12 +1141,19 @@ class SearchPipeline:
             await self._save_conversation_turn(conversation_id, query, parsed_answer)
 
             # ── Stage 9: Cache Result ───────────────────────────────────
+            # Namespace by ticker (no cross-company hits) and cache the CLEAN
+            # parsed answer + citations so a cache hit returns the same rich
+            # payload as a fresh answer (not the raw JSON envelope).
             if self.cache:
                 try:
                     await self.cache.set(query, {
-                        "answer": validated_answer,
+                        "answer": parsed_answer,
+                        "citations": citations_out,
+                        "follow_up_queries": follow_up_queries,
+                        "structured_data": structured_data_out,
+                        "confidence": confidence_out,
                         "sources": source_data,
-                    })
+                    }, tickers=_cache_tickers)
                 except Exception as e:
                     logger.warning("cache_set_skip", trace_id=trace_id, error=str(e))
 
