@@ -45,12 +45,26 @@ jobs:
             --output /tmp/deepeval_results.json
         continue-on-error: true
 
+      - name: Company-correctness gate (no cross-company answers)
+        if: github.event_name != 'pull_request'
+        run: |
+          cd services/gravity-api
+          GRAVITY_API_URL="${{ github.event.inputs.api_url || 'http://localhost:8000' }}" \
+          python tests/eval/company_correctness.py \
+            --limit ${{ github.event.inputs.limit || '50' }} \
+            --threshold 0.95 \
+            --output /tmp/company_correctness.json
+        # NOT continue-on-error: a wrong-company answer (cross-company drift /
+        # cache poisoning) must fail the run — this is the credibility gate.
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deepeval-results
-          path: /tmp/deepeval_results.json
+          path: |
+            /tmp/deepeval_results.json
+            /tmp/company_correctness.json
           if-no-files-found: ignore
 
       - name: Comment PR (if available)
