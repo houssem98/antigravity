@@ -510,6 +510,56 @@ class SearchPipeline:
             # If retrieval found nothing, return a clear "not indexed" answer
             # instead of sending empty context to the LLM (which causes hallucination
             # or crashes on calculation queries).
+            if not top_passages and settings.on_demand_ingest_enabled:
+                # On-demand: the company asked about isn't in the corpus yet.
+                # Fetch its recent EDGAR filings live, index them, and retry
+                # retrieval once. Fully guarded + time-boxed: any failure falls
+                # through to the existing "not indexed" message, so this can never
+                # make a currently-failing query worse.
+                _od_tickers = [
+                    e.get("ticker") for e in query_plan.get("entities", {}).get("companies", [])
+                    if isinstance(e, dict) and e.get("ticker")
+                ]
+                if _od_tickers:
+                    try:
+                        from app.ingestion.on_demand import get_on_demand_ingestor
+                        _odi = get_on_demand_ingestor()
+                        _od_ft = [t.strip() for t in settings.on_demand_ingest_filing_types.split(",") if t.strip()]
+                        for _tk in _od_tickers[:3]:
+                            yield SearchEvent(
+                                type="status",
+                                data={"status": "searching", "message": f"Indexing {_tk} SEC filings…"},
+                                trace_id=trace_id,
+                            )
+                            await asyncio.wait_for(
+                                _odi.ensure_indexed(_tk, _od_ft, settings.on_demand_ingest_max_filings),
+                                timeout=settings.on_demand_ingest_timeout_s,
+                            )
+                        # Retry retrieval once now that the filings are indexed.
+                        _od_channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+                        retrieval_results = await self.retrieval.search(
+                            query=query,
+                            expanded_terms=query_plan.get("expanded_terms", {}),
+                            filters=filters or {},
+                            channels=_od_channels,
+                            complexity=complexity,
+                        )
+                        _od_fused = authority_aware_rrf(retrieval_results, k=settings.rrf_k, authority_weight=0.15)
+                        if self.reranker and len(_od_fused) > 0:
+                            _od_rr = await self.reranker.rerank(query=query, passages=_od_fused[:settings.rerank_top_k])
+                        else:
+                            _od_rr = _od_fused
+                        top_passages = _od_rr[:settings.max_context_passages]
+                        logger.info(
+                            "on_demand_ingest_retry",
+                            trace_id=trace_id, tickers=_od_tickers, found=len(top_passages),
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("on_demand_ingest_timeout", trace_id=trace_id, tickers=_od_tickers)
+                    except Exception as _od_err:
+                        logger.warning("on_demand_ingest_failed", trace_id=trace_id, error=str(_od_err))
+
+            # ── Stage 4b: No-data early exit ────────────────────────────
             if not top_passages:
                 # Extract company names from query plan for a helpful message
                 companies = [
