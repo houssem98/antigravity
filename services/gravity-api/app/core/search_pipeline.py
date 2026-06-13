@@ -1018,6 +1018,10 @@ class SearchPipeline:
                     logger.warning("alce_attribution_failed", trace_id=trace_id, error=str(_alce_err))
 
             # ── Stage 8c: Yield Complete Answer ─────────────────────────
+            # Enrich citations to the frontend shape (document_title/chunk_id/
+            # ticker) by joining to the retrieved passages, so the source panel
+            # has real content to display.
+            citations_out = _normalize_citations(citations_out, top_passages)
             chart_specs_out = _auto_chart_specs(structured_data_out)
             yield SearchEvent(
                 type="answer",
@@ -1290,6 +1294,65 @@ def _extract_confidence(answer: str) -> str:
     elif '"confidence": "low"' in answer_lower or '"confidence":"low"' in answer_lower:
         return "LOW"
     return "MEDIUM"
+
+
+def _normalize_citations(raw_citations: list, passages: list) -> list[dict]:
+    """
+    Enrich citations into the shape the frontend expects
+    ({citation_number, chunk_id, text, document_title, ticker, section,
+    is_verified}) by joining each one to the retrieved passage it points at.
+
+    The LLM emits citations as {id, source, section, text}; ALiiCE emits
+    {chunk_id, claim, sentence, entailed}. Neither carries document_title /
+    ticker / chunk_id consistently, so the source side-panel had nothing to show.
+    Match by chunk_id first, else by the 1-based citation number (sources are
+    numbered in passage order), and backfill from the passage.
+    """
+    by_chunk = {}
+    for p in passages or []:
+        cid = getattr(p, "chunk_id", None)
+        if cid:
+            by_chunk[cid] = p
+
+    out: list[dict] = []
+    seen: set = set()
+    for idx, c in enumerate(raw_citations or [], start=1):
+        if not isinstance(c, dict):
+            continue
+        num = c.get("id") or c.get("citation_number") or idx
+        try:
+            num = int(num)
+        except (ValueError, TypeError):
+            num = idx
+
+        p = by_chunk.get(c.get("chunk_id"))
+        if p is None and 1 <= num <= len(passages or []):
+            p = passages[num - 1]
+
+        def _pf(attr: str, default: str = "") -> str:
+            return (getattr(p, attr, default) or default) if p is not None else default
+
+        doc_title = c.get("source") or c.get("document_title") or _pf("document_title")
+        text = c.get("text") or c.get("sentence") or (_pf("text")[:500])
+        chunk_id = c.get("chunk_id") or _pf("chunk_id")
+
+        key = (num, chunk_id)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append({
+            "citation_number": num,
+            "chunk_id": chunk_id,
+            "text": text,
+            "document_title": doc_title,
+            "ticker": c.get("ticker") or _pf("ticker"),
+            "section": c.get("section") or _pf("section"),
+            "is_verified": bool(c.get("entailed", c.get("is_verified", False))),
+        })
+
+    out.sort(key=lambda x: x["citation_number"])
+    return out
 
 
 _ANSWER_KEY_RE = re.compile(r'"answer"\s*:\s*"')
