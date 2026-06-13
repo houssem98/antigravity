@@ -109,10 +109,26 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
 
 
+# Corporate suffixes / filler that dilute name matching. "Rocket Lab USA, Inc."
+# must reduce to {rocket, lab} so a "Rocket Lab" mention is an exact token-set
+# match instead of a 0.5 partial that ties with "Rocket Pharmaceuticals".
+_CORP_STOPWORDS: frozenset[str] = frozenset({
+    "inc", "incorporated", "corp", "corporation", "co", "company", "companies",
+    "ltd", "limited", "plc", "lp", "llp", "llc", "holdings", "holding", "group",
+    "the", "usa", "us", "sa", "ag", "nv", "se", "ab", "oyj", "class", "common",
+    "stock", "ord", "ordinary", "shares", "share", "ads", "adr", "trust", "fund",
+})
+
+
+def _content_tokens(norm: str) -> set[str]:
+    """Tokens of a normalized name with corporate suffixes/filler removed."""
+    return {t for t in norm.split() if t and t not in _CORP_STOPWORDS}
+
+
 def _token_overlap(a: str, b: str) -> float:
-    """Simple token-overlap similarity — fast, no dependencies."""
-    ta = set(_normalize(a).split())
-    tb = set(_normalize(b).split())
+    """Content-token overlap similarity — fast, no dependencies."""
+    ta = _content_tokens(_normalize(a))
+    tb = _content_tokens(_normalize(b))
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / max(len(ta), len(tb))
@@ -237,19 +253,26 @@ class EntityResolver:
         # ── 3. Fuzzy name match ───────────────────────────────────────────
         # Containment-based: mention's tokens must all appear in entity name.
         # Score = mention-tokens / entity-tokens. Highest specificity wins.
-        mention_tokens = set(mention_norm.split())
+        mention_tokens = _content_tokens(mention_norm)
         candidates: list[tuple[float, dict]] = []
         for norm_name, entry in self._name_index:
-            name_tokens = set(norm_name.split())
-            if mention_tokens.issubset(name_tokens):
-                score = len(mention_tokens) / max(len(name_tokens), 1)
+            name_tokens = _content_tokens(norm_name)
+            if not name_tokens:
+                continue
+            if mention_tokens and mention_tokens.issubset(name_tokens):
+                # Containment is a strong signal even when the official name has
+                # extra descriptors ("Rivian" ⊂ "Rivian Automotive"). Floor the
+                # score above the accept gate; exact set wins outright; ratio
+                # still ranks specificity among containment matches.
+                score = 1.0 if mention_tokens == name_tokens else 0.5 + 0.5 * (len(mention_tokens) / len(name_tokens))
                 candidates.append((score, entry))
             else:
                 # Symmetric token overlap as a fallback for partial overlaps
                 score = _token_overlap(mention_norm, norm_name)
                 if score >= 0.5:
                     candidates.append((score, entry))
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        # Sort by score, then prefer the most specific (fewest-token) name on ties.
+        candidates.sort(key=lambda x: (x[0], -len(_content_tokens(_normalize(x[1]["name"])))), reverse=True)
 
         if candidates:
             best_score, best = candidates[0]
