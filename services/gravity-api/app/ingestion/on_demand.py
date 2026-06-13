@@ -38,7 +38,11 @@ class OnDemandIngestor:
         from app.ingestion.pipeline import IngestionPipeline
         from app.ingestion.sources.sec_edgar import SECEdgarSource
 
-        self.pipeline = pipeline or IngestionPipeline()
+        # MUST use create(): the bare IngestionPipeline() leaves every indexer
+        # None, so chunks are produced but written to no index (dense/bm25/graph
+        # all stay empty → retrieval finds nothing). create() wires the Qdrant /
+        # Elasticsearch / Neo4j writers from app settings.
+        self.pipeline = pipeline or IngestionPipeline.create()
         self.edgar = SECEdgarSource(ingestion_pipeline=self.pipeline)
         self._inflight: dict[str, asyncio.Task] = {}
 
