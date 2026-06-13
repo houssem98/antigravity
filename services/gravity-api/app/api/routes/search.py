@@ -86,6 +86,24 @@ async def search(
     except Exception:
         meta_model = None
 
+    # Coerce citations to the REST Citation schema (id + source required). The
+    # pipeline emits the frontend shape (citation_number/document_title) and
+    # cached entries may predate that — normalize so the response never 500s.
+    def _coerce_citation(c: dict, i: int) -> dict:
+        if not isinstance(c, dict):
+            return {"id": i + 1, "source": "", "text": str(c)}
+        return {
+            "id": c.get("id") or c.get("citation_number") or (i + 1),
+            "source": c.get("source") or c.get("document_title") or "",
+            "section": c.get("section", "") or "",
+            "page": c.get("page"),
+            "date": c.get("date", "") or "",
+            "ticker": c.get("ticker", "") or "",
+            "text": c.get("text", "") or "",
+            "url": c.get("url", "") or "",
+        }
+    citations = [_coerce_citation(c, i) for i, c in enumerate(citations or [])]
+
     return SearchResponse(
         id=search_id,
         answer=answer,
