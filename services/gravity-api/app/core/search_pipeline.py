@@ -541,6 +541,9 @@ class SearchPipeline:
                                 _odi.ensure_indexed(_tk, _od_ft, settings.on_demand_ingest_max_filings),
                                 timeout=settings.on_demand_ingest_timeout_s,
                             )
+                        # Let ES/Qdrant make the new chunks searchable before retry
+                        # (fresh writes aren't queryable for ~1s).
+                        await asyncio.sleep(settings.on_demand_index_settle_s)
                         # Retry retrieval once now that the filings are indexed,
                         # scoped to the freshly-ingested ticker(s).
                         _od_channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
