@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     on_demand_ingest_filing_types: str = "10-K,10-Q,8-K"
     on_demand_ingest_max_filings: int = 6       # most-recent filings per type
     on_demand_index_settle_s: int = 3           # wait between retry polls for ES/Qdrant to index new chunks
-    on_demand_retry_attempts: int = 4           # poll retrieval up to N times (×settle) before unscoped fallback
+    on_demand_retry_attempts: int = 6           # poll ticker-scoped retrieval up to N times (×settle) for index lag
 
     # ── Cache Config ────────────────────────────────────────────────────
     semantic_cache_ttl: int = 3600
