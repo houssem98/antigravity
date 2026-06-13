@@ -53,9 +53,11 @@ import httpx
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-GRAVITY_API_URL  = "http://localhost:8000"
+import os as _os
+GRAVITY_API_URL  = _os.getenv("GRAVITY_API_URL", "http://localhost:8000")
 SEARCH_ENDPOINT  = f"{GRAVITY_API_URL}/v1/search"
-API_KEY          = "deep-research-internal"   # matches the dev key in auth middleware
+API_KEY          = _os.getenv("GRAVITY_API_KEY", "deep-research-internal")   # dev key locally
+_TOKEN           = ""   # Bearer token (signup) for authed prod runs
 
 NUMERIC_TOLERANCE = 0.02    # 2% — standard for financial reporting variance
 ROUGE_THRESHOLD   = 0.70    # ROUGE-L threshold for fuzzy match
@@ -342,19 +344,37 @@ def citation_check(citations: list[dict], ticker: str, sources: list[dict] = Non
 
 # ─── API Client ───────────────────────────────────────────────────────────────
 
+async def _ensure_token(client: httpx.AsyncClient) -> None:
+    """Get a Bearer token via signup for authed (prod) runs. Local dev accepts
+    the X-API-Key dev key, so skip if that already works."""
+    global _TOKEN
+    if _TOKEN:
+        return
+    import uuid as _uuid
+    try:
+        r = await client.post(
+            f"{GRAVITY_API_URL}/v1/auth/signup",
+            json={"email": f"fb-{_uuid.uuid4().hex[:10]}@example.com",
+                  "password": f"Fb!{_uuid.uuid4().hex[:8]}aA9", "name": "financebench"},
+            timeout=30.0,
+        )
+        if r.status_code < 500:
+            _TOKEN = (r.json() or {}).get("access_token", "")
+    except Exception:
+        _TOKEN = ""
+
+
 async def query_gravity(client: httpx.AsyncClient, question: str) -> dict:
     """Send a question to gravity-api and return the parsed response."""
-    payload = {
-        "query": question,
-        "reasoning_depth": "auto",
-        "stream": False,
-    }
-    resp = await client.post(
-        SEARCH_ENDPOINT,
-        json=payload,
-        headers={"X-API-Key": API_KEY},
-        timeout=REQUEST_TIMEOUT,
-    )
+    payload = {"query": question, "options": {"reasoning_depth": "auto", "stream": False}}
+    headers = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {"X-API-Key": API_KEY}
+    for attempt in range(5):
+        resp = await client.post(SEARCH_ENDPOINT, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 429:  # API rate limit — back off, don't count as error
+            await asyncio.sleep(float(resp.headers.get("Retry-After") or min(2 ** attempt, 20)) + 1)
+            continue
+        resp.raise_for_status()
+        return resp.json()
     resp.raise_for_status()
     return resp.json()
 
@@ -499,6 +519,10 @@ async def run_eval(
             print(f"\n  ERROR: gravity-api unreachable at {GRAVITY_API_URL}: {e}", flush=True)
             print("  Start with: cd services/gravity-api && python -m uvicorn app.main:app --reload --port 8000", flush=True)
             sys.exit(1)
+
+        await _ensure_token(client)
+        if _TOKEN:
+            print("  authed via signup token", flush=True)
 
         tasks = [evaluate_question(client, q, sem) for q in questions]
 
