@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     # ── Embedding Config ────────────────────────────────────────────────
     embedding_batch_size: int = 128
     embedding_dimensions: int = 1024  # voyage-finance-2
+    # Embedding token optimizer — content-hash cache so identical text (re-ingests,
+    # overlapping chunks, repeat queries) is embedded once, moving the rate limit away.
+    embedding_cache_enabled: bool = True
+    embedding_cache_ttl: int = 2_592_000  # 30 days
+    embedding_max_retries: int = 4        # backoff retries on 429 before failover
 
     # ── Chunking Config ─────────────────────────────────────────────────
     chunk_section_max_tokens: int = 2048
