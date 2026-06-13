@@ -457,7 +457,13 @@ class SearchPipeline:
                 # one independent retrieval pass per company then merged.
                 _companies = query_plan.get("entities", {}).get("companies", [])
                 _tickers = [e.get("ticker") for e in _companies if isinstance(e, dict) and e.get("ticker")]
-                _channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+                _channels = list(query_plan.get("retrieval_channels", ["dense", "bm25", "splade"]) or [])
+                # Always include the core text channels — query understanding
+                # sometimes returns a structured-only plan, which never searches
+                # the filing text and yields a false "no documents found".
+                for _c in ("dense", "bm25", "splade"):
+                    if _c not in _channels:
+                        _channels.append(_c)
 
                 if len(_tickers) >= 2 and complexity in ("medium", "complex"):
                     retrieval_results = await self.retrieval.search_multi_entity(
@@ -546,7 +552,10 @@ class SearchPipeline:
                         # times; if the ticker-scoped query still finds nothing,
                         # fall back to an unscoped pass (the chunks now exist, so a
                         # semantic match surfaces them even without the filter).
-                        _od_channels = query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+                        # Force the text channels: we just ingested filing text,
+                        # so dense/bm25/splade are what surface it (a structured-only
+                        # plan would find nothing).
+                        _od_channels = ["dense", "bm25", "splade"]
                         _od_scoped = dict(filters or {})
                         _od_scoped["companies"] = _od_tickers
 
