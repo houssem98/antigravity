@@ -301,6 +301,11 @@ class SearchPipeline:
                 query_plan = DEFAULT_QUERY_PLAN.copy()
                 logger.warning("query_understanding_timeout", trace_id=trace_id, query=query[:60])
             understanding_ms = (time.perf_counter() - t0) * 1000
+            # Init timing metrics so every retrieval path (single-pass, iterative,
+            # on-demand) is safe to reference at Stage 10 — the iterative branch
+            # never set rerank_ms, raising UnboundLocalError on complex queries.
+            retrieval_ms = 0.0
+            rerank_ms = 0.0
 
             # ── Stage 1b: Entity Resolution ──────────────────────────────
             # Disambiguate company mentions → canonical (ticker, CIK, name).
