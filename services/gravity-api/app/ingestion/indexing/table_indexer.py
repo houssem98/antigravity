@@ -395,6 +395,14 @@ class TableIndexer:
             from app.db import supabase_rest
             if not supabase_rest.configured():
                 return 0
+            # Keep only primary financial statements — footnote/disclosure tables
+            # ("other") pollute the facts (e.g. "Deferred revenue" matching a
+            # "total revenue" query). Income statement / balance sheet / cash flow
+            # carry the line items users ask for.
+            _PRIMARY = {"income_statement", "balance_sheet", "cash_flow"}
+            rows = [r for r in rows if (getattr(r, "table_type", "") or "") in _PRIMARY]
+            if not rows:
+                return 0
             # Dedupe by id within the batch — PostgREST upsert (ON CONFLICT) errors
             # if the same id appears twice in one command (same metric+period can
             # be extracted from multiple tables in a filing). Last value wins.
