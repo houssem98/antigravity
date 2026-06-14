@@ -110,11 +110,16 @@ class TableIndexer:
             chunks = self._rows_to_chunks(rows, table)
             all_chunks.extend(chunks)
 
-        # Run indexing concurrently
-        chunk_count, row_count = await asyncio.gather(
+        # Run indexing concurrently. Financial rows go to BOTH Elasticsearch
+        # (gravity_financials, if ES is up) and Supabase Postgres (financials
+        # table, no ES needed) — whichever is configured serves the structured
+        # exact-facts channel.
+        chunk_count, row_es, row_sb = await asyncio.gather(
             self._index_chunks(all_chunks, metadata, document_id),
             self._store_rows_es(all_rows),
+            self._store_rows_supabase(all_rows),
         )
+        row_count = max(row_es, row_sb)
 
         logger.info(
             "tables_indexed",
@@ -379,6 +384,39 @@ class TableIndexer:
         return indexed
 
     # ── Structured ES indexing ────────────────────────────────────────────
+
+    async def _store_rows_supabase(self, rows: list["FinancialRow"]) -> int:
+        """Upsert FinancialRow objects into the Supabase `financials` table
+        (PostgREST). No-op if Supabase isn't configured. Powers the structured
+        exact-facts channel without Elasticsearch."""
+        if not rows:
+            return 0
+        try:
+            from app.db import supabase_rest
+            if not supabase_rest.configured():
+                return 0
+            docs = []
+            for r in rows:
+                rid = re.sub(r"\s+", "_", f"{r.ticker}_{r.metric_name}_{r.period}_{r.document_id}")[:200]
+                docs.append({
+                    "id": rid,
+                    "ticker": r.ticker,
+                    "company": r.company,
+                    "filing_type": r.filing_type,
+                    "filing_date": r.filing_date or None,
+                    "document_id": r.document_id,
+                    "metric_name": r.metric_name,
+                    "period": r.period,
+                    "value_raw": r.value_raw,
+                    "value_float": r.value_float,
+                    "unit": r.unit,
+                    "source_section": r.source_section,
+                    "caption": r.caption,
+                })
+            return await supabase_rest.sb_insert("financials", docs, on_conflict="id")
+        except Exception as e:
+            logger.warning("supabase_financials_failed", error=str(e)[:160])
+            return 0
 
     async def _store_rows_es(self, rows: list[FinancialRow]) -> int:
         """Bulk-index FinancialRow objects into gravity_financials ES index."""

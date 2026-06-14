@@ -94,22 +94,22 @@ async def main():
     ap.add_argument("--resume", action="store_true", help="skip tickers already done")
     args = ap.parse_args()
 
-    from app.db.elasticsearch import get_es_client
+    from app.db import supabase_rest
     from app.ingestion.indexing.table_indexer import TableIndexer
     from app.ingestion.processing.document_processor import DocumentProcessor
     from app.ingestion.sources.sec_edgar import SECEdgarSource
 
-    es = get_es_client()
-    try:
-        await es.info()
-    except Exception as e:
-        print(f"ERROR: Elasticsearch unreachable ({str(e)[:120]}).")
-        print("Set ELASTICSEARCH_URL (+ auth) to a running instance, then re-run.")
+    # Target Supabase Postgres (financials table) — no Elasticsearch needed.
+    if not supabase_rest.configured():
+        print("ERROR: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set.")
+        print("Export both, ensure the `financials` table exists (see migration), then re-run.")
         sys.exit(1)
-    print("Elasticsearch reachable — starting backfill.\n")
+    # probe the table exists / is reachable
+    probe = await supabase_rest.sb_select("financials", {}, limit=1)
+    print(f"Supabase reachable — financials table query OK (sample rows: {len(probe)}).\n")
 
     processor = DocumentProcessor()
-    table_indexer = TableIndexer(vector_indexer=None, keyword_indexer=None, es_client=es)
+    table_indexer = TableIndexer(vector_indexer=None, keyword_indexer=None, es_client=None)
     edgar = SECEdgarSource(ingestion_pipeline=None)
 
     if args.tickers:
@@ -131,7 +131,7 @@ async def main():
 
     for i, t in enumerate(tickers, 1):
         r = await backfill_ticker(t, edgar, processor, table_indexer, args.max_filings)
-        total_rows += r["rows"]
+        total_rows += int(r.get("rows", 0) or 0)
         print(f"[{i}/{len(tickers)}] {t}: filings={r['filings']} rows={r['rows']} err={r['errors']}")
         done.add(t)
         PROGRESS.write_text(json.dumps({"done": sorted(done), "total_rows": total_rows}))
