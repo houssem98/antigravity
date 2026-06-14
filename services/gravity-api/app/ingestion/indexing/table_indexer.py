@@ -395,10 +395,13 @@ class TableIndexer:
             from app.db import supabase_rest
             if not supabase_rest.configured():
                 return 0
-            docs = []
+            # Dedupe by id within the batch — PostgREST upsert (ON CONFLICT) errors
+            # if the same id appears twice in one command (same metric+period can
+            # be extracted from multiple tables in a filing). Last value wins.
+            by_id: dict[str, dict] = {}
             for r in rows:
                 rid = re.sub(r"\s+", "_", f"{r.ticker}_{r.metric_name}_{r.period}_{r.document_id}")[:200]
-                docs.append({
+                by_id[rid] = {
                     "id": rid,
                     "ticker": r.ticker,
                     "company": r.company,
@@ -412,8 +415,8 @@ class TableIndexer:
                     "unit": r.unit,
                     "source_section": r.source_section,
                     "caption": r.caption,
-                })
-            return await supabase_rest.sb_insert("financials", docs, on_conflict="id")
+                }
+            return await supabase_rest.sb_insert("financials", list(by_id.values()), on_conflict="id")
         except Exception as e:
             logger.warning("supabase_financials_failed", error=str(e)[:160])
             return 0
