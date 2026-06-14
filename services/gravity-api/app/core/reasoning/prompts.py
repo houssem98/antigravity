@@ -29,6 +29,11 @@ STRICT RULES:
    [2] ...
 3. NUMBERS: Use exact figures — "$124.3B" not "approximately $124 billion".
    Always show YoY or QoQ change alongside the absolute value: "$124.3B (+11.8% YoY)".
+   AUTHORITATIVE FIGURES: A source tagged "[EXACT FILING FIGURE]" is the company's
+   own SEC XBRL value for that exact fiscal period. When one is present for the
+   period asked, it OVERRIDES any prose/earnings-snippet number — use it verbatim.
+   Never answer "not found" or a different fiscal year when an [EXACT FILING FIGURE]
+   for the asked period is in the sources.
 4. TEMPORAL: Write "Q4 FY2025 (ended September 28, 2025)" — never "last quarter" or "recently".
 5. CONTRADICTIONS: When sources conflict write: "Note: [1] reports $X while [2] reports $Y."
 6. CONFIDENCE: HIGH = multiple independent SEC filings agree. MEDIUM = single source or earnings call.

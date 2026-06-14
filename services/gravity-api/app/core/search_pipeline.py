@@ -479,7 +479,11 @@ class SearchPipeline:
                 # Always include the core text channels — query understanding
                 # sometimes returns a structured-only plan, which never searches
                 # the filing text and yields a false "no documents found".
-                for _c in ("dense", "bm25", "splade"):
+                # Also force `structured`: the XBRL exact-facts channel must run on
+                # every query (it's ticker-scoped + gated, so it self-noops when
+                # there's no resolved ticker / no facts). Without forcing it, dense
+                # alone answers the wrong fiscal year (AMD FY2023 -> FY2025 chunk).
+                for _c in ("dense", "bm25", "splade", "structured"):
                     if _c not in _channels:
                         _channels.append(_c)
 
@@ -524,6 +528,18 @@ class SearchPipeline:
                 else:
                     reranked = fused
                 top_passages = reranked[:settings.max_context_passages]
+
+                # Guarantee XBRL exact facts reach the LLM, ranked FIRST. The
+                # reranker demotes terse one-line facts below verbose prose, so the
+                # model answered the wrong fiscal year (AMD FY2023 -> FY2025 chunk)
+                # even though the exact tagged fact was retrieved. Force the
+                # structured-channel results into the front of the context.
+                _sf = retrieval_results.get("structured") or []
+                if _sf:
+                    _have = {getattr(p, "chunk_id", None) for p in top_passages}
+                    _pre = [p for p in _sf if getattr(p, "chunk_id", None) not in _have]
+                    if _pre:
+                        top_passages = (_pre[:8] + top_passages)[:settings.max_context_passages]
                 rerank_ms = (time.perf_counter() - t2) * 1000
                 logger.info(
                     "retrieval_complete",
