@@ -107,6 +107,16 @@ class StructuredSearch:
         filters: dict | None = None,
         top_k: int = 10,
     ) -> list[RetrievalResult]:
+        # Gated OFF by default: noisy table extraction outranks prose and hurts
+        # accuracy. Re-enable (settings.structured_facts_enabled) once the
+        # table-parser column-alignment is fixed.
+        try:
+            from app.config import settings as _s
+            if not getattr(_s, "structured_facts_enabled", False):
+                return []
+        except Exception:
+            return []
+
         # Prefer Supabase Postgres financials table (no Elasticsearch needed).
         try:
             from app.db import supabase_rest

@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     on_demand_index_settle_s: int = 3           # wait between retry polls for ES/Qdrant to index new chunks
     on_demand_retry_attempts: int = 6           # poll ticker-scoped retrieval up to N times (×settle) for index lag
 
+    # Structured exact-facts channel (Supabase financials). OFF until table-parser
+    # column-alignment is fixed: noisy values (footnote refs mis-read as figures)
+    # outranked prose and REGRESSED FinanceBench 40%->20%. Flip on when clean.
+    structured_facts_enabled: bool = False
+
     # ── Cache Config ────────────────────────────────────────────────────
     semantic_cache_ttl: int = 3600
     semantic_cache_threshold: float = 0.95
