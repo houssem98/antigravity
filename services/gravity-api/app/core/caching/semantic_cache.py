@@ -21,8 +21,8 @@ logger = structlog.get_logger()
 
 # v2: bumped to orphan pre-fix entries poisoned by cross-company drift
 # (Amazon-labelled answers grounded on Kroger). Old keys age out via TTL.
-CACHE_PREFIX = "gscache:v7:"
-CACHE_EMBEDDING_PREFIX = "gscache_emb:v7:"
+CACHE_PREFIX = "gscache:v8:"
+CACHE_EMBEDDING_PREFIX = "gscache_emb:v8:"
 
 
 class SemanticCache:
