@@ -366,6 +366,12 @@ async def _ensure_token(client: httpx.AsyncClient) -> None:
     global _TOKEN
     if _TOKEN:
         return
+    # Explicit API key provided → use it (X-API-Key) instead of a free-tier
+    # signup token. The eval key maps to an unlimited tier in Redis, avoiding the
+    # 100-queries/month free cap that otherwise fails ~50 of a 150-Q run.
+    if _os.getenv("GRAVITY_API_KEY"):
+        print("  authed via GRAVITY_API_KEY (X-API-Key)", flush=True)
+        return
     import uuid as _uuid
     try:
         r = await client.post(
