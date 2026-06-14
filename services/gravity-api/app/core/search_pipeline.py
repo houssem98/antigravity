@@ -539,11 +539,9 @@ class SearchPipeline:
                     _have = {getattr(p, "chunk_id", None) for p in top_passages}
                     _pre = [p for p in _sf if getattr(p, "chunk_id", None) not in _have]
                     if _pre:
-                        # Up to 12 exact facts first (terse one-liners, cheap) so the
-                        # LLM has the full statement to COMPUTE derived ratios, then
-                        # dense prose fills the remainder of the context window.
-                        _cap = max(settings.max_context_passages, 18)
-                        top_passages = (_pre[:12] + top_passages)[:_cap]
+                        # Up to 8 exact facts first (more flooded context + caused
+                        # timeouts/confusion at 12); dense prose fills the rest.
+                        top_passages = (_pre[:8] + top_passages)[:settings.max_context_passages]
                 rerank_ms = (time.perf_counter() - t2) * 1000
                 logger.info(
                     "retrieval_complete",
