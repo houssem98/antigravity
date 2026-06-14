@@ -39,6 +39,48 @@ class StructuredSearch:
         return self._es
 
     @staticmethod
+    def _fact_line(s: dict) -> str:
+        val = s.get("value_raw") or s.get("value_float")
+        unit = s.get("unit", "") or ""
+        return (
+            f"[Financial Fact] {s.get('ticker', '')} — {s.get('metric_name', '')} "
+            f"({s.get('period', '')}): {val}{(' ' + unit) if unit else ''} "
+            f"[source: {s.get('filing_type', '')} {s.get('filing_date', '')}]"
+        )
+
+    async def _search_supabase(self, query, entities, filters, top_k) -> list[RetrievalResult]:
+        from app.db import supabase_rest
+        tickers = self._tickers(entities, filters)
+        ql = (query or "").lower()
+        metric = next((m for m in self._METRIC_TERMS if m in ql), None)
+
+        flt: dict = {}
+        if len(tickers) == 1:
+            flt["ticker"] = f"eq.{tickers[0]}"
+        elif tickers:
+            flt["ticker"] = "in.(" + ",".join(tickers) + ")"
+        if metric:
+            flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
+        if not flt:
+            return []  # no ticker → don't dump the whole table
+
+        rows = await supabase_rest.sb_select("financials", flt, limit=top_k)
+        out: list[RetrievalResult] = []
+        for r in rows:
+            if r.get("value_raw") is None and r.get("value_float") is None:
+                continue
+            out.append(RetrievalResult(
+                chunk_id=f"fin_{r.get('id', '')}"[:48],
+                document_id=str(r.get("document_id", "financials")),
+                text=self._fact_line(r),
+                score=5.0,  # exact tagged facts outrank prose
+                metadata=r,
+                ticker=r.get("ticker", ""),
+            ))
+        logger.info("structured_search_supabase", results=len(out), tickers=tickers, metric=metric)
+        return out
+
+    @staticmethod
     def _tickers(entities: dict | None, filters: dict | None) -> list[str]:
         out: list[str] = []
         for src in (entities or {}).get("companies", []) or []:
@@ -49,6 +91,15 @@ class StructuredSearch:
                 out.append(str(t).upper())
         return list(dict.fromkeys(out))  # dedupe, keep order
 
+    # Metric keywords → narrow the exact-facts lookup when the query names one.
+    _METRIC_TERMS = [
+        "revenue", "net income", "operating income", "gross margin", "operating margin",
+        "net margin", "profit margin", "operating cash flow", "free cash flow", "cash flow",
+        "capital expenditure", "capex", "total assets", "total liabilities", "long-term debt",
+        "total debt", "cash and", "shareholders equity", "eps", "earnings per share",
+        "return on equity", "roe", "dividend", "buyback", "share repurchase", "research and development",
+    ]
+
     async def search(
         self,
         query: str,
@@ -56,6 +107,16 @@ class StructuredSearch:
         filters: dict | None = None,
         top_k: int = 10,
     ) -> list[RetrievalResult]:
+        # Prefer Supabase Postgres financials table (no Elasticsearch needed).
+        try:
+            from app.db import supabase_rest
+            if supabase_rest.configured():
+                rows = await self._search_supabase(query, entities, filters, top_k)
+                return rows
+        except Exception as e:
+            logger.warning("structured_supabase_failed", error=str(e)[:160])
+
+        # Fallback: Elasticsearch gravity_financials (if ES is provisioned).
         es = self._es_client()
         if es is None:
             return []
