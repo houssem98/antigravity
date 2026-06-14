@@ -59,6 +59,27 @@ async def sb_insert(table: str, rows: list[dict], on_conflict: str | None = None
         return 0
 
 
+async def sb_rpc(fn: str, params: dict) -> list[dict]:
+    """Call a Postgres function via PostgREST (POST /rest/v1/rpc/<fn>).
+
+    Used for ranked full-text search (ts_rank ordering can't be expressed as a
+    plain PostgREST filter, so it lives in a SQL function)."""
+    url, key = _cfg()
+    if not url or not key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.post(f"{url}/rest/v1/rpc/{fn}", headers=_headers(key), json=params)
+        if r.status_code >= 300:
+            logger.warning("sb_rpc_failed", fn=fn, status=r.status_code, body=r.text[:200])
+            return []
+        out = r.json()
+        return out if isinstance(out, list) else []
+    except Exception as e:
+        logger.warning("sb_rpc_error", fn=fn, error=str(e)[:160])
+        return []
+
+
 async def sb_select(table: str, filters: dict, select: str = "*", limit: int = 10) -> list[dict]:
     """GET rows with PostgREST filters, e.g. {'ticker': 'eq.AAPL', 'metric_name': 'ilike.*revenue*'}."""
     url, key = _cfg()
