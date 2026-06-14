@@ -68,10 +68,9 @@ class StructuredSearch:
         )
 
     async def _search_supabase(self, query, entities, filters, top_k) -> list[RetrievalResult]:
+        import re
         from app.db import supabase_rest
         tickers = self._tickers(entities, filters)
-        ql = (query or "").lower()
-        metric = next((m for m in self._METRIC_TERMS if m in ql), None)
 
         # Ticker scope is MANDATORY. Without it, a metric-only filter ("revenue")
         # returns OTHER companies' facts (e.g. a Coca-Cola query surfacing Apple/
@@ -84,10 +83,22 @@ class StructuredSearch:
             flt["ticker"] = f"eq.{tickers[0]}"
         else:
             flt["ticker"] = "in.(" + ",".join(tickers) + ")"
-        if metric:
-            flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
 
-        rows = await supabase_rest.sb_select("financials", flt, limit=top_k)
+        # Filter to the asked fiscal year(s) + one prior (for change/CAGR/growth),
+        # and return the FULL statement for those years — not a single
+        # metric-filtered row. FinanceBench is dominated by DERIVED ratios (ROA,
+        # COGS %, quick ratio, payout ratio) that need several line items together;
+        # a 1-metric slice can't be computed from. Give the LLM the whole statement.
+        years = sorted({int(y) for y in re.findall(r"((?:19|20)\d{2})", query or "")})
+        if years:
+            wanted: set[int] = set()
+            for y in years:
+                wanted.update((y, y - 1))
+            flt["period"] = "in.(" + ",".join(f"FY{y}" for y in sorted(wanted)) + ")"
+
+        # ~60 facts covers the full income statement + balance sheet + cash flow
+        # for two fiscal years (≈30 core concepts × 2y).
+        rows = await supabase_rest.sb_select("financials", flt, limit=max(top_k, 60))
         out: list[RetrievalResult] = []
         for r in rows:
             if r.get("value_raw") is None and r.get("value_float") is None:
