@@ -57,6 +57,14 @@ jobs:
         # NOT continue-on-error: a wrong-company answer (cross-company drift /
         # cache poisoning) must fail the run — this is the credibility gate.
 
+      - name: FailSafe robustness (refuse, don't hallucinate)
+        if: github.event_name != 'pull_request'
+        run: |
+          cd services/gravity-api
+          GRAVITY_API_URL="${{ github.event.inputs.api_url || 'http://localhost:8000' }}" \
+          python tests/eval/failsafe.py --threshold 0.75 --output /tmp/failsafe.json
+        continue-on-error: true   # trust signal; report (don't block) until tuned up
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,6 +73,7 @@ jobs:
           path: |
             /tmp/deepeval_results.json
             /tmp/company_correctness.json
+            /tmp/failsafe.json
           if-no-files-found: ignore
 
       - name: Comment PR (if available)
