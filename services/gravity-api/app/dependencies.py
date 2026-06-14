@@ -131,9 +131,19 @@ def get_search_pipeline():
         logger.warning("hyde_unavailable", error=str(e))
 
     dense = DenseSearch(embedder=embedder, hyde=hyde)
-    sparse = SparseSearch()
+    sparse = SparseSearch()  # keyword: Supabase Postgres FTS (falls back to ES if set)
     splade_search = SpladeSearch(splade_encoder=splade) if splade is not None else None
-    graph = GraphSearch()
+
+    # Graph (Neo4j) only if a real URI is configured. Prod has no NEO4J_URI secret →
+    # the default is localhost → every dispatch threw "Connection error" and the
+    # channel returned []. Don't register a dead channel (kills fake metadata keys).
+    def _neo4j_configured() -> bool:
+        from app.config import settings
+        uri = (getattr(settings, "neo4j_uri", "") or "").strip()
+        return bool(uri) and "localhost" not in uri and "127.0.0.1" not in uri
+    graph = GraphSearch() if _neo4j_configured() else None
+    if graph is None:
+        logger.info("graph_channel_disabled", reason="neo4j_not_configured")
 
     # Structured search uses Gemini Flash for NL-to-SQL
     structured = None

@@ -435,6 +435,7 @@ class SearchPipeline:
             )
 
             t1 = time.perf_counter()
+            retrieval_results: dict = {}  # populated by single-pass; stays {} for iterative
 
             if _use_iterative:
                 # CoRAG: iterative retrieval with gap detection
@@ -1191,7 +1192,10 @@ class SearchPipeline:
                     "model_used": routing_decision.primary_model,
                     "complexity": routing_decision.complexity.value,
                     "estimated_cost_usd": round(routing_decision.estimated_cost, 4),
-                    "retrieval_channels": list(retrieval_results.keys()),
+                    # Honest: report only channels that actually returned data.
+                    # A dispatched-but-empty channel (ES down → [], structured gated
+                    # → []) used to appear here and falsely imply 5 live channels.
+                    "retrieval_channels": [k for k, v in (retrieval_results or {}).items() if v],
                     "passages_used": len(top_passages),
                     "cache_hit": False,
                     "self_consistency": use_self_consistency,

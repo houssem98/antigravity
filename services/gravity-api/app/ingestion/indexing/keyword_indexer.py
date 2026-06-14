@@ -31,10 +31,77 @@ class KeywordIndexer:
         batch_size: int = 200,
     ) -> int:
         """
-        Bulk index chunks into Elasticsearch.
+        Bulk index chunks for keyword search.
 
-        Returns number of chunks indexed.
+        Primary: Supabase Postgres FTS (the `chunks` table, document-copilot
+        pattern — the keyword channel we actually run). Also mirrors to
+        Elasticsearch if ES is provisioned. Returns max(rows written).
         """
+        if not chunks:
+            return 0
+
+        # Supabase FTS write (the live keyword backend).
+        sb_total = 0
+        try:
+            from app.db import supabase_rest
+            if supabase_rest.configured():
+                sb_total = await self._index_supabase(chunks, batch_size)
+        except Exception as e:
+            logger.warning("keyword_supabase_failed", error=str(e)[:160])
+
+        # Elasticsearch mirror (only if provisioned; otherwise ensure_index throws).
+        es_total = 0
+        try:
+            es_total = await self._index_es(chunks, batch_size)
+        except Exception as e:
+            logger.info("keyword_es_skipped", error=str(e)[:120])
+
+        return max(sb_total, es_total)
+
+    async def _index_supabase(self, chunks: list[ChunkOutput], batch_size: int) -> int:
+        """Upsert paragraph-level chunks into the Supabase `chunks` table for FTS."""
+        from app.db import supabase_rest
+
+        rows = []
+        for chunk in chunks:
+            # Only the retrievable paragraph level (matches search_chunks_fts filter).
+            if chunk.level not in (2, None):
+                continue
+            if not (chunk.text or "").strip():
+                continue
+            md = chunk.metadata or {}
+            rows.append({
+                "id": chunk.id,
+                "document_id": chunk.document_id,
+                "ticker": (md.get("ticker", "") or "").upper(),
+                "company": md.get("company_name", "") or "",
+                "document_title": md.get("document_title", "") or "",
+                "filing_type": md.get("filing_type", "") or "",
+                "filing_date": md.get("filing_date") or None,
+                "section": chunk.section_name or "",
+                "page": chunk.page_number,
+                "chunk_level": chunk.level,
+                "text": chunk.text,
+            })
+        if not rows:
+            return 0
+        # Dedupe by id (Postgres ON CONFLICT errors on dup ids within one batch).
+        rows = list({r["id"]: r for r in rows}.values())
+
+        total = 0
+        for i in range(0, len(rows), batch_size):
+            total += await supabase_rest.sb_insert(
+                "chunks", rows[i:i + batch_size], on_conflict="id"
+            )
+        logger.info("keyword_supabase_indexed", total=total)
+        return total
+
+    async def _index_es(
+        self,
+        chunks: list[ChunkOutput],
+        batch_size: int = 200,
+    ) -> int:
+        """Bulk index chunks into Elasticsearch (mirror; only if ES provisioned)."""
         if not chunks:
             return 0
 
