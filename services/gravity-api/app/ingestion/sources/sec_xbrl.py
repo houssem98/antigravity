@@ -131,30 +131,54 @@ class SECXBRLClient:
                 continue
             for unit, points in (node.get("units", {}) or {}).items():
                 for p in points:
-                    fy = p.get("fy")
-                    fp = p.get("fp")
-                    form = p.get("form", "")
-                    if fy not in fiscal_years:
+                    end = p.get("end", "")
+                    start = p.get("start", "")
+                    if not end:
                         continue
-                    # prefer annual figures
-                    if fp and fp != "FY":
+                    # The XBRL `fy` field is the FILING's fiscal year, not the data
+                    # point's period (a FY2023 10-K tags FY2023/FY2022/FY2021 all as
+                    # fy=2023). Derive the true period year from the END date.
+                    try:
+                        period_year = int(end[:4])
+                    except ValueError:
                         continue
+                    if period_year not in fiscal_years:
+                        continue
+                    # Duration concepts (income/cash-flow) have start+end: require an
+                    # ANNUAL span (~1yr) to drop quarterly/9-month values. Instant
+                    # concepts (balance sheet) have no start — keep as-is.
+                    if start:
+                        try:
+                            d0 = _date(start); d1 = _date(end)
+                            days = (d1 - d0).days
+                        except Exception:
+                            continue
+                        if days < 330 or days > 400:
+                            continue
                     out.append({
                         "concept": concept,
                         "label": _humanize(concept),
-                        "fy": fy,
+                        "fy": period_year,
                         "value": p.get("val"),
                         "unit": unit,
-                        "form": form,
-                        "end": p.get("end", ""),
+                        "form": p.get("form", ""),
+                        "end": end,
                     })
-        # dedupe (concept, fy) keeping the 10-K value if present
+        # dedupe (concept, fy): prefer 10-K, then the latest end date.
         best: dict[tuple, dict] = {}
         for r in out:
             k = (r["concept"], r["fy"])
-            if k not in best or (r["form"] == "10-K" and best[k]["form"] != "10-K"):
+            cur = best.get(k)
+            if (cur is None
+                    or (r["form"] == "10-K" and cur["form"] != "10-K")
+                    or (r["form"] == cur["form"] and r["end"] > cur["end"])):
                 best[k] = r
         return list(best.values())
+
+
+def _date(s: str):
+    from datetime import date
+    return date.fromisoformat(s[:10])
 
 
 def _norm_name(s: str) -> str:
