@@ -84,11 +84,9 @@ class StructuredSearch:
         else:
             flt["ticker"] = "in.(" + ",".join(tickers) + ")"
 
-        # Filter to the asked fiscal year(s) + one prior (for change/CAGR/growth),
-        # and return the FULL statement for those years — not a single
-        # metric-filtered row. FinanceBench is dominated by DERIVED ratios (ROA,
-        # COGS %, quick ratio, payout ratio) that need several line items together;
-        # a 1-metric slice can't be computed from. Give the LLM the whole statement.
+        # Filter to the asked fiscal year(s) + one prior (change/CAGR/growth). This
+        # keeps the facts on the right period without flooding context (returning the
+        # whole 60-fact statement regressed accuracy + caused timeouts).
         years = sorted({int(y) for y in re.findall(r"((?:19|20)\d{2})", query or "")})
         if years:
             wanted: set[int] = set()
@@ -96,9 +94,15 @@ class StructuredSearch:
                 wanted.update((y, y - 1))
             flt["period"] = "in.(" + ",".join(f"FY{y}" for y in sorted(wanted)) + ")"
 
-        # ~60 facts covers the full income statement + balance sheet + cash flow
-        # for two fiscal years (≈30 core concepts × 2y).
-        rows = await supabase_rest.sb_select("financials", flt, limit=max(top_k, 60))
+        # When the query names a metric, narrow to it (precise lookup). Otherwise
+        # (ratio queries — "quick ratio", "ROA") return the year's core items so the
+        # LLM has the components to compute, but capped to keep context tight/fast.
+        ql = (query or "").lower()
+        metric = next((m for m in self._METRIC_TERMS if m in ql), None)
+        if metric:
+            flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
+
+        rows = await supabase_rest.sb_select("financials", flt, limit=max(top_k, 24))
         out: list[RetrievalResult] = []
         for r in rows:
             if r.get("value_raw") is None and r.get("value_float") is None:
