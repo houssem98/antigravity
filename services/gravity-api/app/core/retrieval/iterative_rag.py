@@ -116,6 +116,12 @@ class IterativeRAG:
         result = IterativeRAGResult()
         seen_chunk_ids: set[str] = set()
         channels = channels or query_plan.get("retrieval_channels", ["dense", "bm25"])
+        # Force the same core set as the single-pass path so complex/numeric queries
+        # (routed here) still get the XBRL exact-facts + keyword channels — without
+        # this, "Apple capex FY2023" fell back to dense and answered "not found".
+        for _c in ("dense", "bm25", "structured"):
+            if _c not in channels:
+                channels.append(_c)
 
         # Step 1: Initial retrieval on original query
         step_passages = await self._run_retrieval(
