@@ -104,18 +104,54 @@ async def search(
         }
     citations = [_coerce_citation(c, i) for i, c in enumerate(citations or [])]
 
-    return SearchResponse(
-        id=search_id,
-        answer=answer,
-        citations=citations,
-        sources=sources,
-        structured_data=structured_data,
-        contradictions=contradictions,
-        caveats=caveats,
-        confidence=confidence,
-        follow_up_queries=follow_up_queries,
-        metadata=meta_model,
-    )
+    # Coerce contradictions + sources to their schemas too — the pipeline/LLM
+    # emit varied shapes (e.g. a contradiction without `claim`, a structured-fact
+    # source without `title`), and strict pydantic would 500 the whole response.
+    def _coerce_contradiction(c: dict) -> dict:
+        c = c if isinstance(c, dict) else {}
+        return {
+            "source_a": str(c.get("source_a", "") or c.get("doc_a", "") or ""),
+            "source_b": str(c.get("source_b", "") or c.get("doc_b", "") or ""),
+            "claim": str(c.get("claim", "") or c.get("metric", "") or ""),
+            "value_a": str(c.get("value_a", "") or ""),
+            "value_b": str(c.get("value_b", "") or ""),
+        }
+
+    def _coerce_source(s: dict, i: int) -> dict:
+        s = s if isinstance(s, dict) else {}
+        return {
+            "id": str(s.get("id", "") or f"src_{i + 1}"),
+            "chunk_id": str(s.get("chunk_id", "") or ""),
+            "title": str(s.get("title", "") or s.get("document_title", "") or s.get("ticker", "") or "Source"),
+            "section": str(s.get("section", "") or ""),
+            "text": str(s.get("text", "") or s.get("passage", "") or ""),
+            "ticker": str(s.get("ticker", "") or ""),
+            "date": str(s.get("date", "") or s.get("filing_date", "") or ""),
+            "document_type": str(s.get("document_type", "") or ""),
+            "source_quality": s.get("source_quality", 5) or 5,
+            "relevance_score": float(s.get("score", s.get("relevance_score", 0.0)) or 0.0),
+            "source_channels": s.get("channels", s.get("source_channels", [])) or [],
+        }
+
+    contradictions = [_coerce_contradiction(c) for c in (contradictions or [])]
+    sources = [_coerce_source(s, i) for i, s in enumerate(sources or [])]
+
+    try:
+        return SearchResponse(
+            id=search_id, answer=answer, citations=citations, sources=sources,
+            structured_data=structured_data, contradictions=contradictions,
+            caveats=caveats, confidence=confidence,
+            follow_up_queries=follow_up_queries, metadata=meta_model,
+        )
+    except Exception as _resp_err:
+        # Last-resort: never 500 the response over a sub-field shape issue.
+        logger.warning("search_response_coerce_fallback", error=str(_resp_err)[:200])
+        return SearchResponse(
+            id=search_id, answer=answer, citations=[], sources=[],
+            structured_data=[], contradictions=[], caveats=caveats or [],
+            confidence=confidence, follow_up_queries=follow_up_queries or [],
+            metadata=meta_model,
+        )
 
 
 @router.websocket("/search/stream")
