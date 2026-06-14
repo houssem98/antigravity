@@ -222,7 +222,10 @@ class RetrievalOrchestrator:
             elif name == "graph":
                 coro = channel.search(query=query, entities=entities)
             elif name == "structured":
-                coro = channel.search(query=query, entities=entities)
+                # MUST pass filters: the resolved ticker lives in filters["companies"]
+                # (entities often lacks it). Without filters the channel finds no
+                # ticker and returns [] — the XBRL exact-facts never reach the LLM.
+                coro = channel.search(query=query, entities=entities, filters=filters)
             elif name == "page_index":
                 coro = channel.search(query=query, filters=filters)
             elif name == "turbo_quant":
