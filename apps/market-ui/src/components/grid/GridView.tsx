@@ -99,7 +99,9 @@ export default function GridView() {
 
         try {
             const final = await runGrid(initial, deps, {
-                concurrency: 4,
+                // Serial: the shared LLM is a free-tier Gemini key (~15 req/min).
+                // Concurrency >1 bursts past the quota -> 429 on most cells.
+                concurrency: 1,
                 signal: controller.signal,
                 onCellUpdate: (s) => { setState({ ...s }); },
             });

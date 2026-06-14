@@ -299,16 +299,22 @@ async function callGeminiAPI(apiKey: string, model: string, prompt: string): Pro
     const m = genAI.getGenerativeModel({ model });
     // Gemini SDK handles retries internally, but we wrap to align error surface.
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
             const result = await m.generateContent(prompt);
             return result.response.text();
         } catch (e: any) {
-            const isTransient = /429|500|502|503|RESOURCE_EXHAUSTED|UNAVAILABLE/i.test(e.message ?? '');
-            if (!isTransient || attempt === 2) throw e;
-            const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 400, MAX_BACKOFF_MS);
-            console.warn(`[llm] Gemini ${model} transient error — retry ${attempt + 1}/2 in ${Math.round(backoff)}ms`);
-            await sleep(backoff);
+            const msg = e?.message ?? '';
+            const isTransient = /429|500|502|503|RESOURCE_EXHAUSTED|UNAVAILABLE/i.test(msg);
+            if (!isTransient || attempt === MAX_ATTEMPTS - 1) throw e;
+            // Honor Gemini's suggested retryDelay ("retryDelay":"34s") on 429,
+            // else exponential backoff. Free tier is per-minute, so wait seconds.
+            const m429 = msg.match(/retryDelay"\s*:\s*"(\d+)s/);
+            const suggested = m429 ? (parseInt(m429[1], 10) + 1) * 1000 : 0;
+            const backoff = Math.max(suggested, 1500 * Math.pow(2, attempt) + Math.random() * 500);
+            console.warn(`[llm] Gemini ${model} 429/transient — retry ${attempt + 1}/${MAX_ATTEMPTS} in ${Math.round(backoff)}ms`);
+            await sleep(Math.min(backoff, 40_000));
             lastErr = e;
         }
     }
