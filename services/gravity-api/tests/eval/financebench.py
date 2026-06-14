@@ -424,7 +424,8 @@ def load_dataset(sample: Optional[int] = None, category: Optional[str] = None, e
                     "id":       row.get("financebench_id", ""),
                     "question": row.get("question", ""),
                     "answer":   row.get("answer", ""),
-                    "ticker":   row.get("company_name", ""),
+                    "ticker":   row.get("company_name", "") or row.get("company", ""),
+                    "company":  row.get("company", ""),
                     "filing":   row.get("doc_name", ""),
                     "category": row.get("question_type", "general"),
                 })
