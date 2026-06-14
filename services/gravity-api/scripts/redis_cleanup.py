@@ -13,7 +13,10 @@ Run ON FLY:
 import asyncio
 from app.db.redis import redis_client
 
-PATTERNS = ["gscache_emb:*", "gscache:*", "conv:*", "ratelimit:minute:*"]
+# emb:* is the embedding cache (1024-float vectors) — the real space hog that fills
+# Upstash. gscache* = semantic cache, conv* = chat history, ratelimit:minute = burst
+# counters. apikey:* is intentionally NOT matched (would revoke keys).
+PATTERNS = ["emb:*", "gscache_emb:*", "gscache:*", "conv:*", "ratelimit:minute:*"]
 
 
 async def main():
