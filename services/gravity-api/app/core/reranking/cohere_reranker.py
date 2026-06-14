@@ -42,7 +42,6 @@ class CohereReranker:
                 query=query,
                 documents=documents,
                 top_n=min(top_k, len(passages)),
-                return_documents=False,
             )
 
             # Reorder passages by reranker score
