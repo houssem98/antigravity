@@ -39,13 +39,32 @@ class StructuredSearch:
         return self._es
 
     @staticmethod
-    def _fact_line(s: dict) -> str:
-        val = s.get("value_raw") or s.get("value_float")
-        unit = s.get("unit", "") or ""
+    def _fmt_value(s: dict) -> str:
+        """Human-readable value: 211915000000 USD -> '$211,915 million ($211.9B)'."""
+        vf = s.get("value_float")
+        unit = (s.get("unit", "") or "").upper()
+        if vf is None:
+            return f"{s.get('value_raw', '')} {unit}".strip()
+        try:
+            vf = float(vf)
+        except (TypeError, ValueError):
+            return f"{s.get('value_raw', '')} {unit}".strip()
+        if unit in ("USD", "") and abs(vf) >= 1e6:
+            return f"${vf/1e6:,.0f} million (${vf/1e9:.2f}B)"
+        if unit == "USD/SHARES" or "PERSHARE" in (s.get("caption", "") or "").upper():
+            return f"${vf:,.2f} per share"
+        if unit in ("SHARES",):
+            return f"{vf:,.0f} shares"
+        return f"{vf:,.2f} {unit}".strip()
+
+    @classmethod
+    def _fact_line(cls, s: dict) -> str:
+        # Period-forward + plain metric + human value, so the LLM can't miss that
+        # this is the exact figure for the asked fiscal year.
         return (
-            f"[Financial Fact] {s.get('ticker', '')} — {s.get('metric_name', '')} "
-            f"({s.get('period', '')}): {val}{(' ' + unit) if unit else ''} "
-            f"[source: {s.get('filing_type', '')} {s.get('filing_date', '')}]"
+            f"[EXACT FILING FIGURE] {s.get('ticker', '')} {s.get('period', '')} — "
+            f"{s.get('metric_name', '')}: {cls._fmt_value(s)} "
+            f"(SEC XBRL, {s.get('filing_type', '')})"
         )
 
     async def _search_supabase(self, query, entities, filters, top_k) -> list[RetrievalResult]:
@@ -54,15 +73,19 @@ class StructuredSearch:
         ql = (query or "").lower()
         metric = next((m for m in self._METRIC_TERMS if m in ql), None)
 
+        # Ticker scope is MANDATORY. Without it, a metric-only filter ("revenue")
+        # returns OTHER companies' facts (e.g. a Coca-Cola query surfacing Apple/
+        # Tesla/Nike revenue rows) — the exact cross-company contamination we kill
+        # everywhere else. No resolved ticker → no structured facts.
+        if not tickers:
+            return []
         flt: dict = {}
         if len(tickers) == 1:
             flt["ticker"] = f"eq.{tickers[0]}"
-        elif tickers:
+        else:
             flt["ticker"] = "in.(" + ",".join(tickers) + ")"
         if metric:
             flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
-        if not flt:
-            return []  # no ticker → don't dump the whole table
 
         rows = await supabase_rest.sb_select("financials", flt, limit=top_k)
         out: list[RetrievalResult] = []
