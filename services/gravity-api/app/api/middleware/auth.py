@@ -60,8 +60,27 @@ async def require_auth(
     )
 
 
+# Internal service keys (the market-ui RAG proxy + eval harness). These already
+# ship in the frontend bundle, so they're not secrets — recognising them WITHOUT a
+# Redis lookup keeps the Research Grid / Deep Research working even when the Upstash
+# quota is exhausted (writes blocked, lookups unreliable). Extra keys via env
+# INTERNAL_API_KEYS (comma-separated).
+def _internal_keys() -> set[str]:
+    import os
+    base = {"deep-research-internal", "eval-unlimited-fb-2026"}
+    extra = os.getenv("INTERNAL_API_KEYS", "")
+    return base | {k.strip() for k in extra.split(",") if k.strip()}
+
+
 async def _validate_api_key(api_key: str) -> dict | None:
-    """Validate API key against Redis store."""
+    """Validate API key: static internal allowlist first (Redis-independent), then Redis."""
+    if api_key in _internal_keys():
+        return {
+            "user_id": f"svc:{api_key[:16]}",
+            "tier": "unlimited",
+            "api_key": api_key,
+            "entitlements": ["public"],
+        }
     try:
         from app.db.redis import redis_client
         import json
