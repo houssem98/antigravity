@@ -1088,10 +1088,24 @@ class SearchPipeline:
                     if any(p in _ans_lower for p in _negative_phrases):
                         confidence_out = "LOW"
             except (_json.JSONDecodeError, TypeError):
-                # Plain-text response — fall back to regex extraction
+                # Malformed JSON envelope (common with weak fallback models when the
+                # primary is rate-limited). Salvage the "answer" field with the
+                # streaming extractor so the raw {"answer":...} never leaks to the UI.
+                _salv = _extract_partial_answer(validated_answer)
+                if _salv and _salv.strip():
+                    parsed_answer = _salv
                 confidence_out = _extract_confidence(validated_answer)
                 if cross_passage_contradictions:
                     contradictions_out = _fmt_contradictions(cross_passage_contradictions)
+
+            # Final guard: never return a raw JSON envelope to the client, whatever
+            # path we took above.
+            if isinstance(parsed_answer, str):
+                _pa = parsed_answer.lstrip()
+                if _pa.startswith("{") and '"answer"' in _pa[:200]:
+                    _salv2 = _extract_partial_answer(parsed_answer)
+                    if _salv2 and _salv2.strip():
+                        parsed_answer = _salv2
 
             # ── Stage 8b: ALiiCE Proposition Attribution ────────────────
             # Upgrade chunk-level citations → sentence-level attributed propositions.
