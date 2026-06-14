@@ -59,6 +59,52 @@ CORE_CONCEPTS: list[str] = [
 ]
 
 
+# Map XBRL concepts → colloquial metric names that embed the terms users actually
+# query, so the structured channel's `metric_name ilike` matches ("net sales",
+# "capex", "operating cash flow") instead of the raw concept name.
+CONCEPT_LABELS: dict[str, str] = {
+    "Revenues": "Revenue (Total Revenue, Net Sales)",
+    "RevenueFromContractWithCustomerExcludingAssessedTax": "Revenue (Total Revenue, Net Sales)",
+    "CostOfRevenue": "Cost of Revenue (COGS)",
+    "CostOfGoodsAndServicesSold": "Cost of Goods Sold (COGS, Cost of Revenue)",
+    "GrossProfit": "Gross Profit",
+    "OperatingIncomeLoss": "Operating Income",
+    "OperatingExpenses": "Operating Expenses",
+    "ResearchAndDevelopmentExpense": "Research and Development (R&D) Expense",
+    "SellingGeneralAndAdministrativeExpense": "Selling General and Administrative (SG&A) Expense",
+    "IncomeTaxExpenseBenefit": "Income Tax Expense",
+    "NetIncomeLoss": "Net Income (Net Earnings, Profit)",
+    "EarningsPerShareBasic": "Earnings Per Share (EPS) Basic",
+    "EarningsPerShareDiluted": "Earnings Per Share (EPS) Diluted",
+    "WeightedAverageNumberOfSharesOutstandingBasic": "Weighted Average Shares Outstanding Basic",
+    "WeightedAverageNumberOfDilutedSharesOutstanding": "Weighted Average Shares Outstanding Diluted",
+    "Assets": "Total Assets",
+    "AssetsCurrent": "Total Current Assets",
+    "CashAndCashEquivalentsAtCarryingValue": "Cash and Cash Equivalents",
+    "ShortTermInvestments": "Short-Term Investments",
+    "AccountsReceivableNetCurrent": "Accounts Receivable Net (Net AR)",
+    "InventoryNet": "Inventory (Net Inventory)",
+    "PropertyPlantAndEquipmentNet": "Property Plant and Equipment Net (PP&E)",
+    "Goodwill": "Goodwill",
+    "Liabilities": "Total Liabilities",
+    "LiabilitiesCurrent": "Total Current Liabilities",
+    "AccountsPayableCurrent": "Accounts Payable",
+    "LongTermDebtNoncurrent": "Long-Term Debt (Noncurrent)",
+    "LongTermDebt": "Long-Term Debt (Total)",
+    "DebtCurrent": "Current Debt (Short-Term Debt)",
+    "StockholdersEquity": "Shareholders Equity (Stockholders Equity)",
+    "RetainedEarningsAccumulatedDeficit": "Retained Earnings",
+    "CommonStockSharesOutstanding": "Common Shares Outstanding",
+    "NetCashProvidedByUsedInOperatingActivities": "Operating Cash Flow (Cash from Operations, CFO)",
+    "NetCashProvidedByUsedInInvestingActivities": "Investing Cash Flow (Cash from Investing)",
+    "NetCashProvidedByUsedInFinancingActivities": "Financing Cash Flow (Cash from Financing)",
+    "PaymentsToAcquirePropertyPlantAndEquipment": "Capital Expenditures (CapEx, Purchases of PP&E)",
+    "PaymentsOfDividendsCommonStock": "Dividends Paid (Common Stock)",
+    "PaymentsForRepurchaseOfCommonStock": "Share Repurchases (Buybacks)",
+    "DepreciationDepletionAndAmortization": "Depreciation and Amortization (D&A)",
+}
+
+
 class SECXBRLClient:
     def __init__(self, http=None):
         self._http = http
@@ -157,7 +203,7 @@ class SECXBRLClient:
                             continue
                     out.append({
                         "concept": concept,
-                        "label": _humanize(concept),
+                        "label": CONCEPT_LABELS.get(concept, _humanize(concept)),
                         "fy": period_year,
                         "value": p.get("val"),
                         "unit": unit,
