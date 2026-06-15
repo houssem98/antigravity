@@ -45,8 +45,12 @@ _nli_judge = FinanceNLIJudge()  # shared singleton; T5 loaded once if GPU availa
 
 logger = structlog.get_logger()
 
-# Complexities that benefit from self-consistency (3 runs → pick majority)
-_SELF_CONSISTENCY_COMPLEXITIES = {"math", "complex"}
+# Complexities that benefit from self-consistency (3 runs → pick majority).
+# DISABLED: with DeepSeek (slow, ~15s/call) the 3× generation on math/complex
+# queries blew past the latency budget and timed out 23/150 FinanceBench Qs —
+# losing more to auto-fail than self-consistency recovered (DeepSeek already
+# hallucinates ~18%). Re-enable (add "math","complex") with a fast model.
+_SELF_CONSISTENCY_COMPLEXITIES: set[str] = set()
 _SELF_CONSISTENCY_RUNS = 3
 
 _pii_filter = PIIFilter()
