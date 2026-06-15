@@ -17,6 +17,7 @@ export interface GridPrompt {
     id: string;
     label: string;                 // column header
     prompt: string;                // the templated instruction; `{ticker}` is substituted
+    synthesis?: boolean;           // if true, this cell compares all tickers (no {ticker} substitution)
 }
 
 export interface GridDef {
@@ -119,6 +120,7 @@ export async function runGridCell(
     promptId: string,
     deps: CellRunnerDeps,
     signal?: AbortSignal,
+    state?: GridState,  // for synthesis cells: need all ticker answers
 ): Promise<GridCell> {
     const prompt = def.prompts.find(p => p.id === promptId);
     if (!prompt) {
@@ -129,8 +131,58 @@ export async function runGridCell(
         };
     }
 
-    const resolved = resolvePrompt(prompt, ticker);
     const started = Date.now();
+
+    // ── Synthesis cells: compare all tickers ────────────────────────────
+    if (prompt.synthesis && state) {
+        try {
+            // Collect all answers from this promptId across all tickers
+            const tickerAnswers: Record<string, string> = {};
+            for (const t of def.tickers) {
+                const cell = state.cells[cellKey(t, promptId)];
+                if (cell?.status === 'done' && cell.answer) {
+                    tickerAnswers[t] = cell.answer;
+                }
+            }
+
+            if (Object.keys(tickerAnswers).length === 0) {
+                return {
+                    ticker,
+                    promptId,
+                    status: 'error',
+                    error: 'No completed cells to synthesize',
+                    durationMs: Date.now() - started,
+                };
+            }
+
+            const synthesisPrompt = `You are a sell-side equity analyst. Below are individual answers for the same question across multiple tickers:\n\n${Object.entries(tickerAnswers)
+                .map(([t, ans]) => `${t}:\n${ans}`)
+                .join('\n\n---\n\n')}\n\n${prompt.prompt}`;
+
+            const { text, model } = await deps.callLLM(synthesisPrompt, signal);
+            return {
+                ticker,
+                promptId,
+                status: 'done',
+                answer: text,
+                durationMs: Date.now() - started,
+                modelUsed: model,
+            };
+        } catch (e: any) {
+            if (signal?.aborted) {
+                return { ticker, promptId, status: 'cancelled', durationMs: Date.now() - started };
+            }
+            return {
+                ticker, promptId,
+                status: 'error',
+                error: e?.message ?? 'Unknown error',
+                durationMs: Date.now() - started,
+            };
+        }
+    }
+
+    // ── Regular per-ticker cells ───────────────────────────────────────
+    const resolved = resolvePrompt(prompt, ticker);
 
     try {
         // ── RAG retrieval (primary) ────────────────────────────────────────
@@ -216,15 +268,20 @@ export async function runGrid(
     const ids = allCellIds(state.def);
     let current: GridState = { ...state, startedAt: state.startedAt ?? new Date().toISOString() };
 
+    // Separate regular cells from synthesis cells
+    const regularIds = ids.filter(id => !state.def.prompts.find(p => p.id === id.promptId)?.synthesis);
+    const synthesisCells = state.def.prompts.filter(p => p.synthesis);
+
+    // ── Run regular cells in parallel ──────────────────────────────────
     let cursor = 0;
     const workers: Promise<void>[] = [];
-    for (let w = 0; w < Math.min(concurrency, ids.length); w += 1) {
+    for (let w = 0; w < Math.min(concurrency, regularIds.length); w += 1) {
         workers.push((async () => {
-            while (cursor < ids.length) {
+            while (cursor < regularIds.length) {
                 if (options.signal?.aborted) return;
                 const idx = cursor;
                 cursor += 1;
-                const { ticker, promptId } = ids[idx];
+                const { ticker, promptId } = regularIds[idx];
                 current = updateCell(current, ticker, promptId, { status: 'running' });
                 const cell = await runGridCell(state.def, ticker, promptId, deps, options.signal);
                 current = updateCell(current, ticker, promptId, cell);
@@ -233,6 +290,18 @@ export async function runGrid(
         })());
     }
     await Promise.all(workers);
+
+    // ── Run synthesis cells sequentially ───────────────────────────────
+    for (const synthPrompt of synthesisCells) {
+        if (options.signal?.aborted) break;
+        // Synthesis cell: ticker represents "all tickers"
+        const ticker = 'ALL';
+        current = updateCell(current, ticker, synthPrompt.id, { status: 'running' });
+        const cell = await runGridCell(state.def, ticker, synthPrompt.id, deps, options.signal, current);
+        current = updateCell(current, ticker, synthPrompt.id, cell);
+        options.onCellUpdate?.(current, cell);
+    }
+
     return { ...current, completedAt: new Date().toISOString() };
 }
 
@@ -247,6 +316,7 @@ export const SEED_GRID_PROMPTS: GridPrompt[] = [
     { id: 'risks',     label: 'Risks',        prompt: 'What are the top 3 downside risks for {ticker}? Quantify where possible.' },
     { id: 'valuation', label: 'Valuation',    prompt: 'What is {ticker}\'s current valuation vs peers and historical average? Flag any dislocations.' },
     { id: 'preview',   label: 'Next Print',   prompt: 'What are consensus expectations for {ticker}\'s next earnings print? Where could it surprise?' },
+    { id: 'synthesis', label: '🔍 Comparison', prompt: 'Synthesize the individual theses across all tickers. Rank them by conviction. Which has the strongest near-term edge? Most durable moat? Biggest risk?', synthesis: true },
 ];
 
 // ─── CSV Export ──────────────────────────────────────────────────────────────
@@ -262,6 +332,8 @@ function csvEscape(value: unknown): string {
 export function toCSV(state: GridState): string {
     const header = ['ticker', ...state.def.prompts.map(p => p.label)];
     const rows: string[][] = [header];
+
+    // Regular ticker rows
     for (const ticker of state.def.tickers) {
         const row: string[] = [ticker];
         for (const p of state.def.prompts) {
@@ -274,5 +346,21 @@ export function toCSV(state: GridState): string {
         }
         rows.push(row);
     }
+
+    // Synthesis row (if any synthesis cells exist)
+    const synthesisCells = state.def.prompts.filter(p => p.synthesis);
+    if (synthesisCells.length > 0) {
+        const synthRow: string[] = ['[COMPARISON]'];
+        for (const p of state.def.prompts) {
+            const cell = state.cells[cellKey('ALL', p.id)];
+            if (!cell || cell.status === 'pending') synthRow.push('');
+            else if (cell.status === 'running') synthRow.push('(running)');
+            else if (cell.status === 'error') synthRow.push(`(error: ${cell.error ?? 'unknown'})`);
+            else if (cell.status === 'cancelled') synthRow.push('(cancelled)');
+            else synthRow.push(cell.answer ?? '');
+        }
+        rows.push(synthRow);
+    }
+
     return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
 }
