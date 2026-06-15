@@ -118,32 +118,12 @@ class LLMRouter:
         logger.info("llm_router_init", available_models=list(self._clients.keys()))
 
     async def classify_complexity(self, query: str) -> QueryComplexity:
-        """Classify query complexity with the cheapest available LLM."""
-        classifier = (
-            self._clients.get("groq_fast")
-            or self._clients.get("gemini_flash")
-            or self._clients.get("claude_haiku")
-            or self._clients.get("deepseek")
-        )
-        if not classifier:
-            # Fallback: simple heuristic if no classifier available
-            return self._heuristic_classify(query)
-
-        try:
-            response = await classifier.generate(
-                messages=[LLMMessage(role="user", content=CLASSIFICATION_PROMPT.format(query=query))],
-                config=LLMConfig(temperature=0.0, max_tokens=10),
-            )
-            result = response.content.strip().upper()
-
-            for complexity in QueryComplexity:
-                if complexity.value.upper() in result:
-                    return complexity
-
-            return QueryComplexity.MEDIUM  # Default if classification unclear
-        except Exception as e:
-            logger.warning("complexity_classification_failed", error=str(e))
-            return self._heuristic_classify(query)
+        """Classify query complexity. Heuristic-only: the LLM classifier added a
+        per-query LLM call (latency) AND over-rated simple fact lookups as
+        COMPLEX/MATH → routed them to slow DeepSeek (10-60s). The keyword heuristic
+        correctly sends "Apple net income"→SIMPLE (fast gemini) and "payout ratio"→
+        MATH (DeepSeek), with zero latency."""
+        return self._heuristic_classify(query)
 
     def _heuristic_classify(self, query: str) -> QueryComplexity:
         """Fast heuristic fallback when LLM classifier is unavailable."""
