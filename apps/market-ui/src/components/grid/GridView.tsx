@@ -341,6 +341,26 @@ export default function GridView() {
                                         })}
                                     </tr>
                                 ))}
+                                {/* Synthesis row (comparison) */}
+                                {state.def.prompts.some(p => p.synthesis) && (
+                                    <tr className="border-b border-[color:var(--line)] bg-[color:var(--surface-2)]">
+                                        <td className="px-3 py-3 font-mono text-xs text-[color:var(--accent)] sticky left-0 bg-[color:var(--surface-2)] z-10 border-r border-[color:var(--line)] font-medium">
+                                            [COMPARISON]
+                                        </td>
+                                        {state.def.prompts.map(p => {
+                                            const cell = state.cells[cellKey('ALL', p.id)];
+                                            return (
+                                                <td
+                                                    key={p.id}
+                                                    className={`px-3 py-3 align-top cursor-pointer ${p.synthesis ? 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface)]' : 'text-[color:var(--text-3)]'}`}
+                                                    onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
+                                                >
+                                                    {p.synthesis ? <CellContent cell={cell} /> : '—'}
+                                                </td>
+                                            );
+                                        })}
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
