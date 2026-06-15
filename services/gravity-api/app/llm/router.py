@@ -66,7 +66,10 @@ class LLMRouter:
             # others (gpt4o/gpt5 = 429 no-quota, groq = daily-capped, gemini =
             # free-tier rate-limited) are degraded fallbacks behind it. Gemini kept
             # as the immediate fallback since it at least has a free tier.
-            QueryComplexity.SIMPLE:  ["deepseek", "gemini_flash", "groq_fast", "groq_large", "gpt4o", "claude_haiku"],
+            # SIMPLE lookups: gemini_flash FIRST — it's ~2s vs DeepSeek's ~12s, and
+            # for a single-fact lookup the exact figure is already in context, so the
+            # fast model just reads it. Reserve DeepSeek for reasoning (math/complex).
+            QueryComplexity.SIMPLE:  ["gemini_flash", "deepseek", "groq_fast", "groq_large", "gpt4o", "claude_haiku"],
             QueryComplexity.MEDIUM:  ["deepseek", "gemini_pro", "gemini_flash", "groq_large", "gpt4o", "claude_sonnet"],
             QueryComplexity.COMPLEX: ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus", "claude_sonnet"],
             QueryComplexity.MATH:    ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus"],
