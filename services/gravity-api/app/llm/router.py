@@ -70,7 +70,10 @@ class LLMRouter:
             # for a single-fact lookup the exact figure is already in context, so the
             # fast model just reads it. Reserve DeepSeek for reasoning (math/complex).
             QueryComplexity.SIMPLE:  ["gemini_flash", "deepseek", "groq_fast", "groq_large", "gpt4o", "claude_haiku"],
-            QueryComplexity.MEDIUM:  ["deepseek", "gemini_pro", "gemini_flash", "groq_large", "gpt4o", "claude_sonnet"],
+            # MEDIUM: most factual lookups land here (the classifier is generous).
+            # gemini_flash first for speed — the fact is in context; DeepSeek (slow)
+            # only if gemini is unavailable. Reasoning stays on DeepSeek (COMPLEX/MATH).
+            QueryComplexity.MEDIUM:  ["gemini_flash", "deepseek", "gemini_pro", "groq_large", "gpt4o", "claude_sonnet"],
             QueryComplexity.COMPLEX: ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus", "claude_sonnet"],
             QueryComplexity.MATH:    ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus"],
         }
