@@ -26,7 +26,7 @@ async function callLLMProxy(prompt: string, signal?: AbortSignal): Promise<{ tex
     const res = await fetch(LLM_PROXY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'gemini', model: 'gemini-2.5-flash', prompt, max_tokens: 2048 }),
+        body: JSON.stringify({ provider: 'deepseek', model: 'deepseek-chat', prompt, max_tokens: 2048 }),
         signal,
     });
     if (!res.ok) {
@@ -34,7 +34,7 @@ async function callLLMProxy(prompt: string, signal?: AbortSignal): Promise<{ tex
         throw new Error(err.error || `LLM proxy failed (${res.status})`);
     }
     const data = await res.json();
-    return { text: data.text ?? '', model: 'gemini-2.5-flash' };
+    return { text: data.text ?? '', model: data.model ?? 'deepseek-chat' };
 }
 
 async function searchGravityCell(query: string, ticker: string, signal?: AbortSignal) {
