@@ -647,14 +647,28 @@ function CitationPanel({ citation, onClose }: { citation: GravityCitation; onClo
                 {/* Source context — cited passage + neighbouring chunks */}
                 <SourceContext citation={citation} />
 
-                {/* Link to full doc */}
-                <a
-                    href={`/documents?ticker=${citation.ticker ?? ''}&title=${encodeURIComponent(citation.document_title ?? '')}`}
-                    className="flex items-center gap-2 text-xs text-[var(--accent)] hover:text-[var(--accent)] transition-colors"
-                >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    View full document
-                </a>
+                {/* Link to full doc — open the real SEC EDGAR filings for this
+                    ticker (the old internal /documents route had nothing to show
+                    for XBRL facts, whose "title" is a metric name, not a document). */}
+                {(() => {
+                    const anyCit = citation as { url?: string; ticker?: string };
+                    const docUrl = anyCit.url
+                        || (citation.ticker
+                            ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(citation.ticker)}&type=10-K&dateb=&owner=include&count=40`
+                            : null);
+                    if (!docUrl) return null;
+                    return (
+                        <a
+                            href={docUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 text-xs text-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+                        >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            View on SEC EDGAR
+                        </a>
+                    );
+                })()}
             </div>
         </div>
     );
