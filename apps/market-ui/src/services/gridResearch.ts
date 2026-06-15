@@ -63,6 +63,16 @@ export function initializeGrid(def: GridDef): GridState {
             };
         }
     }
+    // Initialize synthesis cells (for "ALL" ticker)
+    for (const p of def.prompts) {
+        if (p.synthesis) {
+            cells[cellKey('ALL', p.id)] = {
+                ticker: 'ALL',
+                promptId: p.id,
+                status: 'pending',
+            };
+        }
+    }
     return { def, cells };
 }
 
