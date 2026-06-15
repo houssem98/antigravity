@@ -39,6 +39,8 @@ PROVIDER = os.getenv("XBRL_PROVIDER", "deepseek").lower()
 _PROVIDERS = {
     "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek-chat", "DEEPSEEK_API_KEY"),
     "groq": ("https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
+    # Ollama: free, unlimited, local. No API key. Model via XBRL_ANSWER_MODEL.
+    "ollama": ("http://localhost:11434/v1/chat/completions", "qwen2.5-coder:7b", "OLLAMA_NO_KEY"),
 }
 
 
@@ -73,10 +75,13 @@ async def answer_with_facts(client: httpx.AsyncClient, question: str, facts_bloc
         f"QUESTION: {question}\n\n"
         "Answer using only the facts above. Show the final number."
     )
+    headers = {"Content-Type": "application/json"}
+    if LLM_KEY:  # Ollama needs no auth; an empty "Bearer " is an illegal header
+        headers["Authorization"] = f"Bearer {LLM_KEY}"
     try:
         r = await client.post(
             _LLM_URL,
-            headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"},
+            headers=headers,
             json={"model": ANSWER_MODEL, "max_tokens": 700, "temperature": 0,
                   "messages": [{"role": "system", "content": SYSTEM},
                                {"role": "user", "content": content}]},
@@ -179,7 +184,7 @@ def score(got: str, expected: str) -> bool:
 
 
 async def run(questions: list[dict], output: str | None, coverage: bool = False):
-    if not coverage and not LLM_KEY:
+    if not coverage and not LLM_KEY and PROVIDER != "ollama":
         print(f"ERROR: no {_KEYENV} (provider={PROVIDER})"); sys.exit(1)
     sec = SECXBRLClient()
     rep = Rep()

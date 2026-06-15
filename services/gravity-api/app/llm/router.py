@@ -62,13 +62,14 @@ class LLMRouter:
         # Groq (llama-3.3-70b) and DeepSeek are last-resort fallbacks when
         # Anthropic credits are exhausted or primary models are unavailable.
         self._routing_table: dict[QueryComplexity, list[str]] = {
-            # Groq first: it's the only currently-funded LLM (free tier, generous).
-            # Better models (Claude/GPT/Gemini-pro) kept as fallbacks and will be
-            # picked again once their billing is funded + registered.
-            QueryComplexity.SIMPLE:  ["gpt4o", "groq_fast", "groq_large", "gemini_flash", "deepseek", "claude_haiku"],
-            QueryComplexity.MEDIUM:  ["gpt4o", "groq_large", "gpt5", "gemini_pro", "deepseek", "claude_sonnet"],
-            QueryComplexity.COMPLEX: ["gpt5", "gpt4o", "groq_large", "deepseek", "claude_opus", "claude_sonnet"],
-            QueryComplexity.MATH:    ["gpt5", "gpt4o", "groq_large", "deepseek", "claude_opus"],
+            # DeepSeek first: it's the funded, strong, reliable-JSON model. The
+            # others (gpt4o/gpt5 = 429 no-quota, groq = daily-capped, gemini =
+            # free-tier rate-limited) are degraded fallbacks behind it. Gemini kept
+            # as the immediate fallback since it at least has a free tier.
+            QueryComplexity.SIMPLE:  ["deepseek", "gemini_flash", "groq_fast", "groq_large", "gpt4o", "claude_haiku"],
+            QueryComplexity.MEDIUM:  ["deepseek", "gemini_pro", "gemini_flash", "groq_large", "gpt4o", "claude_sonnet"],
+            QueryComplexity.COMPLEX: ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus", "claude_sonnet"],
+            QueryComplexity.MATH:    ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus"],
         }
 
         # Cost estimates per query by complexity
@@ -217,7 +218,9 @@ class LLMRouter:
 
     def get_fast_client(self) -> BaseLLMClient:
         """Get the fastest/cheapest available client (for query understanding, etc.)."""
-        for key in ["groq_fast", "gemini_flash", "claude_haiku", "deepseek", "gpt4o", "groq_large", "claude_sonnet"]:
+        # gemini_flash first: fast + free, fine for query understanding/HyDE, and
+        # leaves the funded DeepSeek budget for answer generation. groq is daily-capped.
+        for key in ["gemini_flash", "deepseek", "groq_fast", "claude_haiku", "gpt4o", "groq_large", "claude_sonnet"]:
             if key in self._clients:
                 return self._clients[key]
         return next(iter(self._clients.values()))
