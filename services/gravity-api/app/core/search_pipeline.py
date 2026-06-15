@@ -301,9 +301,18 @@ class SearchPipeline:
                     self.query_understander.analyze(query), timeout=5.0
                 )
             except asyncio.TimeoutError:
+                import copy as _copy
                 from app.core.query_understanding import DEFAULT_QUERY_PLAN
-                query_plan = DEFAULT_QUERY_PLAN.copy()
+                # deepcopy: .copy() is shallow → the nested `entities` dict would be
+                # SHARED across every defaulted request, so the company-recovery
+                # fallback's in-place mutation leaked the first query's ticker into
+                # all subsequent ones (every query resolved to the first company).
+                query_plan = _copy.deepcopy(DEFAULT_QUERY_PLAN)
                 logger.warning("query_understanding_timeout", trace_id=trace_id, query=query[:60])
+            # Defensive: ensure entities is a per-request dict even on the success
+            # path, so downstream in-place enrichment never mutates shared state.
+            import copy as _copy2
+            query_plan = _copy2.deepcopy(query_plan) if isinstance(query_plan, dict) else query_plan
             understanding_ms = (time.perf_counter() - t0) * 1000
             # Init timing metrics so every retrieval path (single-pass, iterative,
             # on-demand) is safe to reference at Stage 10 — the iterative branch
