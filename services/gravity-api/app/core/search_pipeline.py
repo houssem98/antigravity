@@ -348,6 +348,33 @@ class SearchPipeline:
                 except Exception as _er:
                     logger.debug("entity_resolution_skipped", trace_id=trace_id, error=str(_er))
 
+            # Deterministic fallback: query-understanding (gemini) often returns
+            # companies=[] (e.g. "Coca Cola FY2021 revenue" → no entity), so nothing
+            # scopes → dense drifts to random tickers and structured gets no ticker.
+            # Pull capitalized name-sequences + ticker tokens straight from the query
+            # and resolve them, so EVERY company mention is scoped.
+            if not query_plan.get("entities", {}).get("companies"):
+                try:
+                    from app.core.entity_resolver import get_resolver
+                    from app.db.redis import redis_client as _redis
+                    _resolver = await asyncio.wait_for(get_resolver(redis_client=_redis), timeout=2.0)
+                    _cands = _extract_company_mentions(query)
+                    _found = []
+                    for _cand in _cands:
+                        _ent = await _resolver.resolve(_cand)
+                        if _ent and _ent.match_type != "unknown" and _ent.ticker:
+                            _found.append({"name": _cand, "ticker": _ent.ticker,
+                                           "cik": _ent.cik, "resolved_name": _ent.name})
+                    if _found:
+                        # dedupe by ticker
+                        _seen: set = set()
+                        _uniq = [f for f in _found if not (f["ticker"] in _seen or _seen.add(f["ticker"]))]
+                        query_plan.setdefault("entities", {})["companies"] = _uniq
+                        logger.info("companies_recovered", trace_id=trace_id,
+                                    tickers=[f["ticker"] for f in _uniq])
+                except Exception as _er2:
+                    logger.debug("company_fallback_skipped", trace_id=trace_id, error=str(_er2))
+
             logger.info(
                 "query_understood",
                 trace_id=trace_id,
@@ -1439,6 +1466,40 @@ def _extract_confidence(answer: str) -> str:
     elif '"confidence": "low"' in answer_lower or '"confidence":"low"' in answer_lower:
         return "LOW"
     return "MEDIUM"
+
+
+_CAP_SEQ_RE = re.compile(r"\b([A-Z][a-zA-Z.&'\-]+(?:\s+[A-Z][a-zA-Z.&'\-]+){0,3})\b")
+_CAP_STOP = {"what", "how", "is", "the", "does", "did", "do", "are", "was", "were",
+             "which", "based", "considering", "assume", "answer", "question", "note",
+             "fy", "q1", "q2", "q3", "q4", "us", "usd", "gaap", "non", "sec", "you",
+             "for", "of", "in", "and", "a", "an", "as", "give", "calculate", "we"}
+
+
+def _extract_company_mentions(query: str) -> list[str]:
+    """Pull candidate company mentions from raw query text (capitalized name
+    sequences + bare ticker tokens), stripping sentence-start/filler caps. Each is
+    fed to the entity resolver. Deterministic fallback for when query-understanding
+    returns companies=[]."""
+    cands: list[str] = []
+    for m in _CAP_SEQ_RE.findall(query or ""):
+        toks = [t for t in m.split() if not re.match(r"^(FY\d*|Q[1-4]|H[12]|\d+)$", t)]
+        while toks and toks[0].lower() in _CAP_STOP:
+            toks = toks[1:]
+        while toks and toks[-1].lower() in _CAP_STOP:
+            toks = toks[:-1]
+        if toks:
+            cands.append(" ".join(toks))
+    for m in re.findall(r"\b([A-Z]{1,5})\b", query or ""):
+        if m.lower() not in _CAP_STOP and len(m) >= 2:
+            cands.append(m)
+    seen: set = set()
+    out: list[str] = []
+    for c in cands:
+        k = c.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(c)
+    return out[:6]
 
 
 def _default_follow_ups(query: str, query_plan: dict, passages: list) -> list[str]:
