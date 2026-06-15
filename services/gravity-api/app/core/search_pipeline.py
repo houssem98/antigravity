@@ -1149,6 +1149,10 @@ class SearchPipeline:
             # ticker) by joining to the retrieved passages, so the source panel
             # has real content to display.
             citations_out = _normalize_citations(citations_out, top_passages)
+            # Resilience: model drops follow_up_queries under rate-limit → "no next
+            # question" in the UI. Fall back to deterministic suggestions.
+            if not follow_up_queries:
+                follow_up_queries = _default_follow_ups(query, query_plan, top_passages)
             chart_specs_out = _auto_chart_specs(structured_data_out)
             yield SearchEvent(
                 type="answer",
@@ -1433,6 +1437,30 @@ def _extract_confidence(answer: str) -> str:
     return "MEDIUM"
 
 
+def _default_follow_ups(query: str, query_plan: dict, passages: list) -> list[str]:
+    """Deterministic follow-up suggestions for when the model (degraded under
+    rate-limit) drops follow_up_queries, so the UI always offers a next question."""
+    name = ""
+    try:
+        for e in (query_plan or {}).get("entities", {}).get("companies", []) or []:
+            if isinstance(e, dict) and (e.get("ticker") or e.get("name")):
+                name = e.get("ticker") or e.get("name")
+                break
+    except Exception:
+        pass
+    if not name:
+        for p in passages or []:
+            if getattr(p, "ticker", ""):
+                name = p.ticker
+                break
+    subj = name or "this company"
+    return [
+        f"What are the main risks for {subj}?",
+        f"How has {subj}'s revenue grown over the last 3 years?",
+        f"What is {subj}'s profit margin versus peers?",
+    ]
+
+
 def _normalize_citations(raw_citations: list, passages: list) -> list[dict]:
     """
     Enrich citations into the shape the frontend expects
@@ -1494,6 +1522,25 @@ def _normalize_citations(raw_citations: list, passages: list) -> list[dict]:
             "source": doc_title,
             "date": c.get("filing_date") or _pf("filing_date"),
         })
+
+    # Resilience: the model degrades under rate-limit and drops the citations
+    # array entirely, leaving the source panel empty even though passages WERE
+    # retrieved. Synthesize citations from the top passages so sources always show.
+    if not out and passages:
+        for i, p in enumerate(passages[:6], start=1):
+            out.append({
+                "citation_number": i,
+                "chunk_id": getattr(p, "chunk_id", "") or "",
+                "text": (getattr(p, "text", "") or "")[:500],
+                "document_title": getattr(p, "document_title", "") or getattr(p, "ticker", "") or "Source",
+                "ticker": getattr(p, "ticker", "") or "",
+                "section": getattr(p, "section", "") or "",
+                "is_verified": False,
+                "id": i,
+                "source": getattr(p, "document_title", "") or getattr(p, "ticker", "") or "Source",
+                "date": getattr(p, "filing_date", "") or "",
+            })
+        return out
 
     out.sort(key=lambda x: x["citation_number"])
     return out
