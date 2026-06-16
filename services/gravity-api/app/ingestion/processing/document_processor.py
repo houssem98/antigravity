@@ -90,9 +90,12 @@ class DocumentProcessor:
             # ── Extract XBRL facts from iXBRL-embedded HTML ───────────────
             xbrl_facts: list = []
             try:
-                from app.ingestion.processing.xbrl_extractor import XBRLExtractor
+                from app.ingestion.processing.xbrl_extractor import XBRLExtractor, DerivedMetricsCalculator
                 _xbrl = XBRLExtractor()
                 xbrl_facts = _xbrl.extract_from_html(raw_html)
+                # Add derived metrics (margins, ratios) to improve coverage
+                derived = DerivedMetricsCalculator.compute(xbrl_facts)
+                xbrl_facts.extend(derived)
             except Exception as _xe:
                 logger.debug("xbrl_extraction_skipped", error=str(_xe))
 

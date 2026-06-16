@@ -685,3 +685,145 @@ async def extract_xbrl_facts_for_ticker(ticker: str, cik: str | None = None) -> 
     if data is None:
         return []
     return extract_facts_from_companyfacts(data)
+
+
+class DerivedMetricsCalculator:
+    """
+    Computes derived financial metrics from XBRL base facts.
+
+    Many FinanceBench questions ask for derived metrics that aren't directly
+    tagged in XBRL (gross margin, operating margin, ratios, days outstanding).
+    This calculator builds those from base facts to improve retrieval coverage.
+
+    Example:
+        facts = extractor.extract_from_html(html)
+        facts.extend(DerivedMetricsCalculator.compute(facts))
+    """
+
+    @staticmethod
+    def compute(facts: list[XBRLFact]) -> list[XBRLFact]:
+        """Derive common metrics from base facts."""
+        derived: list[XBRLFact] = []
+
+        # Index facts by period for easy lookup
+        by_period = {}
+        for f in facts:
+            key = (f.period_end, f.entity_cik)
+            if key not in by_period:
+                by_period[key] = {}
+            by_period[key][f.metric_name] = f
+
+        # Compute margins and ratios per period
+        for (period, cik), metrics in by_period.items():
+            base_fact = next((f for f in facts if f.period_end == period and f.entity_cik == cik), None)
+            if not base_fact:
+                continue
+
+            rev = metrics.get("revenue")
+            cogs = metrics.get("cost_of_revenue")
+            oi = metrics.get("operating_income")
+            ni = metrics.get("net_income")
+            ta = metrics.get("total_assets")
+            te = metrics.get("total_stockholders_equity")
+
+            # Gross margin = (Revenue - COGS) / Revenue
+            if rev and rev.value and cogs and cogs.value:
+                gm = (rev.value - cogs.value) / rev.value * 100
+                derived.append(XBRLFact(
+                    concept="derived:GrossMargin",
+                    local_name="GrossMargin",
+                    metric_name="gross_margin",
+                    value=gm,
+                    value_str=f"{gm:.1f}%",
+                    unit="percentage",
+                    scale_suffix="",
+                    decimals="2",
+                    period_start=base_fact.period_start,
+                    period_end=base_fact.period_end,
+                    period_label=base_fact.period_label,
+                    context_id=base_fact.context_id,
+                    entity_cik=base_fact.entity_cik,
+                    entity_name=base_fact.entity_name,
+                ))
+
+            # Operating margin = Operating Income / Revenue
+            if oi and oi.value and rev and rev.value:
+                om = (oi.value / rev.value) * 100
+                derived.append(XBRLFact(
+                    concept="derived:OperatingMargin",
+                    local_name="OperatingMargin",
+                    metric_name="operating_margin",
+                    value=om,
+                    value_str=f"{om:.1f}%",
+                    unit="percentage",
+                    scale_suffix="",
+                    decimals="2",
+                    period_start=base_fact.period_start,
+                    period_end=base_fact.period_end,
+                    period_label=base_fact.period_label,
+                    context_id=base_fact.context_id,
+                    entity_cik=base_fact.entity_cik,
+                    entity_name=base_fact.entity_name,
+                ))
+
+            # Net margin = Net Income / Revenue
+            if ni and ni.value and rev and rev.value:
+                nm = (ni.value / rev.value) * 100
+                derived.append(XBRLFact(
+                    concept="derived:NetMargin",
+                    local_name="NetMargin",
+                    metric_name="net_margin",
+                    value=nm,
+                    value_str=f"{nm:.1f}%",
+                    unit="percentage",
+                    scale_suffix="",
+                    decimals="2",
+                    period_start=base_fact.period_start,
+                    period_end=base_fact.period_end,
+                    period_label=base_fact.period_label,
+                    context_id=base_fact.context_id,
+                    entity_cik=base_fact.entity_cik,
+                    entity_name=base_fact.entity_name,
+                ))
+
+            # ROA = Net Income / Total Assets
+            if ni and ni.value and ta and ta.value:
+                roa = (ni.value / ta.value) * 100
+                derived.append(XBRLFact(
+                    concept="derived:ReturnOnAssets",
+                    local_name="ReturnOnAssets",
+                    metric_name="return_on_assets",
+                    value=roa,
+                    value_str=f"{roa:.1f}%",
+                    unit="percentage",
+                    scale_suffix="",
+                    decimals="2",
+                    period_start=base_fact.period_start,
+                    period_end=base_fact.period_end,
+                    period_label=base_fact.period_label,
+                    context_id=base_fact.context_id,
+                    entity_cik=base_fact.entity_cik,
+                    entity_name=base_fact.entity_name,
+                ))
+
+            # ROE = Net Income / Total Stockholders' Equity
+            if ni and ni.value and te and te.value:
+                roe = (ni.value / te.value) * 100
+                derived.append(XBRLFact(
+                    concept="derived:ReturnOnEquity",
+                    local_name="ReturnOnEquity",
+                    metric_name="return_on_equity",
+                    value=roe,
+                    value_str=f"{roe:.1f}%",
+                    unit="percentage",
+                    scale_suffix="",
+                    decimals="2",
+                    period_start=base_fact.period_start,
+                    period_end=base_fact.period_end,
+                    period_label=base_fact.period_label,
+                    context_id=base_fact.context_id,
+                    entity_cik=base_fact.entity_cik,
+                    entity_name=base_fact.entity_name,
+                ))
+
+        return derived
