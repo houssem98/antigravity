@@ -56,6 +56,8 @@ CORE_CONCEPTS: list[str] = [
     "PaymentsToAcquirePropertyPlantAndEquipment",
     "PaymentsOfDividendsCommonStock", "PaymentsForRepurchaseOfCommonStock",
     "DepreciationDepletionAndAmortization",
+    "InterestExpense", "InterestExpenseNonoperating",
+    "OperatingLeaseExpense", "PaymentsOfDividends",
 ]
 
 
@@ -102,6 +104,10 @@ CONCEPT_LABELS: dict[str, str] = {
     "PaymentsOfDividendsCommonStock": "Dividends Paid (Common Stock)",
     "PaymentsForRepurchaseOfCommonStock": "Share Repurchases (Buybacks)",
     "DepreciationDepletionAndAmortization": "Depreciation and Amortization (D&A)",
+    "InterestExpense": "Interest Expense",
+    "InterestExpenseNonoperating": "Interest Expense (Nonoperating)",
+    "OperatingLeaseExpense": "Operating Lease Expense",
+    "PaymentsOfDividends": "Dividends Paid (Total)",
 }
 
 
