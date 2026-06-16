@@ -370,10 +370,19 @@ class SearchPipeline:
                     _cands = _extract_company_mentions(query)
                     _found = []
                     for _cand in _cands:
+                        # Reject finance acronyms / non-company terms that fuzzy-match
+                        # random tickers ("R&D"→DHI, contaminating scope).
+                        if _cand.lower().replace("&", "").replace(".", "") in _NOT_COMPANY:
+                            continue
                         _ent = await _resolver.resolve(_cand)
-                        if _ent and _ent.match_type != "unknown" and _ent.ticker:
-                            _found.append({"name": _cand, "ticker": _ent.ticker,
-                                           "cik": _ent.cik, "resolved_name": _ent.name})
+                        if not (_ent and _ent.match_type != "unknown" and _ent.ticker):
+                            continue
+                        # Short candidates (≤4 chars / single token) must be an EXACT
+                        # ticker — a fuzzy name match on an acronym is almost always wrong.
+                        if len(_cand) <= 4 and _ent.match_type != "exact_ticker":
+                            continue
+                        _found.append({"name": _cand, "ticker": _ent.ticker,
+                                       "cik": _ent.cik, "resolved_name": _ent.name})
                     if _found:
                         # dedupe by ticker
                         _seen: set = set()
@@ -1558,6 +1567,17 @@ _CAP_STOP = {"what", "how", "is", "the", "does", "did", "do", "are", "was", "wer
              "which", "based", "considering", "assume", "answer", "question", "note",
              "fy", "q1", "q2", "q3", "q4", "us", "usd", "gaap", "non", "sec", "you",
              "for", "of", "in", "and", "a", "an", "as", "give", "calculate", "we"}
+
+
+# Finance acronyms / terms that look like capitalized tokens but are NOT companies;
+# they fuzzy-match random tickers and poison company scope ("R&D"→DHI).
+_NOT_COMPANY: frozenset[str] = frozenset({
+    "rd", "ceo", "cfo", "coo", "cto", "eps", "roe", "roa", "roic", "roce",
+    "ebitda", "ebit", "gaap", "sec", "ipo", "ma", "sga", "capex", "fcf", "yoy",
+    "qoq", "pe", "ps", "pb", "ev", "dcf", "wacc", "irr", "npv", "usd", "gdp",
+    "ttm", "ytd", "ltm", "cagr", "dso", "dpo", "dio", "nda", "etf", "ai", "it",
+    "usa", "us", "uk", "eu", "fy", "q1", "q2", "q3", "q4", "id",
+})
 
 
 def _extract_company_mentions(query: str) -> list[str]:
