@@ -1329,8 +1329,13 @@ class SearchPipeline:
                         # authority that exists — labelling it MEDIUM/LOW reads as a
                         # broken tool. The model defaults single-source to MEDIUM.
                         _pa_l = parsed_answer.lower()
+                        # Floor LOW/MEDIUM → HIGH: if the validator found nothing
+                        # unsupported, an exact XBRL fact is in context, and the answer
+                        # isn't a refusal, the answer IS well-grounded. Models self-rate
+                        # derived/comparison answers LOW out of caution — that reads as a
+                        # broken tool on "$99,584M FCF computed from the 10-K".
                         if ("[EXACT FILING FIGURE]" in user_content
-                                and confidence_out in ("MEDIUM", "")
+                                and confidence_out in ("LOW", "MEDIUM", "")
                                 and not any(p in _pa_l for p in _negative_phrases)):
                             confidence_out = "HIGH"
                 except Exception as _gerr:
