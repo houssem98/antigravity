@@ -106,7 +106,12 @@ _ALIASES: dict[str, str] = {
 
 
 def _normalize(s: str) -> str:
-    return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
+    # Split separators to SPACE first (don't strip them): "Coca-Cola" must become
+    # "coca cola" → {coca, cola} so it exact-set matches "COCA COLA CO" (KO), not
+    # fuzzy-match the superset "Coca-Cola Consolidated" (COKE — a different company).
+    s = re.sub(r"[-/&.,']+", " ", s.lower())
+    s = re.sub(r"[^a-z0-9 ]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 # Corporate suffixes / filler that dilute name matching. "Rocket Lab USA, Inc."
