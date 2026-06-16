@@ -457,8 +457,15 @@ class SearchPipeline:
             doc_count = "500,000+"
             complexity = query_plan.get("complexity", "simple")
             intent = query_plan.get("intent", "")
-            _use_iterative = complexity in ("medium", "complex") or intent in (
-                "multi_hop_reasoning", "trend_analysis"
+            # Fast mode (Quick Answer) ALWAYS uses single-pass: it carries the
+            # scoping + period-aware + structured/XBRL force-include + ratio fixes
+            # that the iterative (CoRAG) path lacks. Half the cold-battery failures
+            # (Apple FCF, Pfizer R&D, JPM) were MEDIUM queries routed to iterative,
+            # which drifts to the wrong company/period. Reserve iterative for
+            # explicit deep/agentic depth.
+            _use_iterative = reasoning_depth != "fast" and (
+                complexity in ("medium", "complex")
+                or intent in ("multi_hop_reasoning", "trend_analysis")
             )
 
             yield SearchEvent(
