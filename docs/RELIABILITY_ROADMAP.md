@@ -7,6 +7,22 @@ query failed 1/4 times; 13-37s latency; wrong company + wrong period repeatedly.
 
 Sequence by trust-impact-per-effort. Do R1+R2 first — they're the crisis and mostly free.
 
+## STATUS (2026-06-16, end of sprint)
+- **R1 determinism — DONE.** Cache gate hardened (never cache NONE/refusal; flushed poison).
+- **R2 period — DONE (partial).** Period-aware reorder keeps the asked FY; structured
+  facts immune. Future-dated corpus purge still worthwhile.
+- **R3 entity — DONE.** Possessive `'s` strip ("Amazon's"→AMZN, was CHUC) + single-char
+  token drop ("Nvidia's R&D"→NVDA, was DHI). 0 wrong-company on the battery.
+- **R4 latency — BLOCKED on spend.** Free wins banked (fast path skips dead-Groq
+  validators 36s→12s; deep-validate tied to iterative path). Floor is deepseek 15-40s +
+  single shared-cpu Fly saturating. Needs funded fast model + Fly scale. ← the wall.
+- **R5 coverage — DONE (partial).** FCF/margins compute from components; bank NII
+  backfilled (12 banks); comparison path fixed (scoped per-entity + interleaved facts).
+  Long-tail tickers/periods still need wider `--sp500` backfill.
+- **R6 eval — NOT yet wired into CI.** Cold battery is manual (`POST /v1/search`).
+Result: 12/12 single-entity exact-XBRL + working comparisons, mostly HIGH confidence.
+Remaining gap is **latency under load (spend)**, not correctness.
+
 ## R1 — Determinism (the 25% same-query failure) · CRISIS · free
 Same query "Apple FY2023 net income": 3/4 OK, 1/4 "not found" (a 3s path that
 skipped retrieval). A finance tool that contradicts itself on query #3 has zero trust.
