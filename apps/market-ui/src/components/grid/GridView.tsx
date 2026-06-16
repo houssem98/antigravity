@@ -376,12 +376,12 @@ export default function GridView() {
 
                 {/* Grid */}
                 {state && (
-                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden">
-                        <div className="overflow-x-auto">
+                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden" style={{ maxHeight: 'calc(100vh - 400px)' }}>
+                        <div className="overflow-x-auto overflow-y-auto h-full">
                             <table className="w-full">
-                                <thead>
+                                <thead className="sticky top-0 z-20">
                                     <tr className="bg-[color:var(--surface-2)] border-b-2 border-[color:var(--line)]">
-                                        <th className="sticky left-0 z-20 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px]">
+                                        <th className="sticky left-0 z-30 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px]">
                                             TICKER
                                         </th>
                                         {state.def.prompts.map(p => (
@@ -483,68 +483,82 @@ export default function GridView() {
             {/* Cell detail modal */}
             {selectedCell && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-6"
-                    style={{ background: 'color-mix(in oklch, var(--bg) 70%, transparent)' }}
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+                    style={{ background: 'color-mix(in oklch, var(--bg) 85%, transparent)' }}
                     onClick={() => setSelectedCell(null)}
                 >
                     <div
-                        className="max-w-2xl w-full max-h-[80vh] overflow-y-auto rounded-sm p-5 bg-[color:var(--surface)] border border-[color:var(--line)]"
+                        className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-lg p-6 sm:p-8 bg-[color:var(--surface)] border border-[color:var(--line)] shadow-xl"
                         onClick={e => e.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-start justify-between gap-4 mb-6">
                             <div>
-                                <div className="label">{selectedCell.ticker}</div>
-                                <div className="font-display text-h4 font-medium text-[color:var(--text)]">
-                                    {SEED_GRID_PROMPTS.find(p => p.id === selectedCell.promptId)?.label}
+                                <div className="inline-block px-2.5 py-1 mb-3 rounded text-xs font-semibold text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
+                                    {selectedCell.ticker}
                                 </div>
+                                <h2 className="font-display text-2xl font-semibold text-[color:var(--text)] mb-1">
+                                    {SEED_GRID_PROMPTS.find(p => p.id === selectedCell.promptId)?.label}
+                                </h2>
                             </div>
                             <button
                                 onClick={() => setSelectedCell(null)}
-                                className="p-1 rounded-sm text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]"
+                                className="flex-shrink-0 p-2 rounded-lg text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)] transition-colors"
                             >
-                                <X className="w-4 h-4" />
+                                <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="text-sm text-[color:var(--text-2)] whitespace-pre-wrap leading-relaxed">
-                            {selectedCell.answer}
+                        <div className="prose prose-sm max-w-none mb-6 text-[color:var(--text-2)] leading-relaxed">
+                            <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                                {selectedCell.answer}
+                            </p>
                         </div>
                         {selectedCell.citations && selectedCell.citations.length > 0 && (
-                            <div className="mt-4 border-t border-[color:var(--line)] pt-3">
-                                <div className="label mb-1.5">SOURCES ({selectedCell.citations.length})</div>
-                                <ul className="space-y-1">
+                            <div className="mt-6 pt-6 border-t border-[color:var(--line)]">
+                                <h3 className="font-semibold text-xs text-[color:var(--text)] mb-3 uppercase tracking-wide">
+                                    Sources ({selectedCell.citations.length})
+                                </h3>
+                                <ul className="space-y-2">
                                     {selectedCell.citations.map(c => (
-                                        <li key={c.id} className="text-xs text-[color:var(--text-3)] flex gap-1.5">
-                                            <span className="text-[color:var(--accent)] font-mono shrink-0">[{c.id}]</span>
-                                            <span className="truncate">{c.title}</span>
+                                        <li
+                                            key={c.id}
+                                            className="text-xs text-[color:var(--text-3)] flex gap-3 p-2 rounded-sm bg-[color:var(--bg)] hover:bg-[color:var(--surface-2)] transition-colors"
+                                        >
+                                            <span className="font-mono font-semibold text-[color:var(--accent)] shrink-0 w-6">[{c.id}]</span>
+                                            <span className="truncate leading-relaxed">{c.title}</span>
                                         </li>
                                     ))}
                                 </ul>
                             </div>
                         )}
-                        {selectedCell.durationMs && (
-                            <div className="mt-3 label flex items-center gap-2">
-                                <span>{(selectedCell.durationMs / 1000).toFixed(1)}S · {selectedCell.modelUsed}</span>
+                        <div className="mt-6 flex items-center justify-between pt-4 border-t border-[color:var(--line)]">
+                            <div className="flex items-center gap-3 text-xs text-[color:var(--text-4)]">
+                                <span className="font-medium">{((selectedCell.durationMs ?? 0) / 1000).toFixed(1)}s</span>
+                                <span>•</span>
+                                <span>{selectedCell.modelUsed}</span>
                                 {selectedCell.ragUsed && (
-                                    <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] text-[color:var(--accent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
-                                        SEC RAG
-                                    </span>
+                                    <>
+                                        <span>•</span>
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] text-[color:var(--accent)]">
+                                            SEC RAG
+                                        </span>
+                                    </>
                                 )}
                             </div>
-                        )}
-                        <button
-                            onClick={() => {
-                                const prompt = state?.def.prompts.find(p => p.id === selectedCell.promptId);
-                                if (prompt) {
-                                    const resolved = resolvePrompt(prompt, selectedCell.ticker);
-                                    setEditPrompt(resolved);
-                                    setEditingCell({ ticker: selectedCell.ticker, promptId: selectedCell.promptId });
-                                    setSelectedCell(null);
-                                }
-                            }}
-                            className="mt-4 w-full px-3 py-2 rounded-sm text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 transition-opacity"
-                        >
-                            Edit & Re-run
-                        </button>
+                            <button
+                                onClick={() => {
+                                    const prompt = state?.def.prompts.find(p => p.id === selectedCell.promptId);
+                                    if (prompt) {
+                                        const resolved = resolvePrompt(prompt, selectedCell.ticker);
+                                        setEditPrompt(resolved);
+                                        setEditingCell({ ticker: selectedCell.ticker, promptId: selectedCell.promptId });
+                                        setSelectedCell(null);
+                                    }
+                                }}
+                                className="px-4 py-2 rounded-lg text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 active:scale-95 transition-all"
+                            >
+                                Edit & Re-run
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -552,44 +566,51 @@ export default function GridView() {
             {/* Cell edit modal */}
             {editingCell && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-6"
-                    style={{ background: 'color-mix(in oklch, var(--bg) 70%, transparent)' }}
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+                    style={{ background: 'color-mix(in oklch, var(--bg) 85%, transparent)' }}
                     onClick={() => setEditingCell(null)}
                 >
                     <div
-                        className="max-w-2xl w-full max-h-[80vh] overflow-y-auto rounded-sm p-5 bg-[color:var(--surface)] border border-[color:var(--line)]"
+                        className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-lg p-6 sm:p-8 bg-[color:var(--surface)] border border-[color:var(--line)] shadow-xl"
                         onClick={e => e.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-start justify-between gap-4 mb-6">
                             <div>
-                                <div className="label">{editingCell.ticker}</div>
-                                <div className="font-display text-h4 font-medium text-[color:var(--text)]">
-                                    Edit prompt
+                                <div className="inline-block px-2.5 py-1 mb-3 rounded text-xs font-semibold text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
+                                    {editingCell.ticker}
                                 </div>
+                                <h2 className="font-display text-2xl font-semibold text-[color:var(--text)]">
+                                    Edit prompt
+                                </h2>
                             </div>
                             <button
                                 onClick={() => setEditingCell(null)}
-                                className="p-1 rounded-sm text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]"
+                                className="flex-shrink-0 p-2 rounded-lg text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)] transition-colors"
                             >
-                                <X className="w-4 h-4" />
+                                <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <textarea
-                            value={editPrompt}
-                            onChange={e => setEditPrompt(e.target.value)}
-                            className="w-full h-40 px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] resize-none"
-                            placeholder="Enter prompt..."
-                        />
-                        <div className="flex gap-2 mt-3">
+                        <div className="mb-6">
+                            <label className="block text-xs font-semibold text-[color:var(--text)] mb-3 uppercase tracking-wide">
+                                Prompt text
+                            </label>
+                            <textarea
+                                value={editPrompt}
+                                onChange={e => setEditPrompt(e.target.value)}
+                                className="w-full h-48 px-4 py-3 rounded-lg text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:border-transparent resize-none font-mono"
+                                placeholder="Enter your custom prompt..."
+                            />
+                        </div>
+                        <div className="flex gap-3">
                             <button
                                 onClick={() => reRunCell(editingCell.ticker, editingCell.promptId, editPrompt)}
-                                className="flex-1 px-3 py-2 rounded-sm text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 transition-opacity"
+                                className="flex-1 px-4 py-3 rounded-lg text-sm font-semibold bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 active:scale-95 transition-all"
                             >
-                                Re-run
+                                Re-run cell
                             </button>
                             <button
                                 onClick={() => setEditingCell(null)}
-                                className="px-3 py-2 rounded-sm text-sm font-medium border border-[color:var(--line)] text-[color:var(--text-2)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
+                                className="px-4 py-3 rounded-lg text-sm font-semibold border border-[color:var(--line)] text-[color:var(--text-2)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
                             >
                                 Cancel
                             </button>
