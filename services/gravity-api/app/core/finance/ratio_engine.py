@@ -106,6 +106,12 @@ _CONCEPT_TO_METRIC: dict[str, str] = {
     "NetCashProvidedByUsedInOperatingActivities": "operating_cash_flow",
     "PaymentsToAcquirePropertyPlantAndEquipment": "capex",
     "DepreciationDepletionAndAmortization": "depreciation_amortization",
+    "InterestExpense": "interest_expense",
+    "InterestExpenseNonoperating": "interest_expense",
+    "PaymentsOfDividendsCommonStock": "dividends_paid",
+    "PaymentsOfDividends": "dividends_paid",
+    "PaymentsForRepurchaseOfCommonStock": "buybacks",
+    "IncomeTaxExpenseBenefit": "income_tax",
 }
 
 
@@ -277,6 +283,14 @@ RATIO_DEFINITIONS: dict[str, RatioDef] = {
         denominator=["interest_expense"],
         formula=_safe_div,
         unit="x",
+    ),
+    "dividend_payout_ratio": RatioDef(
+        label="Dividend Payout Ratio",
+        numerator=["dividends_paid"],
+        denominator=["net_income"],
+        formula=lambda n, d: _safe_div(n, d, pct=True),
+        unit="%",
+        description="Common dividends paid divided by net income",
     ),
 
     # ── Liquidity ──────────────────────────────────────────────────────────
@@ -876,6 +890,7 @@ ALIAS_MAP: dict[str, str] = {
 
 # Keyword patterns for auto-detecting ratio intent from natural language queries
 RATIO_QUERY_PATTERNS: list[tuple[str, list[str]]] = [
+    ("dividend_payout_ratio", ["dividend payout", "payout ratio"]),
     ("ev_ebitda",          ["ev/ebitda", "ev ebitda", "enterprise value ebitda"]),
     ("pe_ratio",           ["p/e", "price earnings", "price-to-earnings", "pe ratio"]),
     ("gross_margin",       ["gross margin", "gross profit margin"]),
