@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     # outranked prose and REGRESSED FinanceBench 40%->20%. Flip on when clean.
     structured_facts_enabled: bool = False
 
+    # GravityIndex doc-grounding engine — vectorless tree-nav retrieval (the Mafin
+    # paradigm, owned). Build trees (tree_builder) into Supabase doc_trees, then
+    # flip on to route filing/narrative queries through reasoning-based navigation.
+    tree_nav_enabled: bool = False
+
     # ── Cache Config ────────────────────────────────────────────────────
     semantic_cache_ttl: int = 3600
     semantic_cache_threshold: float = 0.95

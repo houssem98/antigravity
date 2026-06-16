@@ -523,7 +523,7 @@ class SearchPipeline:
                 # every query (it's ticker-scoped + gated, so it self-noops when
                 # there's no resolved ticker / no facts). Without forcing it, dense
                 # alone answers the wrong fiscal year (AMD FY2023 -> FY2025 chunk).
-                for _c in ("dense", "bm25", "splade", "structured"):
+                for _c in ("dense", "bm25", "splade", "structured", "tree_nav"):
                     if _c not in _channels:
                         _channels.append(_c)
 
