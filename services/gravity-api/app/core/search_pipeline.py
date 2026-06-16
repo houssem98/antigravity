@@ -1261,7 +1261,18 @@ class SearchPipeline:
             # Namespace by ticker (no cross-company hits) and cache the CLEAN
             # parsed answer + citations so a cache hit returns the same rich
             # payload as a fresh answer (not the raw JSON envelope).
-            if self.cache:
+            # R1 determinism fix: NEVER cache failures/refusals/empty answers. The
+            # cache used to store every answer, so an intermittent failure (a channel
+            # timeout → empty retrieval → "not found") got cached and then served on
+            # ~25% of identical re-queries (the 3s "fail" = a cache hit of the poison).
+            _ans_l = (parsed_answer or "").lower()
+            _is_refusal = (not parsed_answer or not source_data
+                           or any(p in _ans_l for p in (
+                               "not contain", "not found", "not available", "do not contain",
+                               "does not contain", "no information", "cannot provide",
+                               "sources do not", "not provided", "cannot be calculated",
+                               "cannot determine", "insufficient")))
+            if self.cache and not _is_refusal:
                 try:
                     await self.cache.set(query, {
                         "answer": parsed_answer,
@@ -1273,6 +1284,8 @@ class SearchPipeline:
                     }, tickers=_cache_tickers)
                 except Exception as e:
                     logger.warning("cache_set_skip", trace_id=trace_id, error=str(e))
+            elif _is_refusal:
+                logger.info("cache_skip_refusal", trace_id=trace_id)
 
             # Store in memory palace (fire-and-forget, non-blocking)
             try:
