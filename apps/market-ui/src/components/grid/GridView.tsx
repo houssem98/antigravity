@@ -7,10 +7,12 @@ import { Play, X, Grid as GridIcon, Sparkles, Loader2, Check, AlertCircle, Downl
 import {
     initializeGrid,
     runGrid,
+    runGridCell,
     updateCell,
     toCSV,
     SEED_GRID_PROMPTS,
     cellKey,
+    resolvePrompt,
     type GridDef,
     type GridState,
     type GridCell,
@@ -56,6 +58,8 @@ export default function GridView() {
     const [state, setState] = useState<GridState | null>(null);
     const [running, setRunning] = useState(false);
     const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
+    const [editingCell, setEditingCell] = useState<{ ticker: string; promptId: string } | null>(null);
+    const [editPrompt, setEditPrompt] = useState<string>("");
     const [history, setHistory] = useState<SavedGridRow[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [selectedModel, setSelectedModel] = useState<'deepseek' | 'claude' | 'gemini'>('deepseek');
@@ -122,6 +126,40 @@ export default function GridView() {
         } finally {
             abortRef.current = null;
             setRunning(false);
+        }
+    };
+
+    const reRunCell = async (ticker: string, promptId: string, customPrompt?: string) => {
+        if (!state) return;
+        const prompt = state.def.prompts.find(p => p.id === promptId);
+        if (!prompt) return;
+
+        setState(s => updateCell(s, ticker, promptId, { status: 'running' }));
+
+        const deps: CellRunnerDeps = {
+            callLLM: (p, signal) => callLLMProxy(p, selectedModel, signal),
+            searchGravity: searchGravityCell,
+        };
+
+        try {
+            // If custom prompt provided, create a modified def with the custom prompt
+            let def = state.def;
+            if (customPrompt) {
+                def = {
+                    ...state.def,
+                    prompts: state.def.prompts.map(p =>
+                        p.id === promptId ? { ...p, prompt: customPrompt } : p
+                    ),
+                };
+            }
+            const cell = await runGridCell(def, ticker, promptId, deps, undefined, state);
+            setState(s => updateCell(s, ticker, promptId, cell));
+            setEditingCell(null);
+        } catch (e: any) {
+            setState(s => updateCell(s, ticker, promptId, {
+                status: 'error',
+                error: e?.message ?? 'Unknown error',
+            }));
         }
     };
 
@@ -338,60 +376,94 @@ export default function GridView() {
 
                 {/* Grid */}
                 {state && (
-                    <div className="mt-5 overflow-x-auto rounded-sm bg-[color:var(--surface)] border border-[color:var(--line)]">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-[color:var(--line)]">
-                                    <th className="px-3 py-2.5 text-left label sticky left-0 bg-[color:var(--surface)] z-10" style={{ minWidth: '100px' }}>Ticker</th>
-                                    {state.def.prompts.map(p => (
-                                        <th key={p.id} className="px-3 py-2.5 text-left label" style={{ minWidth: '220px' }}>
-                                            {p.label}
+                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="bg-[color:var(--surface-2)] border-b-2 border-[color:var(--line)]">
+                                        <th className="sticky left-0 z-20 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px]">
+                                            TICKER
                                         </th>
+                                        {state.def.prompts.map(p => (
+                                            <th
+                                                key={p.id}
+                                                className={`px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] ${
+                                                    p.synthesis
+                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)]'
+                                                        : 'bg-[color:var(--surface-2)]'
+                                                }`}
+                                                style={{ minWidth: p.synthesis ? '280px' : '220px' }}
+                                            >
+                                                {p.label}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[color:var(--line)]">
+                                    {state.def.tickers.map((ticker, idx) => (
+                                        <tr
+                                            key={ticker}
+                                            className={`transition-colors ${
+                                                idx % 2 === 0
+                                                    ? 'bg-[color:var(--bg)]'
+                                                    : 'bg-[color:color-mix(in_oklch,var(--surface)_50%,transparent)]'
+                                            } hover:bg-[color:color-mix(in_oklch,var(--accent)_6%,transparent)]`}
+                                        >
+                                            <td className="sticky left-0 z-10 px-4 py-4 font-mono font-semibold text-sm text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit">
+                                                {ticker}
+                                            </td>
+                                            {state.def.prompts.map(p => {
+                                                const cell = state.cells[cellKey(ticker, p.id)];
+                                                return (
+                                                    <td
+                                                        key={p.id}
+                                                        className={`px-4 py-4 align-top ${
+                                                            cell?.status === 'done'
+                                                                ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)]'
+                                                                : ''
+                                                        }`}
+                                                        onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
+                                                    >
+                                                        <CellContent cell={cell} />
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
                                     ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {state.def.tickers.map(ticker => (
-                                    <tr key={ticker} className="border-b border-[color:var(--line)] last:border-b-0">
-                                        <td className="px-3 py-3 font-mono text-xs text-[color:var(--text)] sticky left-0 bg-[color:var(--surface)] z-10 border-r border-[color:var(--line)]">
-                                            {ticker}
-                                        </td>
-                                        {state.def.prompts.map(p => {
-                                            const cell = state.cells[cellKey(ticker, p.id)];
-                                            return (
-                                                <td
-                                                    key={p.id}
-                                                    className="px-3 py-3 align-top cursor-pointer hover:bg-[color:var(--surface-2)]"
-                                                    onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
-                                                >
-                                                    <CellContent cell={cell} />
-                                                </td>
-                                            );
-                                        })}
-                                    </tr>
-                                ))}
-                                {/* Synthesis row (comparison) */}
-                                {state.def.prompts.some(p => p.synthesis) && (
-                                    <tr className="border-b border-[color:var(--line)] bg-[color:var(--surface-2)]">
-                                        <td className="px-3 py-3 font-mono text-xs text-[color:var(--accent)] sticky left-0 bg-[color:var(--surface-2)] z-10 border-r border-[color:var(--line)] font-medium">
-                                            [COMPARISON]
-                                        </td>
-                                        {state.def.prompts.map(p => {
-                                            const cell = state.cells[cellKey('ALL', p.id)];
-                                            return (
-                                                <td
-                                                    key={p.id}
-                                                    className={`px-3 py-3 align-top cursor-pointer ${p.synthesis ? 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface)]' : 'text-[color:var(--text-3)]'}`}
-                                                    onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
-                                                >
-                                                    {p.synthesis ? <CellContent cell={cell} /> : '—'}
-                                                </td>
-                                            );
-                                        })}
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
+                                    {/* Synthesis row (comparison) */}
+                                    {state.def.prompts.some(p => p.synthesis) && (
+                                        <tr className="bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)] border-t-2 border-[color:var(--accent)]">
+                                            <td className="sticky left-0 z-10 px-4 py-4 font-mono font-semibold text-sm text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit flex items-center gap-2">
+                                                <span className="inline-block w-2 h-2 rounded-full bg-[color:var(--accent)]" />
+                                                COMPARISON
+                                            </td>
+                                            {state.def.prompts.map(p => {
+                                                const cell = state.cells[cellKey('ALL', p.id)];
+                                                return (
+                                                    <td
+                                                        key={p.id}
+                                                        className={`px-4 py-4 align-top ${
+                                                            p.synthesis
+                                                                ? cell?.status === 'done'
+                                                                    ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)]'
+                                                                    : ''
+                                                                : 'text-[color:var(--text-3)] opacity-50'
+                                                        }`}
+                                                        onClick={() =>
+                                                            p.synthesis &&
+                                                            cell?.status === 'done' &&
+                                                            setSelectedCell(cell)
+                                                        }
+                                                    >
+                                                        {p.synthesis ? <CellContent cell={cell} /> : '—'}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
 
@@ -459,6 +531,69 @@ export default function GridView() {
                                 )}
                             </div>
                         )}
+                        <button
+                            onClick={() => {
+                                const prompt = state?.def.prompts.find(p => p.id === selectedCell.promptId);
+                                if (prompt) {
+                                    const resolved = resolvePrompt(prompt, selectedCell.ticker);
+                                    setEditPrompt(resolved);
+                                    setEditingCell({ ticker: selectedCell.ticker, promptId: selectedCell.promptId });
+                                    setSelectedCell(null);
+                                }
+                            }}
+                            className="mt-4 w-full px-3 py-2 rounded-sm text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 transition-opacity"
+                        >
+                            Edit & Re-run
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Cell edit modal */}
+            {editingCell && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center p-6"
+                    style={{ background: 'color-mix(in oklch, var(--bg) 70%, transparent)' }}
+                    onClick={() => setEditingCell(null)}
+                >
+                    <div
+                        className="max-w-2xl w-full max-h-[80vh] overflow-y-auto rounded-sm p-5 bg-[color:var(--surface)] border border-[color:var(--line)]"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between mb-3">
+                            <div>
+                                <div className="label">{editingCell.ticker}</div>
+                                <div className="font-display text-h4 font-medium text-[color:var(--text)]">
+                                    Edit prompt
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setEditingCell(null)}
+                                className="p-1 rounded-sm text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)]"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <textarea
+                            value={editPrompt}
+                            onChange={e => setEditPrompt(e.target.value)}
+                            className="w-full h-40 px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] resize-none"
+                            placeholder="Enter prompt..."
+                        />
+                        <div className="flex gap-2 mt-3">
+                            <button
+                                onClick={() => reRunCell(editingCell.ticker, editingCell.promptId, editPrompt)}
+                                className="flex-1 px-3 py-2 rounded-sm text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 transition-opacity"
+                            >
+                                Re-run
+                            </button>
+                            <button
+                                onClick={() => setEditingCell(null)}
+                                className="px-3 py-2 rounded-sm text-sm font-medium border border-[color:var(--line)] text-[color:var(--text-2)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
+                            >
+                                Cancel
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -472,17 +607,17 @@ function CellContent({ cell }: { cell?: GridCell }) {
     }
     if (cell.status === 'running') {
         return (
-            <div className="flex items-center gap-2 text-xs text-[color:var(--text-3)]">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Running…
+            <div className="flex items-center gap-2.5 text-xs text-[color:var(--text-3)]">
+                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-[color:var(--accent)]" />
+                <span>Running…</span>
             </div>
         );
     }
     if (cell.status === 'error') {
         return (
-            <div className="flex items-start gap-2 text-xs down" title={cell.error}>
-                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span className="truncate">{cell.error || 'Error'}</span>
+            <div className="flex items-start gap-2 text-xs text-[color:var(--down)] title={cell.error}" title={cell.error}>
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span className="truncate max-w-xs">{cell.error || 'Error'}</span>
             </div>
         );
     }
@@ -491,18 +626,24 @@ function CellContent({ cell }: { cell?: GridCell }) {
     }
     const excerpt = (cell.answer ?? '').slice(0, 180);
     return (
-        <div className="flex items-start gap-2">
-            <Check className="w-3 h-3 mt-1 flex-shrink-0 up" />
-            <div className="min-w-0">
-                {cell.ragUsed && (
-                    <span className="inline-block mb-1 px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] text-[color:var(--accent)] border border-[color:color-mix(in_oklch,var(--accent)_30%,transparent)]">
+        <div className="space-y-1.5">
+            {cell.ragUsed && (
+                <div className="inline-flex gap-1">
+                    <span className="inline-block px-2 py-1 rounded text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] text-[color:var(--accent)]">
                         SEC RAG
                     </span>
-                )}
-                <span className="block text-xs text-[color:var(--text-2)] leading-relaxed line-clamp-3">
-                    {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
-                </span>
-            </div>
+                </div>
+            )}
+            <p className="text-sm text-[color:var(--text-2)] leading-snug line-clamp-4 max-w-xs">
+                {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
+            </p>
+            {cell.durationMs && (
+                <div className="flex items-center gap-1.5 text-[10px] text-[color:var(--text-4)]">
+                    <span className="font-medium">{(cell.durationMs / 1000).toFixed(1)}s</span>
+                    <span>•</span>
+                    <span className="truncate">{cell.modelUsed}</span>
+                </div>
+            )}
         </div>
     );
 }
