@@ -68,6 +68,7 @@ class RetrievalOrchestrator:
         splade_search=None,
         graph_search=None,
         structured_search=None,
+        tree_nav_search=None,     # GravityIndex: own vectorless tree-nav (optional)
         page_index_search=None,   # Channel 6: VectifyAI PageIndex (optional)
         turbo_quant_search=None,  # Channel 7: TurboQuant compressed ANN (optional)
         gdelt_search=None,        # Channel 8: GDELT global news (free, no key)
@@ -85,6 +86,8 @@ class RetrievalOrchestrator:
             self.channels["graph"] = graph_search
         if structured_search:
             self.channels["structured"] = structured_search
+        if tree_nav_search:
+            self.channels["tree_nav"] = tree_nav_search
         if page_index_search:
             self.channels["page_index"] = page_index_search
         if turbo_quant_search:
@@ -193,6 +196,7 @@ class RetrievalOrchestrator:
         "splade":      8.0,
         "graph":       4.0,
         "structured":  4.0,
+        "tree_nav":   15.0,   # LLM tree navigation + Qdrant node fetch
         "page_index": 30.0,   # PageIndex navigates document trees — allow more time
         "turbo_quant": 2.0,   # in-memory; fast
         "gdelt":       4.0,   # external HTTP; allow extra time
@@ -225,6 +229,8 @@ class RetrievalOrchestrator:
                 # MUST pass filters: the resolved ticker lives in filters["companies"]
                 # (entities often lacks it). Without filters the channel finds no
                 # ticker and returns [] — the XBRL exact-facts never reach the LLM.
+                coro = channel.search(query=query, entities=entities, filters=filters)
+            elif name == "tree_nav":
                 coro = channel.search(query=query, entities=entities, filters=filters)
             elif name == "page_index":
                 coro = channel.search(query=query, filters=filters)

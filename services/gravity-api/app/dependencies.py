@@ -153,6 +153,15 @@ def get_search_pipeline():
     except Exception:
         logger.warning("structured_search_unavailable")
 
+    # GravityIndex: own vectorless tree-nav channel (gated by tree_nav_enabled).
+    tree_nav = None
+    try:
+        from app.core.retrieval.tree_nav_search import build_tree_nav_search
+        tree_nav = build_tree_nav_search(llm_client=router.get_fast_client())
+        logger.info("tree_nav_ready")
+    except Exception as e:
+        logger.warning("tree_nav_unavailable", error=str(e))
+
     # Channel 6: PageIndex (enabled when PAGEINDEX_API_KEY is set)
     page_index = None
     try:
@@ -197,6 +206,7 @@ def get_search_pipeline():
         splade_search=splade_search,
         graph_search=graph,
         structured_search=structured,
+        tree_nav_search=tree_nav,
         page_index_search=page_index,
         turbo_quant_search=turbo_quant,
         gdelt_search=gdelt_search,
