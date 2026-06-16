@@ -999,7 +999,12 @@ class SearchPipeline:
                 and not stream  # Only for non-streaming requests (avoids 3x latency for WS)
             )
 
-            gen_config = LLMConfig(temperature=0.1, max_tokens=4096)
+            # Complex/iterative answers carry a long <thinking> block + a multi-part
+            # JSON answer (bull/bear case, multi-hop). At 4096 the response truncated
+            # mid-JSON → parse failed → EMPTY answer returned. Give complex generations
+            # room to finish the JSON.
+            _max_toks = 8192 if (_use_iterative or complexity in ("complex", "math")) else 4096
+            gen_config = LLMConfig(temperature=0.1, max_tokens=_max_toks)
             full_response = ""
             _last_llm_err = None
 
