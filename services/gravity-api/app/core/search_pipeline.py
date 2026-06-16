@@ -1161,6 +1161,27 @@ class SearchPipeline:
                     if _salv2 and _salv2.strip():
                         parsed_answer = _salv2
 
+            # ── Numeric grounding validator (Phase B) ───────────────────
+            # Deterministic anti-hallucination: every $ / % / large figure stated in
+            # the answer must trace to a retrieved passage, a structured XBRL fact,
+            # or a computed ratio. Unsupported figures → lower confidence + caveat
+            # (not hard refuse — that over-refuses). The cardinal virtue for finance:
+            # don't state numbers we can't ground.
+            if isinstance(parsed_answer, str) and parsed_answer.strip():
+                try:
+                    _ungrounded = _numeric_grounding_check(
+                        parsed_answer, top_passages, ratio_context_block)
+                    if _ungrounded:
+                        confidence_out = "LOW"
+                        _cav = (f"Unverified figures (not found in sources): "
+                                f"{', '.join(_ungrounded[:5])}. Treat with caution.")
+                        if isinstance(caveats, list):
+                            caveats = caveats + [_cav]
+                        logger.info("numeric_grounding_violation", trace_id=trace_id,
+                                    ungrounded=_ungrounded[:8], n=len(_ungrounded))
+                except Exception as _gerr:
+                    logger.debug("numeric_grounding_check_failed", error=str(_gerr)[:120])
+
             # ── Stage 8b: ALiiCE Proposition Attribution ────────────────
             # Upgrade chunk-level citations → sentence-level attributed propositions.
             # Runs only for MEDIUM/COMPLEX queries to avoid latency on simple lookups.
@@ -1523,6 +1544,52 @@ def _extract_company_mentions(query: str) -> list[str]:
             seen.add(k)
             out.append(c)
     return out[:6]
+
+
+_GFIG_RE = re.compile(r"\$?\s?(\d[\d,]*\.?\d*)\s*(billion|million|trillion|%|b|m|t)?", re.I)
+
+
+def _grounding_numbers(text: str) -> set[float]:
+    """Normalized numeric values mentioned in text (scale-aware), for grounding."""
+    out: set[float] = set()
+    for m in _GFIG_RE.finditer(text or ""):
+        try:
+            v = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        suf = (m.group(2) or "").lower()
+        mult = {"billion": 1e9, "b": 1e9, "million": 1e6, "m": 1e6,
+                "trillion": 1e12, "t": 1e12}.get(suf, 1.0)
+        out.add(v * mult)
+        out.add(v)  # also the bare value (handles unit-scaled phrasing)
+    return out
+
+
+def _numeric_grounding_check(answer: str, passages: list, ratio_block: str) -> list[str]:
+    """Return answer figures NOT found in any source/fact/computed ratio (within 1%).
+    Years and small integers (counts) are ignored — only material $/% figures."""
+    src = " ".join((getattr(p, "text", "") or "") for p in (passages or [])) + " " + (ratio_block or "")
+    src_nums = _grounding_numbers(src)
+    if not src_nums:
+        return []
+    ungrounded: list[str] = []
+    for m in re.finditer(r"(\$?\s?\d[\d,]*\.?\d*\s*(?:billion|million|trillion|%|B|M|T)?)", answer or ""):
+        token = m.group(1).strip()
+        nums = _grounding_numbers(token)
+        if not nums:
+            continue
+        val = max(nums)
+        # skip years (1900-2099) and tiny integers (counts, list markers)
+        if 1900 <= val <= 2099 or (val < 100 and "." not in token and "%" not in token):
+            continue
+        grounded = any(
+            (abs(val - s) / s <= 0.01) for s in src_nums if s
+        ) or any((abs(v - s) / s <= 0.01) for v in nums for s in src_nums if s)
+        if not grounded:
+            ungrounded.append(token)
+    # dedupe, keep order
+    seen: set = set()
+    return [t for t in ungrounded if not (t in seen or seen.add(t))]
 
 
 def _default_follow_ups(query: str, query_plan: dict, passages: list) -> list[str]:
