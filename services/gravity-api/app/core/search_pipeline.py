@@ -585,30 +585,37 @@ class SearchPipeline:
                     reranked = fused
                 top_passages = reranked[:settings.max_context_passages]
 
-                # Guarantee XBRL exact facts reach the LLM, ranked FIRST. The
-                # reranker demotes terse one-line facts below verbose prose, so the
-                # model answered the wrong fiscal year (AMD FY2023 -> FY2025 chunk)
-                # even though the exact tagged fact was retrieved. Force the
-                # structured-channel results into the front of the context.
+                # ── Priority-pinned context assembly ─────────────────────────
+                # Build ONE deduped priority list so the force-includes never
+                # starve each other. The previous code prepended structured, then
+                # prepended tree_nav and re-cut to max_context_passages (=6) — so
+                # tree_nav's 6 pins EVICTED the structured XBRL facts entirely
+                # (MSFT FY2023 revenue: structured returned the fact, yet 0 made it
+                # to the LLM → "not found"). Order of authority:
+                #   1. structured XBRL exact facts  (the period-matched ground truth)
+                #   2. tree_nav navigated sections  (narrative grounding)
+                #   3. reranked prose               (fills remaining budget)
+                # The budget GROWS to always hold every pin (small max_context_passages
+                # must never drop an exact fact); prose then fills to the cap.
                 _sf = retrieval_results.get("structured") or []
-                if _sf:
-                    _have = {getattr(p, "chunk_id", None) for p in top_passages}
-                    _pre = [p for p in _sf if getattr(p, "chunk_id", None) not in _have]
-                    if _pre:
-                        # Up to 8 exact facts first (more flooded context + caused
-                        # timeouts/confusion at 12); dense prose fills the rest.
-                        top_passages = (_pre[:8] + top_passages)[:settings.max_context_passages]
-
-                # Guarantee the tree-nav (GravityIndex) navigated sections reach the
-                # LLM: the channel reasons its way to the exact section, but its
-                # chunks get diluted by dense's volume in RRF+rerank (34 nav vs 50
-                # dense → 6 generic). Force the navigated content in for narrative Qs.
                 _tn = retrieval_results.get("tree_nav") or []
-                if _tn:
-                    _have2 = {getattr(p, "chunk_id", None) for p in top_passages}
-                    _pre2 = [p for p in _tn if getattr(p, "chunk_id", None) not in _have2]
-                    if _pre2:
-                        top_passages = (_pre2[:6] + top_passages)[:settings.max_context_passages]
+
+                def _cid(p):
+                    return getattr(p, "chunk_id", None)
+
+                _struct_pin = _sf[:6]                      # exact facts — highest authority
+                _pin_ids = {_cid(p) for p in _struct_pin}
+                _tn_pin = [p for p in _tn if _cid(p) not in _pin_ids][:3]
+                _pin_ids |= {_cid(p) for p in _tn_pin}
+                _pinned = _struct_pin + _tn_pin
+                _prose = [p for p in top_passages if _cid(p) not in _pin_ids]
+
+                if _pinned:
+                    # Effective budget = whichever is larger: the configured cap, or
+                    # enough room for every pin + 3 prose passages. Capped at 14 to
+                    # avoid context flooding (which regressed accuracy + timed out).
+                    _eff = min(14, max(settings.max_context_passages, len(_pinned) + 3))
+                    top_passages = (_pinned + _prose)[:_eff]
 
                 # R2 — period-aware retrieval: when the query names a fiscal year,
                 # demote prose chunks from a MUCH later filing period. Dense returns
