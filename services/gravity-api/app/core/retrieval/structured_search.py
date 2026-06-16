@@ -101,9 +101,14 @@ class StructuredSearch:
         metric = next((m for m in self._METRIC_TERMS if m in ql), None)
         # Derived metrics have no single XBRL row (FCF = operating cash flow − capex;
         # they are COMPUTED). Narrowing to the literal name ("free cash flow") returned
-        # 0 rows → "not found". For these, DON'T narrow — fetch the year's core items so
-        # the components (OCF + capex) are in context and the LLM/ratio engine computes.
+        # 0 rows → "not found". Fetch the exact COMPONENTS via an OR filter so all the
+        # pinned context slots are the right rows — a broad fetch returned 24 mixed
+        # rows and the top-6 pin kept only P&L items, dropping OCF/capex so FCF still
+        # couldn't be computed.
         if metric in self._DERIVED_METRICS:
+            _comp = self._DERIVED_COMPONENTS.get(metric or "")
+            if _comp:
+                flt["or"] = "(" + ",".join(f"metric_name.ilike.*{p}*" for p in _comp) + ")"
             metric = None
         if metric:
             flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
@@ -158,6 +163,19 @@ class StructuredSearch:
         "operating margin",    # = operating income / revenue
         "net margin", "profit margin",
     })
+
+    # Derived metric → ilike patterns for the exact COMPONENT rows to fetch (matched
+    # against the stored metric_name labels, e.g. "Operating Cash Flow (Cash from
+    # Operations, CFO)", "Capital Expenditures (CapEx, Purchases of PP&E)"). "*" is a
+    # wildcard so multi-word labels match. Fetching only the components keeps every
+    # pinned context slot relevant so the LLM can compute the result.
+    _DERIVED_COMPONENTS: dict[str, list[str]] = {
+        "free cash flow":  ["operating*cash*flow", "capital*expenditure"],
+        "gross margin":    ["gross*profit", "total*revenue"],
+        "operating margin": ["operating*income", "total*revenue"],
+        "net margin":      ["net*income", "total*revenue"],
+        "profit margin":   ["net*income", "total*revenue"],
+    }
 
     async def search(
         self,
