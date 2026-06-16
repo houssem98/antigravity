@@ -111,7 +111,15 @@ class StructuredSearch:
                 flt["or"] = "(" + ",".join(f"metric_name.ilike.*{p}*" for p in _comp) + ")"
             metric = None
         if metric:
-            flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
+            # "revenue"/"net sales" must NOT also match "Cost of Revenue": the bare
+            # pattern *revenue* pulled cost-of-revenue rows, and in a comparison the
+            # pin kept those instead of total revenue → "Meta's revenue not provided"
+            # (yet the model still guessed a winner). The total-revenue label starts
+            # with "Revenue (Total…", so anchor revenue synonyms to the label start.
+            if metric in ("revenue", "total revenue", "net sales"):
+                flt["metric_name"] = "ilike.Revenue*"
+            else:
+                flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
 
         rows = await supabase_rest.sb_select("financials", flt, limit=max(top_k, 24))
         out: list[RetrievalResult] = []
