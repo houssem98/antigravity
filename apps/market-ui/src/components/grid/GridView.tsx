@@ -3,7 +3,7 @@
 // cancellable LLM call with per-cell status.
 
 import { useState, useRef, useEffect } from 'react';
-import { Play, X, Grid as GridIcon, Sparkles, Loader2, Check, AlertCircle, Download, Clock, Trash2 } from 'lucide-react';
+import { Play, X, Grid as GridIcon, Sparkles, Loader2, Check, AlertCircle, Download, Clock, Trash2, Copy, Check as CheckIcon } from 'lucide-react';
 import {
     initializeGrid,
     runGrid,
@@ -66,7 +66,14 @@ export default function GridView() {
     const [sortBy, setSortBy] = useState<'ticker' | 'status' | 'duration' | null>(null);
     const [sortDesc, setSortDesc] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [copiedCell, setCopiedCell] = useState<string | null>(null);
     const abortRef = useRef<AbortController | null>(null);
+
+    const copyCell = async (ticker: string, promptId: string, answer: string) => {
+        await navigator.clipboard.writeText(answer);
+        setCopiedCell(`${ticker}::${promptId}`);
+        setTimeout(() => setCopiedCell(null), 2000);
+    };
 
     const refreshHistory = async () => {
         const rows = await listGridRuns(20).catch(() => []);
@@ -579,10 +586,11 @@ export default function GridView() {
                                             </td>
                                             {state.def.prompts.map(p => {
                                                 const cell = state.cells[cellKey(ticker, p.id)];
+                                                const isCopied = copiedCell === `${ticker}::${p.id}`;
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-4 py-4 align-top ${
+                                                        className={`px-4 py-4 align-top relative group ${
                                                             cell?.status === 'done'
                                                                 ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)]'
                                                                 : ''
@@ -590,6 +598,22 @@ export default function GridView() {
                                                         onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
                                                     >
                                                         <CellContent cell={cell} />
+                                                        {cell?.status === 'done' && cell?.answer && (
+                                                            <button
+                                                                onClick={e => {
+                                                                    e.stopPropagation();
+                                                                    copyCell(ticker, p.id, cell.answer!);
+                                                                }}
+                                                                className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-[color:var(--surface)] border border-[color:var(--line)] hover:bg-[color:var(--surface-2)]"
+                                                                title="Copy to clipboard"
+                                                            >
+                                                                {isCopied ? (
+                                                                    <CheckIcon className="w-3.5 h-3.5 text-up" />
+                                                                ) : (
+                                                                    <Copy className="w-3.5 h-3.5 text-[color:var(--text-3)]" />
+                                                                )}
+                                                            </button>
+                                                        )}
                                                     </td>
                                                 );
                                             })}
