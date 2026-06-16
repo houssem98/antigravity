@@ -63,6 +63,8 @@ export default function GridView() {
     const [history, setHistory] = useState<SavedGridRow[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [selectedModel, setSelectedModel] = useState<'deepseek' | 'claude' | 'gemini'>('deepseek');
+    const [sortBy, setSortBy] = useState<'ticker' | 'status' | 'duration' | null>(null);
+    const [sortDesc, setSortDesc] = useState(false);
     const abortRef = useRef<AbortController | null>(null);
 
     const refreshHistory = async () => {
@@ -84,6 +86,59 @@ export default function GridView() {
         refreshHistory();
         return () => { cancelled = true; };
     }, []);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Escape: close modals
+            if (e.key === 'Escape') {
+                setSelectedCell(null);
+                setEditingCell(null);
+            }
+
+            // E: edit selected cell
+            if (e.key === 'e' && e.ctrlKey === false && e.metaKey === false && selectedCell?.status === 'done') {
+                const prompt = state?.def.prompts.find(p => p.id === selectedCell.promptId);
+                if (prompt) {
+                    const resolved = resolvePrompt(prompt, selectedCell.ticker);
+                    setEditPrompt(resolved);
+                    setEditingCell({ ticker: selectedCell.ticker, promptId: selectedCell.promptId });
+                    setSelectedCell(null);
+                }
+            }
+
+            // Arrow keys: navigate between cells
+            if (selectedCell && state && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                const tickers = state.def.tickers;
+                const prompts = state.def.prompts;
+                const tickerIdx = tickers.indexOf(selectedCell.ticker);
+                const promptIdx = prompts.findIndex(p => p.id === selectedCell.promptId);
+
+                let newTickerIdx = tickerIdx;
+                let newPromptIdx = promptIdx;
+
+                if (e.key === 'ArrowUp' && tickerIdx > 0) newTickerIdx = tickerIdx - 1;
+                if (e.key === 'ArrowDown' && tickerIdx < tickers.length - 1) newTickerIdx = tickerIdx + 1;
+                if (e.key === 'ArrowLeft' && promptIdx > 0) newPromptIdx = promptIdx - 1;
+                if (e.key === 'ArrowRight' && promptIdx < prompts.length - 1) newPromptIdx = promptIdx + 1;
+
+                const newCell = state.cells[cellKey(tickers[newTickerIdx], prompts[newPromptIdx].id)];
+                if (newCell?.status === 'done') {
+                    setSelectedCell(newCell);
+                }
+            }
+
+            // Ctrl+E: export CSV
+            if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+                e.preventDefault();
+                handleExportCSV();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedCell, state]);
 
     const activePrompts = SEED_GRID_PROMPTS.filter(p => promptIds.includes(p.id));
 
@@ -216,6 +271,45 @@ export default function GridView() {
             total: Object.values(state.cells).length,
         }
         : null;
+
+    // Sort tickers based on current sort setting
+    const getSortedTickers = () => {
+        if (!state || !sortBy) return state.def.tickers;
+
+        const tickers = [...state.def.tickers];
+        const collator = new Intl.Collator();
+
+        if (sortBy === 'ticker') {
+            tickers.sort((a, b) => collator.compare(a, b));
+        } else if (sortBy === 'status' || sortBy === 'duration') {
+            tickers.sort((a, b) => {
+                let aVal: any = null;
+                let bVal: any = null;
+
+                // Get first non-synthesis prompt
+                const firstPrompt = state.def.prompts.find(p => !p.synthesis);
+                if (!firstPrompt) return 0;
+
+                const aCell = state.cells[cellKey(a, firstPrompt.id)];
+                const bCell = state.cells[cellKey(b, firstPrompt.id)];
+
+                if (sortBy === 'status') {
+                    const statusOrder = { done: 0, error: 1, running: 2, pending: 3, cancelled: 4 };
+                    aVal = statusOrder[aCell?.status as keyof typeof statusOrder] ?? 5;
+                    bVal = statusOrder[bCell?.status as keyof typeof statusOrder] ?? 5;
+                } else if (sortBy === 'duration') {
+                    aVal = aCell?.durationMs ?? 0;
+                    bVal = bCell?.durationMs ?? 0;
+                }
+
+                return sortDesc ? bVal - aVal : aVal - bVal;
+            });
+        }
+
+        return sortDesc && sortBy !== 'status' ? tickers.reverse() : tickers;
+    };
+
+    const sortedTickers = getSortedTickers();
 
     return (
         <div className="p-6 bg-[color:var(--bg)] text-[color:var(--text-2)]">
@@ -381,16 +475,31 @@ export default function GridView() {
                             <table className="w-full">
                                 <thead className="sticky top-0 z-20">
                                     <tr className="bg-[color:var(--surface-2)] border-b-2 border-[color:var(--line)]">
-                                        <th className="sticky left-0 z-30 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px]">
-                                            TICKER
+                                        <th
+                                            onClick={() => {
+                                                if (sortBy === 'ticker') {
+                                                    setSortDesc(!sortDesc);
+                                                } else {
+                                                    setSortBy('ticker');
+                                                    setSortDesc(false);
+                                                }
+                                            }}
+                                            className="sticky left-0 z-30 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px] cursor-pointer hover:bg-[color:var(--surface-2)] hover:text-[color:var(--accent)] transition-colors"
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                TICKER
+                                                {sortBy === 'ticker' && (
+                                                    <span className="text-[10px]">{sortDesc ? '↓' : '↑'}</span>
+                                                )}
+                                            </div>
                                         </th>
                                         {state.def.prompts.map(p => (
                                             <th
                                                 key={p.id}
-                                                className={`px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] ${
+                                                className={`px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] cursor-pointer transition-colors ${
                                                     p.synthesis
-                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)]'
-                                                        : 'bg-[color:var(--surface-2)]'
+                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
+                                                        : 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-2)]'
                                                 }`}
                                                 style={{ minWidth: p.synthesis ? '280px' : '220px' }}
                                             >
@@ -400,7 +509,7 @@ export default function GridView() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-[color:var(--line)]">
-                                    {state.def.tickers.map((ticker, idx) => (
+                                    {sortedTickers.map((ticker, idx) => (
                                         <tr
                                             key={ticker}
                                             className={`transition-colors ${
