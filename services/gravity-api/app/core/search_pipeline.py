@@ -382,9 +382,14 @@ class SearchPipeline:
                     _ent = await _resolver.resolve(_cand)
                     if not (_ent and _ent.match_type != "unknown" and _ent.ticker):
                         continue
-                    # Short candidates (≤4 chars / single token) must be an EXACT
-                    # ticker — a fuzzy name match on an acronym is almost always wrong.
-                    if len(_cand) <= 4 and _ent.match_type != "exact_ticker":
+                    # Short ALL-CAPS acronyms that fuzzy-match are almost always wrong
+                    # (a stray "EPS"/"FCF" not already in _NOT_COMPANY). But normal
+                    # Title-case short NAMES must pass: Ford→F, Nike→NKE, Visa→V, Coke→KO
+                    # all resolve fuzzy (name ≠ ticker) and were being dropped, so
+                    # comparisons silently lost a company. _NOT_COMPANY + single-char
+                    # token drop already guard the acronym case.
+                    if (len(_cand) <= 4 and _ent.match_type != "exact_ticker"
+                            and _cand.isupper()):
                         continue
                     if _ent.ticker in _existing_tickers:
                         continue  # gemini already has it
