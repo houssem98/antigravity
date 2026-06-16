@@ -152,6 +152,8 @@ class StructuredSearch:
         "total debt", "inventory", "accounts receivable", "cash and", "shareholders equity",
         "eps", "earnings per share", "return on equity", "roe", "dividend", "buyback",
         "share repurchase", "research and development",
+        # Banks / financials
+        "net interest income", "noninterest income", "interest income", "interest expense",
     ]
 
     # Metrics with NO single XBRL row — they are computed from components. Matching
