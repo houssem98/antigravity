@@ -239,9 +239,16 @@ def get_search_pipeline():
     # Deterministic ratio engine — bypasses LLM for financial ratio queries
     ratio_engine = None
     try:
-        from app.db.postgres import get_db_pool
         from app.core.finance.ratio_engine import RatioEngine
-        ratio_engine = RatioEngine(db_pool=get_db_pool())
+        # db_pool optional now — the engine reads line items from the Supabase XBRL
+        # `financials` table (the TimescaleDB pool is a None-stub here).
+        _pool = None
+        try:
+            from app.db.postgres import get_db_pool
+            _pool = get_db_pool()
+        except Exception:
+            _pool = None
+        ratio_engine = RatioEngine(db_pool=_pool)
         logger.info("ratio_engine_ready")
     except Exception as e:
         logger.warning("ratio_engine_unavailable", error=str(e))
