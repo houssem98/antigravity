@@ -582,6 +582,17 @@ class SearchPipeline:
                         # Up to 8 exact facts first (more flooded context + caused
                         # timeouts/confusion at 12); dense prose fills the rest.
                         top_passages = (_pre[:8] + top_passages)[:settings.max_context_passages]
+
+                # Guarantee the tree-nav (GravityIndex) navigated sections reach the
+                # LLM: the channel reasons its way to the exact section, but its
+                # chunks get diluted by dense's volume in RRF+rerank (34 nav vs 50
+                # dense → 6 generic). Force the navigated content in for narrative Qs.
+                _tn = retrieval_results.get("tree_nav") or []
+                if _tn:
+                    _have2 = {getattr(p, "chunk_id", None) for p in top_passages}
+                    _pre2 = [p for p in _tn if getattr(p, "chunk_id", None) not in _have2]
+                    if _pre2:
+                        top_passages = (_pre2[:6] + top_passages)[:settings.max_context_passages]
                 rerank_ms = (time.perf_counter() - t2) * 1000
                 logger.info(
                     "retrieval_complete",
