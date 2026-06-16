@@ -106,10 +106,17 @@ _ALIASES: dict[str, str] = {
 
 
 def _normalize(s: str) -> str:
-    # Split separators to SPACE first (don't strip them): "Coca-Cola" must become
-    # "coca cola" → {coca, cola} so it exact-set matches "COCA COLA CO" (KO), not
-    # fuzzy-match the superset "Coca-Cola Consolidated" (COKE — a different company).
-    s = re.sub(r"[-/&.,']+", " ", s.lower())
+    s = s.lower()
+    # Strip the possessive 's FIRST. Gemini hands back the surface form "Amazon's";
+    # splitting the apostrophe to space leaves a lone "s" token that fuzzy-matched
+    # the "s" in "Charlie's" → "Amazon's" resolved to CHUC (Charlie's Holdings).
+    # Removing 's is safe both ways: "McDonald's" mention and "McDonald's Corp"
+    # index entry both reduce to {mcdonald}, so real possessive names still match.
+    s = re.sub(r"'s\b", "", s)
+    # Split remaining separators to SPACE (don't strip them): "Coca-Cola" must
+    # become "coca cola" → {coca, cola} so it exact-set matches "COCA COLA CO"
+    # (KO), not fuzzy-match the superset "Coca-Cola Consolidated" (COKE).
+    s = re.sub(r"[-/&.,']+", " ", s)
     s = re.sub(r"[^a-z0-9 ]", "", s)
     return re.sub(r"\s+", " ", s).strip()
 
