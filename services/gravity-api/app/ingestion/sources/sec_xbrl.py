@@ -58,6 +58,11 @@ CORE_CONCEPTS: list[str] = [
     "DepreciationDepletionAndAmortization",
     "InterestExpense", "InterestExpenseNonoperating",
     "OperatingLeaseExpense", "PaymentsOfDividends",
+    # Banks / financials — these companies have no "Revenues"/"GrossProfit"; their
+    # top line is net interest income + noninterest income. Without these, every
+    # bank query ("JPMorgan net interest income") returned not-found.
+    "InterestIncomeExpenseNet", "InterestAndDividendIncomeOperating",
+    "InterestExpenseOperating", "NoninterestIncome",
 ]
 
 
@@ -108,6 +113,10 @@ CONCEPT_LABELS: dict[str, str] = {
     "InterestExpenseNonoperating": "Interest Expense (Nonoperating)",
     "OperatingLeaseExpense": "Operating Lease Expense",
     "PaymentsOfDividends": "Dividends Paid (Total)",
+    "InterestIncomeExpenseNet": "Net Interest Income (NII)",
+    "InterestAndDividendIncomeOperating": "Total Interest Income (Interest and Dividend Income)",
+    "InterestExpenseOperating": "Interest Expense (Operating)",
+    "NoninterestIncome": "Noninterest Income",
 }
 
 
