@@ -128,20 +128,41 @@ def format_sources(passages: list, max_passages: int = 15) -> str:
     Source 1 = highest score, Source N = second-highest, middle = lowest.
     """
     pool = passages[:max_passages]
-    if len(pool) <= 2:
-        ordered = pool
+
+    # PIN exact XBRL facts (and tree-nav grounded sections) to the FRONT,
+    # unconditionally. These are the period-matched ground truth the pipeline
+    # deliberately force-includes; the rrf_score re-sort below would otherwise
+    # bury a fused-in fact (tiny rrf ~0.016) into the lost-in-the-middle dead
+    # zone — the "fact retrieved but answer says not-found" bug. Pinned facts
+    # never enter the interleave; prose passages get lost-in-the-middle ordering.
+    def _is_pinned(p) -> bool:
+        if str(getattr(p, "chunk_id", "") or "").startswith("fin_"):
+            return True
+        txt = getattr(p, "text", "") or ""
+        if txt.startswith("[EXACT FILING FIGURE]") or txt.startswith("[Financial Fact]"):
+            return True
+        md = getattr(p, "metadata", None) or {}
+        return md.get("source_channel") == "tree_nav"
+
+    pinned = [p for p in pool if _is_pinned(p)]
+    rest = [p for p in pool if not _is_pinned(p)]
+
+    if len(rest) <= 2:
+        interleaved = rest
     else:
         # Sort by rrf_score descending (or score if rrf not set)
-        sorted_p = sorted(pool, key=lambda p: getattr(p, "rrf_score", 0) or getattr(p, "score", 0), reverse=True)
+        sorted_p = sorted(rest, key=lambda p: getattr(p, "rrf_score", 0) or getattr(p, "score", 0), reverse=True)
         # Interleave: best at front/back, weakest in middle
-        ordered: list = []
+        interleaved: list = []
         left, right = 0, len(sorted_p) - 1
         turn = "left"
         while left <= right:
             if turn == "left":
-                ordered.append(sorted_p[left]); left += 1; turn = "right"
+                interleaved.append(sorted_p[left]); left += 1; turn = "right"
             else:
-                ordered.append(sorted_p[right]); right -= 1; turn = "left"
+                interleaved.append(sorted_p[right]); right -= 1; turn = "left"
+
+    ordered = pinned + interleaved
 
     parts = []
     for i, p in enumerate(ordered, 1):
