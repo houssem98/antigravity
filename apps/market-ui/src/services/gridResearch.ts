@@ -239,14 +239,29 @@ export async function runGridCell(
             } catch { /* soft-fail */ }
         }
 
-        // Inject RAG context even when it has no answer (sources still useful)
+        // ── NO DATA: Return early instead of hallucinating ────────────────
+        const hasRagSources = ragResult && ragResult.sources && ragResult.sources.length > 0;
+        const hasWebCitations = citations.length > 0;
+        if (!hasRagSources && !hasWebCitations) {
+            return {
+                ticker, promptId,
+                status: 'done',
+                answer: `No data available for "${resolved}" in SEC filings or public sources. Check investor relations page or earnings call transcripts for this specific metric.`,
+                citations: [],
+                durationMs: Date.now() - started,
+                modelUsed: 'no-sources',
+                ragUsed: false,
+            };
+        }
+
+        // ── Only call LLM if we have sources ──────────────────────────────
         const ragBlock = ragResult ? formatRAGSourcesForPrompt(ragResult) : '';
         const webBlock = citations.length
             ? `\n\nWeb context (cite by [n]):\n${citations.map(c => `[${c.id}] ${c.title}: ${c.url}`).join('\n')}\n\n`
             : '';
         const contextBlock = [ragBlock, webBlock].filter(Boolean).join('\n\n');
 
-        const fullPrompt = `You are a sell-side equity analyst. Answer concisely (under 150 words) with citations like [1].${contextBlock ? '\n\n' + contextBlock : ''}Question: ${resolved}`;
+        const fullPrompt = `You are a sell-side equity analyst. Answer concisely (under 150 words) with citations like [1].\n\n${contextBlock}\n\nQuestion: ${resolved}`;
 
         const { text, model } = await deps.callLLM(fullPrompt, signal);
 
