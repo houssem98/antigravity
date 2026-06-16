@@ -645,7 +645,9 @@ function CellContent({ cell }: { cell?: GridCell }) {
     if (cell.status === 'cancelled') {
         return <span className="text-xs text-[color:var(--text-3)]">Cancelled</span>;
     }
+    const isNoData = cell.modelUsed === 'no-sources';
     const excerpt = (cell.answer ?? '').slice(0, 180);
+
     return (
         <div className="space-y-1.5">
             {cell.ragUsed && (
@@ -655,7 +657,18 @@ function CellContent({ cell }: { cell?: GridCell }) {
                     </span>
                 </div>
             )}
-            <p className="text-sm text-[color:var(--text-2)] leading-snug line-clamp-4 max-w-xs">
+            {isNoData && (
+                <div className="inline-flex gap-1">
+                    <span className="inline-block px-2 py-1 rounded text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--text-4)_25%,transparent)] text-[color:var(--text-3)]">
+                        NO SOURCES
+                    </span>
+                </div>
+            )}
+            <p className={`text-sm leading-snug line-clamp-4 max-w-xs ${
+                isNoData
+                    ? 'text-[color:var(--text-3)] italic'
+                    : 'text-[color:var(--text-2)]'
+            }`}>
                 {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
             </p>
             {cell.durationMs && (
