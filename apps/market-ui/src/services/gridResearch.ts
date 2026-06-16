@@ -146,12 +146,20 @@ export async function runGridCell(
     // ── Synthesis cells: compare all tickers ────────────────────────────
     if (prompt.synthesis && state) {
         try {
-            // Collect all answers from this promptId across all tickers
+            // Collect answers from ALL non-synthesis prompts across all tickers
             const tickerAnswers: Record<string, string> = {};
+            const nonSynthesisPrompts = def.prompts.filter(p => !p.synthesis);
+
             for (const t of def.tickers) {
-                const cell = state.cells[cellKey(t, promptId)];
-                if (cell?.status === 'done' && cell.answer) {
-                    tickerAnswers[t] = cell.answer;
+                const answers: string[] = [];
+                for (const p of nonSynthesisPrompts) {
+                    const cell = state.cells[cellKey(t, p.id)];
+                    if (cell?.status === 'done' && cell.answer) {
+                        answers.push(`**${p.label}:** ${cell.answer}`);
+                    }
+                }
+                if (answers.length > 0) {
+                    tickerAnswers[t] = answers.join('\n\n');
                 }
             }
 
@@ -165,9 +173,9 @@ export async function runGridCell(
                 };
             }
 
-            const synthesisPrompt = `You are a sell-side equity analyst. Below are individual answers for the same question across multiple tickers:\n\n${Object.entries(tickerAnswers)
-                .map(([t, ans]) => `${t}:\n${ans}`)
-                .join('\n\n---\n\n')}\n\n${prompt.prompt}`;
+            const synthesisPrompt = `You are a sell-side equity analyst. Below is comprehensive research for each ticker:\n\n${Object.entries(tickerAnswers)
+                .map(([t, ans]) => `## ${t}\n${ans}`)
+                .join('\n\n---\n\n')}\n\nTask: ${prompt.prompt}`;
 
             const { text, model } = await deps.callLLM(synthesisPrompt, signal);
             return {
