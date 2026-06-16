@@ -357,41 +357,50 @@ class SearchPipeline:
                 except Exception as _er:
                     logger.debug("entity_resolution_skipped", trace_id=trace_id, error=str(_er))
 
-            # Deterministic fallback: query-understanding (gemini) often returns
-            # companies=[] (e.g. "Coca Cola FY2021 revenue" → no entity), so nothing
-            # scopes → dense drifts to random tickers and structured gets no ticker.
-            # Pull capitalized name-sequences + ticker tokens straight from the query
-            # and resolve them, so EVERY company mention is scoped.
-            if not query_plan.get("entities", {}).get("companies"):
-                try:
-                    from app.core.entity_resolver import get_resolver
-                    from app.db.redis import redis_client as _redis
-                    _resolver = await asyncio.wait_for(get_resolver(redis_client=_redis), timeout=2.0)
-                    _cands = _extract_company_mentions(query)
-                    _found = []
-                    for _cand in _cands:
-                        # Reject finance acronyms / non-company terms that fuzzy-match
-                        # random tickers ("R&D"→DHI, contaminating scope).
-                        if _cand.lower().replace("&", "").replace(".", "") in _NOT_COMPANY:
-                            continue
-                        _ent = await _resolver.resolve(_cand)
-                        if not (_ent and _ent.match_type != "unknown" and _ent.ticker):
-                            continue
-                        # Short candidates (≤4 chars / single token) must be an EXACT
-                        # ticker — a fuzzy name match on an acronym is almost always wrong.
-                        if len(_cand) <= 4 and _ent.match_type != "exact_ticker":
-                            continue
-                        _found.append({"name": _cand, "ticker": _ent.ticker,
-                                       "cik": _ent.cik, "resolved_name": _ent.name})
-                    if _found:
-                        # dedupe by ticker
-                        _seen: set = set()
-                        _uniq = [f for f in _found if not (f["ticker"] in _seen or _seen.add(f["ticker"]))]
-                        query_plan.setdefault("entities", {})["companies"] = _uniq
-                        logger.info("companies_recovered", trace_id=trace_id,
-                                    tickers=[f["ticker"] for f in _uniq])
-                except Exception as _er2:
-                    logger.debug("company_fallback_skipped", trace_id=trace_id, error=str(_er2))
+            # Deterministic recovery + AUGMENT: query-understanding (gemini) often
+            # returns companies=[] ("Coca Cola FY2021 revenue" → no entity) OR drops
+            # a company in a comparison ("Compare Tesla and Ford" → just "Compare
+            # Tesla", missing Ford → the compare silently answers one side). Pull
+            # capitalized name-sequences + ticker tokens straight from the query and
+            # MERGE any resolved tickers gemini missed, so every mention is scoped.
+            try:
+                from app.core.entity_resolver import get_resolver
+                from app.db.redis import redis_client as _redis
+                _existing = query_plan.get("entities", {}).get("companies", []) or []
+                _existing_tickers = {
+                    e.get("ticker") for e in _existing
+                    if isinstance(e, dict) and e.get("ticker")
+                }
+                _resolver = await asyncio.wait_for(get_resolver(redis_client=_redis), timeout=2.0)
+                _cands = _extract_company_mentions(query)
+                _found = []
+                for _cand in _cands:
+                    # Reject finance acronyms / non-company terms that fuzzy-match
+                    # random tickers ("R&D"→DHI, contaminating scope).
+                    if _cand.lower().replace("&", "").replace(".", "") in _NOT_COMPANY:
+                        continue
+                    _ent = await _resolver.resolve(_cand)
+                    if not (_ent and _ent.match_type != "unknown" and _ent.ticker):
+                        continue
+                    # Short candidates (≤4 chars / single token) must be an EXACT
+                    # ticker — a fuzzy name match on an acronym is almost always wrong.
+                    if len(_cand) <= 4 and _ent.match_type != "exact_ticker":
+                        continue
+                    if _ent.ticker in _existing_tickers:
+                        continue  # gemini already has it
+                    _found.append({"name": _cand, "ticker": _ent.ticker,
+                                   "cik": _ent.cik, "resolved_name": _ent.name})
+                if _found:
+                    # dedupe new finds by ticker, then append to whatever gemini found
+                    _seen: set = set()
+                    _uniq = [f for f in _found if not (f["ticker"] in _seen or _seen.add(f["ticker"]))]
+                    _merged = list(_existing) + _uniq
+                    query_plan.setdefault("entities", {})["companies"] = _merged
+                    logger.info("companies_recovered", trace_id=trace_id,
+                                tickers=[e.get("ticker") for e in _merged if isinstance(e, dict)],
+                                added=[f["ticker"] for f in _uniq])
+            except Exception as _er2:
+                logger.debug("company_fallback_skipped", trace_id=trace_id, error=str(_er2))
 
             logger.info(
                 "query_understood",
@@ -1667,7 +1676,10 @@ _CAP_SEQ_RE = re.compile(r"\b([A-Z][a-zA-Z.&'\-]+(?:\s+[A-Z][a-zA-Z.&'\-]+){0,3}
 _CAP_STOP = {"what", "how", "is", "the", "does", "did", "do", "are", "was", "were",
              "which", "based", "considering", "assume", "answer", "question", "note",
              "fy", "q1", "q2", "q3", "q4", "us", "usd", "gaap", "non", "sec", "you",
-             "for", "of", "in", "and", "a", "an", "as", "give", "calculate", "we"}
+             "for", "of", "in", "and", "a", "an", "as", "give", "calculate", "we",
+             # comparison/filler words gemini bundles into a company name
+             "compare", "compared", "comparing", "versus", "vs", "than", "or",
+             "between", "higher", "lower", "faster", "grew", "vs.", "did"}
 
 
 # Finance acronyms / terms that look like capitalized tokens but are NOT companies;
