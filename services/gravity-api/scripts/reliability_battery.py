@@ -59,6 +59,10 @@ CASES: list[tuple[str, list[str], set | None]] = [
     ("Compare Tesla and Ford net income in FY2023",         ["14997", "4347"], ANY),
     ("Did Nvidia or AMD have higher gross margin in FY2023?", ["56.9", "46.1"], ANY),
     ("Compare the net margins of Apple, Microsoft, and Nvidia in FY2023", ["25.3", "34.1", "16.2"], ANY),
+    # ── agentic depth: multi-period trends + multi-metric reasoning ──
+    ("How has Nvidia's R&D expense changed over FY2022, FY2023, and FY2024?", ["5268", "7339", "8675"], ANY),
+    ("Did Microsoft's operating income grow faster than its revenue in FY2023?", ["211915", "88523"], ANY),
+    ("Did Apple's gross margin expand from FY2022 to FY2023, and by how much?", ["43.3", "44.1"], ANY),
 ]
 
 
