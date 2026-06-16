@@ -495,9 +495,15 @@ class SearchPipeline:
                 e for e in query_plan.get("entities", {}).get("companies", [])
                 if isinstance(e, dict) and e.get("ticker")
             ])
+            # Reserve the iterative (CoRAG) path for genuinely COMPLEX multi-step
+            # reasoning only. Medium numeric/trend queries ("how has R&D changed",
+            # "did operating income grow faster than revenue") were routed here and
+            # lost facts: the iterative path has none of the structured force-include /
+            # multi-period / multi-metric pinning the single-pass path carries. Send
+            # them single-pass where the XBRL facts actually reach the LLM.
             _use_iterative = reasoning_depth != "fast" and _n_tickers <= 1 and (
-                complexity in ("medium", "complex")
-                or intent in ("multi_hop_reasoning", "trend_analysis")
+                complexity == "complex"
+                or intent == "multi_hop_reasoning"
             )
 
             yield SearchEvent(
