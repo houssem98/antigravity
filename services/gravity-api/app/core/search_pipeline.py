@@ -688,7 +688,12 @@ class SearchPipeline:
                     _on = [p for p in top_passages if not _off_period(p)]
                     _off = [p for p in top_passages if _off_period(p)]
                     if _on:  # only reorder if on-period content exists
-                        top_passages = (_on + _off)[:settings.max_context_passages]
+                        # Keep ALL passages — this is a reorder (permutation), not a
+                        # trim. Re-cutting to max_context_passages (6) here undid the
+                        # pin's budget expansion and dropped a comparison company's 2nd
+                        # component (AMD FY2023 gross profit, the 8th pinned fact) →
+                        # "gross margin not provided". Preserve the expanded length.
+                        top_passages = (_on + _off)[:len(top_passages)]
                 rerank_ms = (time.perf_counter() - t2) * 1000
                 logger.info(
                     "retrieval_complete",
