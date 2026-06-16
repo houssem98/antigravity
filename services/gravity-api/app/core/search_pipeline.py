@@ -893,6 +893,32 @@ class SearchPipeline:
 
             user_msg = LLMMessage(role="user", content=user_content)
 
+            # ── CONTEXT-DUMP INSTRUMENTATION (diagnose "fact retrieved but unused") ──
+            # Logs EXACTLY what reaches the LLM: per-passage channel/ticker/period +
+            # whether the exact XBRL fact line survived into the final prompt. Lets us
+            # see in one trace if the period-matched fact is in context (→ prompt/model
+            # issue) or got dropped (→ assembly bug). Gated on a setting; default on.
+            try:
+                if getattr(settings, "context_dump_enabled", True):
+                    _dump = []
+                    for _i, _p in enumerate(top_passages[:16]):
+                        _md = getattr(_p, "metadata", {}) or {}
+                        _ch = _md.get("source_channel") or ("structured" if str(getattr(_p, "chunk_id", "")).startswith("fin_") else "?")
+                        _per = _md.get("period") or getattr(_p, "filing_date", "") or ""
+                        _dump.append(f"{_i}:{_ch}:{getattr(_p,'ticker','')}:{_per}:{(getattr(_p,'text','') or '')[:70].replace(chr(10),' ')}")
+                    logger.info(
+                        "llm_context_dump",
+                        trace_id=trace_id,
+                        query=query[:80],
+                        n_passages=len(top_passages),
+                        has_exact_fact=("[EXACT FILING FIGURE]" in user_content),
+                        has_ratio_block=bool(ratio_context_block),
+                        ctx_chars=len(user_content),
+                        passages=_dump,
+                    )
+            except Exception as _dmp_err:
+                logger.debug("context_dump_failed", trace_id=trace_id, error=str(_dmp_err))
+
             # Decide whether to use self-consistency (MATH/COMPLEX, non-streaming)
             use_self_consistency = (
                 routing_decision.complexity.value in _SELF_CONSISTENCY_COMPLEXITIES
