@@ -675,9 +675,13 @@ class SearchPipeline:
                 # cosine, and the model then answers "latest data is FY2026 / not
                 # found". Keep XBRL/ratio facts (period-tagged) untouched; just push
                 # off-period prose to the back so the asked-year content wins.
-                _qy = re.search(r"((?:19|20)\d{2})", query)
-                if _qy:
-                    _ask = int(_qy.group(1))
+                _qy_all = re.findall(r"(?:19|20)\d{2}", query)
+                if _qy_all:
+                    # Use the LATEST year mentioned as the off-period cutoff. A multi-
+                    # year query ("R&D over FY2022, FY2023, FY2024") names several; keying
+                    # off the FIRST (2022) wrongly demoted the FY2024 fact as "future" →
+                    # the latest year went missing from trend answers.
+                    _ask = max(int(y) for y in _qy_all)
                     def _off_period(p) -> bool:
                         fd = getattr(p, "filing_date", "") or ""
                         if getattr(p, "metadata", None) and isinstance(p.metadata, dict) \

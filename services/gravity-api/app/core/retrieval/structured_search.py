@@ -110,6 +110,18 @@ class StructuredSearch:
             if _comp:
                 flt["or"] = "(" + ",".join(f"metric_name.ilike.*{p}*" for p in _comp) + ")"
             metric = None
+        else:
+            # Multi-metric queries ("did operating income grow faster than revenue?")
+            # need BOTH metrics — the single first-match fetched only operating income,
+            # so revenue went missing and the comparison couldn't be made. If the query
+            # names 2+ DISTINCT metrics, OR-fetch each so all reach context.
+            _present: dict[str, str] = {}
+            for _term, (_ck, _pat) in self._METRIC_PATTERNS.items():
+                if _term in ql:
+                    _present[_ck] = _pat   # dedupe synonyms by concept key
+            if len(_present) >= 2:
+                flt["or"] = "(" + ",".join(f"metric_name.ilike.{p}" for p in _present.values()) + ")"
+                metric = None
         if metric:
             # "revenue"/"net sales" must NOT also match "Cost of Revenue": the bare
             # pattern *revenue* pulled cost-of-revenue rows, and in a comparison the
@@ -179,6 +191,28 @@ class StructuredSearch:
     # Operations, CFO)", "Capital Expenditures (CapEx, Purchases of PP&E)"). "*" is a
     # wildcard so multi-word labels match. Fetching only the components keeps every
     # pinned context slot relevant so the LLM can compute the result.
+    # Major metric term → (concept key for de-duping synonyms, ilike pattern matching
+    # the stored label). Used to detect multi-metric queries and OR-fetch each.
+    _METRIC_PATTERNS: dict[str, tuple[str, str]] = {
+        "total revenue": ("rev", "Revenue*"), "net sales": ("rev", "Revenue*"),
+        "revenue": ("rev", "Revenue*"),
+        "net income": ("ni", "*Net*Income*"),
+        "operating income": ("oi", "*Operating*Income*"),
+        "gross profit": ("gp", "*Gross*Profit*"),
+        "research and development": ("rd", "*Research*and*Development*"),
+        "r&d": ("rd", "*Research*and*Development*"),
+        "total assets": ("ta", "*Total*Assets*"),
+        "total liabilities": ("tl", "*Total*Liabilities*"),
+        "net interest income": ("nii", "*Net*Interest*Income*"),
+        "operating cash flow": ("ocf", "*Operating*Cash*Flow*"),
+        "capital expenditure": ("capex", "*Capital*Expenditure*"),
+        "capex": ("capex", "*Capital*Expenditure*"),
+        "inventory": ("inv", "*Inventory*"),
+        "long-term debt": ("ltd", "*Long-Term*Debt*"),
+        "eps": ("eps", "*Earnings*Per*Share*"),
+        "earnings per share": ("eps", "*Earnings*Per*Share*"),
+    }
+
     _DERIVED_COMPONENTS: dict[str, list[str]] = {
         "free cash flow":  ["operating*cash*flow", "capital*expenditure"],
         "gross margin":    ["gross*profit", "total*revenue"],
