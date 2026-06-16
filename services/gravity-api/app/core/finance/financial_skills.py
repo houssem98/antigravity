@@ -30,7 +30,14 @@ logger = structlog.get_logger()
 
 # ── Root path to the financial-services-main plugins directory ──────────
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]  # services/gravity-api/app/core/finance → antigravity/
+# parents[5] is the repo root in the dev tree (services/gravity-api/app/core/finance
+# → antigravity/). On the Fly image the layout is /app/app/core/finance, which has
+# fewer levels → parents[5] raised IndexError AT IMPORT, killing the ENTIRE
+# app.core.finance package (and with it the RatioEngine — it never loaded in prod).
+try:
+    _REPO_ROOT = Path(__file__).resolve().parents[5]
+except IndexError:
+    _REPO_ROOT = Path(__file__).resolve().parents[-1]
 _PLUGINS_DIR = _REPO_ROOT / "financial-services-main" / "plugins"
 _AGENTS_DIR = _PLUGINS_DIR / "agent-plugins"
 _VERTICALS_DIR = _PLUGINS_DIR / "vertical-plugins"
