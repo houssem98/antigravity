@@ -151,7 +151,7 @@ class StructuredSearch:
         "capital expenditure", "capex", "total assets", "total liabilities", "long-term debt",
         "total debt", "inventory", "accounts receivable", "cash and", "shareholders equity",
         "eps", "earnings per share", "return on equity", "roe", "dividend", "buyback",
-        "share repurchase", "research and development",
+        "share repurchase", "research and development", "r&d",
         # Banks / financials
         "net interest income", "noninterest income", "interest income", "interest expense",
     ]
