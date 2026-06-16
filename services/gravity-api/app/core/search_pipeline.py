@@ -1376,11 +1376,14 @@ class SearchPipeline:
             # ~25% of identical re-queries (the 3s "fail" = a cache hit of the poison).
             _ans_l = (parsed_answer or "").lower()
             _is_refusal = (not parsed_answer or not source_data
+                           or str(confidence_out).upper() in ("NONE", "")
                            or any(p in _ans_l for p in (
                                "not contain", "not found", "not available", "do not contain",
                                "does not contain", "no information", "cannot provide",
                                "sources do not", "not provided", "cannot be calculated",
-                               "cannot determine", "insufficient")))
+                               "cannot determine", "insufficient", "cannot be answered",
+                               "cannot answer", "contain no", "no revenue data", "no data for",
+                               "do not include", "does not include", "not present in")))
             if self.cache and not _is_refusal:
                 try:
                     await self.cache.set(query, {
