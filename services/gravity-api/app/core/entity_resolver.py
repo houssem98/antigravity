@@ -133,8 +133,15 @@ _CORP_STOPWORDS: frozenset[str] = frozenset({
 
 
 def _content_tokens(norm: str) -> set[str]:
-    """Tokens of a normalized name with corporate suffixes/filler removed."""
-    return {t for t in norm.split() if t and t not in _CORP_STOPWORDS}
+    """Tokens of a normalized name with corporate suffixes/filler AND single-char
+    tokens removed. Single letters are noise that cause catastrophic mismatches:
+    gemini returned "Nvidia's R&D" → tokens {nvidia, r, d}; the lone r+d (from R&D)
+    matched "D R Horton" (DHI) over NVIDIA (which shares only "nvidia") → Nvidia
+    resolved to a homebuilder. Dropping single chars leaves {nvidia} → clean NVDA
+    match. Real names that need a single letter to disambiguate don't exist (AT&T →
+    {at}, H&R Block → {block} still resolve); single-letter TICKERS use the exact
+    path, not name fuzzing."""
+    return {t for t in norm.split() if t and len(t) > 1 and t not in _CORP_STOPWORDS}
 
 
 def _token_overlap(a: str, b: str) -> float:
