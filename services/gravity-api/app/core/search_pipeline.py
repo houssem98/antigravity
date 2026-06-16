@@ -593,6 +593,27 @@ class SearchPipeline:
                     _pre2 = [p for p in _tn if getattr(p, "chunk_id", None) not in _have2]
                     if _pre2:
                         top_passages = (_pre2[:6] + top_passages)[:settings.max_context_passages]
+
+                # R2 — period-aware retrieval: when the query names a fiscal year,
+                # demote prose chunks from a MUCH later filing period. Dense returns
+                # the latest filing (e.g. Q1 FY2026) for "Apple FY2023 revenue" by
+                # cosine, and the model then answers "latest data is FY2026 / not
+                # found". Keep XBRL/ratio facts (period-tagged) untouched; just push
+                # off-period prose to the back so the asked-year content wins.
+                _qy = re.search(r"((?:19|20)\d{2})", query)
+                if _qy:
+                    _ask = int(_qy.group(1))
+                    def _off_period(p) -> bool:
+                        fd = getattr(p, "filing_date", "") or ""
+                        if getattr(p, "metadata", None) and isinstance(p.metadata, dict) \
+                                and p.metadata.get("source_channel") in ("structured", "tree_nav"):
+                            return False  # exact facts / navigated — keep
+                        m = re.match(r"(\d{4})", str(fd))
+                        return bool(m) and int(m.group(1)) > _ask + 1
+                    _on = [p for p in top_passages if not _off_period(p)]
+                    _off = [p for p in top_passages if _off_period(p)]
+                    if _on:  # only reorder if on-period content exists
+                        top_passages = (_on + _off)[:settings.max_context_passages]
                 rerank_ms = (time.perf_counter() - t2) * 1000
                 logger.info(
                     "retrieval_complete",
