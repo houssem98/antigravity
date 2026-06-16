@@ -1088,38 +1088,47 @@ class SearchPipeline:
             validation_result = None
             nli_recall = None
 
-            # NLI entailment check: split answer into sentences, score each
-            try:
-                import re as _re
-                _sentences = [s.strip() for s in _re.split(r'(?<=[.!?])\s+(?=[A-Z])', full_response) if s.strip()]
-                _passage_text = " ".join(p.text for p in top_passages[:10])
-                if _sentences and _passage_text:
-                    _nli_pairs = [(_passage_text, s) for s in _sentences]
-                    _nli_results = await _nli_judge.batch_score(_nli_pairs)
-                    _entailed = sum(r.entails for r in _nli_results)
-                    nli_recall = _entailed / max(len(_nli_results), 1)
-                    logger.info(
-                        "nli_citation_check",
-                        trace_id=trace_id,
-                        sentences=len(_sentences),
-                        entailed=_entailed,
-                        recall=round(nli_recall, 3),
-                        methods=list({r.method for r in _nli_results}),
-                    )
-            except Exception as _nli_err:
-                logger.warning("nli_check_failed", trace_id=trace_id, error=str(_nli_err))
+            # Fast / Quick-Answer path skips the two model-based validators below
+            # (NLI entailment + LLM CitationValidator). They add 5-30s per query and
+            # the CitationValidator was hammering an exhausted Groq tier (429 TPD) —
+            # pure latency with no payoff on exact-XBRL-fact answers. The deterministic
+            # guards (numeric grounding, temporal, contradiction, grounded-or-refuse
+            # prompt) stay and cover fast-path hallucinations. Deep modes keep both.
+            _deep_validate = reasoning_depth != "fast"
 
-            if self.validator:
+            # NLI entailment check: split answer into sentences, score each
+            if _deep_validate:
                 try:
-                    validation_result = await self.validator.verify(
-                        answer=full_response,
-                        passages=top_passages,
-                    )
-                    # If validator found issues, use corrected answer
-                    if validation_result and validation_result.get("corrected_answer"):
-                        validated_answer = validation_result["corrected_answer"]
-                except Exception as e:
-                    logger.warning("validation_failed", trace_id=trace_id, error=str(e))
+                    import re as _re
+                    _sentences = [s.strip() for s in _re.split(r'(?<=[.!?])\s+(?=[A-Z])', full_response) if s.strip()]
+                    _passage_text = " ".join(p.text for p in top_passages[:10])
+                    if _sentences and _passage_text:
+                        _nli_pairs = [(_passage_text, s) for s in _sentences]
+                        _nli_results = await _nli_judge.batch_score(_nli_pairs)
+                        _entailed = sum(r.entails for r in _nli_results)
+                        nli_recall = _entailed / max(len(_nli_results), 1)
+                        logger.info(
+                            "nli_citation_check",
+                            trace_id=trace_id,
+                            sentences=len(_sentences),
+                            entailed=_entailed,
+                            recall=round(nli_recall, 3),
+                            methods=list({r.method for r in _nli_results}),
+                        )
+                except Exception as _nli_err:
+                    logger.warning("nli_check_failed", trace_id=trace_id, error=str(_nli_err))
+
+                if self.validator:
+                    try:
+                        validation_result = await self.validator.verify(
+                            answer=full_response,
+                            passages=top_passages,
+                        )
+                        # If validator found issues, use corrected answer
+                        if validation_result and validation_result.get("corrected_answer"):
+                            validated_answer = validation_result["corrected_answer"]
+                    except Exception as e:
+                        logger.warning("validation_failed", trace_id=trace_id, error=str(e))
 
             # Attach verification results to validation output
             if validation_result is None:
