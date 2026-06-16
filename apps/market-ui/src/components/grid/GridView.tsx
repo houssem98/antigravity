@@ -65,6 +65,7 @@ export default function GridView() {
     const [selectedModel, setSelectedModel] = useState<'deepseek' | 'claude' | 'gemini'>('deepseek');
     const [sortBy, setSortBy] = useState<'ticker' | 'status' | 'duration' | null>(null);
     const [sortDesc, setSortDesc] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
     const abortRef = useRef<AbortController | null>(null);
 
     const refreshHistory = async () => {
@@ -311,6 +312,28 @@ export default function GridView() {
 
     const sortedTickers = getSortedTickers();
 
+    // Filter tickers based on search query
+    const getFilteredTickers = () => {
+        if (!searchQuery.trim() || !state) return sortedTickers;
+
+        const query = searchQuery.toLowerCase();
+        return sortedTickers.filter(ticker => {
+            // Match ticker name
+            if (ticker.toLowerCase().includes(query)) return true;
+
+            // Match any cell content
+            for (const prompt of state.def.prompts) {
+                const cell = state.cells[cellKey(ticker, prompt.id)];
+                if (cell?.answer && cell.answer.toLowerCase().includes(query)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    };
+
+    const filteredTickers = getFilteredTickers();
+
     return (
         <div className="p-6 bg-[color:var(--bg)] text-[color:var(--text-2)]">
             <div className="max-w-[1400px] mx-auto">
@@ -468,9 +491,35 @@ export default function GridView() {
                     </div>
                 </div>
 
+                {/* Search */}
+                {state && (
+                    <div className="mt-4 flex items-center gap-2">
+                        <input
+                            type="text"
+                            placeholder="Search cells by ticker or content..."
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            className="flex-1 px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] focus:ring-1 focus:ring-[color:var(--accent)]"
+                        />
+                        {searchQuery && (
+                            <button
+                                onClick={() => setSearchQuery('')}
+                                className="px-2 py-1.5 rounded-sm text-xs text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)] transition-colors"
+                            >
+                                Clear
+                            </button>
+                        )}
+                        {filteredTickers.length !== sortedTickers.length && (
+                            <span className="text-xs text-[color:var(--text-3)]">
+                                {filteredTickers.length} / {sortedTickers.length}
+                            </span>
+                        )}
+                    </div>
+                )}
+
                 {/* Grid */}
                 {state && (
-                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden" style={{ maxHeight: 'calc(100vh - 400px)' }}>
+                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden" style={{ maxHeight: 'calc(100vh - 450px)' }}>
                         <div className="overflow-x-auto overflow-y-auto h-full">
                             <table className="w-full">
                                 <thead className="sticky top-0 z-20">
@@ -509,7 +558,14 @@ export default function GridView() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-[color:var(--line)]">
-                                    {sortedTickers.map((ticker, idx) => (
+                                    {filteredTickers.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={state.def.prompts.length + 1} className="px-4 py-8 text-center text-sm text-[color:var(--text-3)]">
+                                                No cells match your search
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredTickers.map((ticker, idx) => (
                                         <tr
                                             key={ticker}
                                             className={`transition-colors ${
@@ -569,6 +625,8 @@ export default function GridView() {
                                                 );
                                             })}
                                         </tr>
+                                    )}
+                                        ))
                                     )}
                                 </tbody>
                             </table>
