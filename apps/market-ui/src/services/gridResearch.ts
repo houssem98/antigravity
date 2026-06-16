@@ -173,9 +173,9 @@ export async function runGridCell(
                 };
             }
 
-            const synthesisPrompt = `You are a sell-side equity analyst. Below is comprehensive research for each ticker:\n\n${Object.entries(tickerAnswers)
-                .map(([t, ans]) => `## ${t}\n${ans}`)
-                .join('\n\n---\n\n')}\n\nTask: ${prompt.prompt}`;
+            const synthesisPrompt = `Below is research for each ticker:\n\n${Object.entries(tickerAnswers)
+                .map(([t, ans]) => `${t}:\n${ans}`)
+                .join('\n\n---\n\n')}\n\n${prompt.prompt}`;
 
             const { text, model } = await deps.callLLM(synthesisPrompt, signal);
             return {
