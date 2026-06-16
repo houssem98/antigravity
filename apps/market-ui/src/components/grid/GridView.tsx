@@ -22,11 +22,18 @@ import { exportGridToXLSX, downloadBlob } from '../../services/gridExcel';
 
 const LLM_PROXY_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/llm/chat`;
 
-async function callLLMProxy(prompt: string, signal?: AbortSignal): Promise<{ text: string; model: any }> {
+const MODEL_CONFIG: Record<string, { provider: string; model: string }> = {
+    deepseek: { provider: 'deepseek', model: 'deepseek-chat' },
+    claude: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    gemini: { provider: 'gemini', model: 'gemini-2.5-flash' },
+};
+
+async function callLLMProxy(prompt: string, modelKey: 'deepseek' | 'claude' | 'gemini', signal?: AbortSignal): Promise<{ text: string; model: any }> {
+    const config = MODEL_CONFIG[modelKey];
     const res = await fetch(LLM_PROXY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'deepseek', model: 'deepseek-chat', prompt, max_tokens: 2048 }),
+        body: JSON.stringify({ ...config, prompt, max_tokens: 2048 }),
         signal,
     });
     if (!res.ok) {
@@ -34,14 +41,12 @@ async function callLLMProxy(prompt: string, signal?: AbortSignal): Promise<{ tex
         throw new Error(err.error || `LLM proxy failed (${res.status})`);
     }
     const data = await res.json();
-    return { text: data.text ?? '', model: data.model ?? 'deepseek-chat' };
+    return { text: data.text ?? '', model: data.model ?? config.model };
 }
 
 async function searchGravityCell(query: string, ticker: string, signal?: AbortSignal) {
     return queryGravityRAG(query, { companies: [ticker] });
 }
-
-const deps: CellRunnerDeps = { callLLM: callLLMProxy, searchGravity: searchGravityCell };
 
 const DEFAULT_TICKERS = ['NVDA', 'AAPL', 'MSFT', 'GOOGL'];
 
@@ -53,6 +58,7 @@ export default function GridView() {
     const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
     const [history, setHistory] = useState<SavedGridRow[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
+    const [selectedModel, setSelectedModel] = useState<'deepseek' | 'claude' | 'gemini'>('deepseek');
     const abortRef = useRef<AbortController | null>(null);
 
     const refreshHistory = async () => {
@@ -87,7 +93,7 @@ export default function GridView() {
 
         const def: GridDef = {
             id: `grid-${Date.now()}`,
-            name: `${tickers.length} tickers × ${activePrompts.length} prompts`,
+            name: `${tickers.length} tickers × ${activePrompts.length} prompts (${selectedModel})`,
             tickers,
             prompts: activePrompts,
         };
@@ -96,6 +102,11 @@ export default function GridView() {
         setRunning(true);
         const controller = new AbortController();
         abortRef.current = controller;
+
+        const deps: CellRunnerDeps = {
+            callLLM: (prompt, signal) => callLLMProxy(prompt, selectedModel, signal),
+            searchGravity: searchGravityCell,
+        };
 
         try {
             const final = await runGrid(initial, deps, {
@@ -193,6 +204,24 @@ export default function GridView() {
                         disabled={running}
                         className="w-full px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] disabled:opacity-50"
                     />
+
+                    <label className="label block mt-4 mb-1.5">LLM Model</label>
+                    <div className="flex gap-1.5 mb-4">
+                        {['deepseek', 'claude', 'gemini'].map(model => (
+                            <button
+                                key={model}
+                                onClick={() => setSelectedModel(model as 'deepseek' | 'claude' | 'gemini')}
+                                disabled={running}
+                                className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors border ${
+                                    selectedModel === model
+                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
+                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)]'
+                                } disabled:opacity-50`}
+                            >
+                                {model === 'deepseek' ? 'DeepSeek ($)' : model === 'claude' ? 'Claude ($$)' : 'Gemini (Free)'}
+                            </button>
+                        ))}
+                    </div>
 
                     <label className="label block mt-4 mb-1.5">Analyst prompts</label>
                     <div className="flex flex-wrap gap-1.5">
