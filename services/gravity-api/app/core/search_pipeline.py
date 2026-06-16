@@ -1172,6 +1172,13 @@ class SearchPipeline:
             contradictions_out: list = []
             confidence_out = "MEDIUM"
             structured_data_out: list = []
+            # Hoisted: referenced both in the JSON path and the grounding/confidence
+            # block below, which runs even when JSON parsing falls to the except.
+            _negative_phrases = [
+                "i am unable", "i cannot", "i am sorry", "not available",
+                "not found", "no information", "no data", "cannot find",
+                "do not have", "none of the provided", "not in the",
+            ]
             try:
                 # LLM returns JSON per FINANCIAL_ANALYST_SYSTEM prompt.
                 # Strip markdown code fences if LLM wrapped the output
@@ -1202,11 +1209,6 @@ class SearchPipeline:
                 confidence_out = answer_json.get("confidence", "MEDIUM")
                 structured_data_out = answer_json.get("structured_data", [])
                 # Calibrate confidence: override HIGH if answer admits it cannot answer
-                _negative_phrases = [
-                    "i am unable", "i cannot", "i am sorry", "not available",
-                    "not found", "no information", "no data", "cannot find",
-                    "do not have", "none of the provided", "not in the",
-                ]
                 if confidence_out == "HIGH" and isinstance(parsed_answer, str):
                     _ans_lower = parsed_answer.lower()
                     if any(p in _ans_lower for p in _negative_phrases):
@@ -1249,6 +1251,17 @@ class SearchPipeline:
                             caveats = caveats + [_cav]
                         logger.info("numeric_grounding_violation", trace_id=trace_id,
                                     ungrounded=_ungrounded[:8], n=len(_ungrounded))
+                    else:
+                        # Floor confidence at HIGH when the answer is grounded on an
+                        # exact SEC XBRL fact and nothing is unsupported and it isn't
+                        # a refusal. "$211,915M from the 10-K XBRL" is the highest
+                        # authority that exists — labelling it MEDIUM/LOW reads as a
+                        # broken tool. The model defaults single-source to MEDIUM.
+                        _pa_l = parsed_answer.lower()
+                        if ("[EXACT FILING FIGURE]" in user_content
+                                and confidence_out in ("MEDIUM", "")
+                                and not any(p in _pa_l for p in _negative_phrases)):
+                            confidence_out = "HIGH"
                 except Exception as _gerr:
                     logger.debug("numeric_grounding_check_failed", error=str(_gerr)[:120])
 
@@ -1666,19 +1679,39 @@ def _numeric_grounding_check(answer: str, passages: list, ratio_block: str) -> l
     src_nums = _grounding_numbers(src)
     if not src_nums:
         return []
+    # Pairwise differences/sums of grounded figures are themselves grounded: the
+    # system prompt REQUIRES a YoY/QoQ delta alongside every absolute ("$124.3B
+    # (+11.8% YoY)"), and the delta amount ($13,645M) is just a−b of two real
+    # source figures. Flagging those as "ungrounded" dropped every correct exact-
+    # fact answer to LOW confidence. Build the set of derivable values so honest
+    # arithmetic on grounded numbers is accepted.
+    _sl = [s for s in src_nums if s and s > 100]
+    _derived: set[float] = set()
+    for _a in _sl:
+        for _b in _sl:
+            if _a >= _b:
+                _derived.add(round(_a - _b, 2))
+                _derived.add(round(_a + _b, 2))
     ungrounded: list[str] = []
     for m in re.finditer(r"(\$?\s?\d[\d,]*\.?\d*\s*(?:billion|million|trillion|%|B|M|T)?)", answer or ""):
         token = m.group(1).strip()
+        # Percentages are derived (growth rates, margins, payout ratios) — never a
+        # hallucinated absolute. Skip them: this check guards fabricated $ figures.
+        if "%" in token:
+            continue
         nums = _grounding_numbers(token)
         if not nums:
             continue
         val = max(nums)
         # skip years (1900-2099) and tiny integers (counts, list markers)
-        if 1900 <= val <= 2099 or (val < 100 and "." not in token and "%" not in token):
+        if 1900 <= val <= 2099 or (val < 100 and "." not in token):
             continue
         grounded = any(
             (abs(val - s) / s <= 0.01) for s in src_nums if s
         ) or any((abs(v - s) / s <= 0.01) for v in nums for s in src_nums if s)
+        # also accept differences/sums of two grounded figures (computed deltas)
+        if not grounded:
+            grounded = any((d and abs(val - d) / max(abs(d), 1) <= 0.01) for d in _derived)
         if not grounded:
             ungrounded.append(token)
     # dedupe, keep order

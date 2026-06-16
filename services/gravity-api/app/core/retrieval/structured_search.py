@@ -99,6 +99,12 @@ class StructuredSearch:
         # LLM has the components to compute, but capped to keep context tight/fast.
         ql = (query or "").lower()
         metric = next((m for m in self._METRIC_TERMS if m in ql), None)
+        # Derived metrics have no single XBRL row (FCF = operating cash flow − capex;
+        # they are COMPUTED). Narrowing to the literal name ("free cash flow") returned
+        # 0 rows → "not found". For these, DON'T narrow — fetch the year's core items so
+        # the components (OCF + capex) are in context and the LLM/ratio engine computes.
+        if metric in self._DERIVED_METRICS:
+            metric = None
         if metric:
             flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
 
@@ -130,13 +136,28 @@ class StructuredSearch:
         return list(dict.fromkeys(out))  # dedupe, keep order
 
     # Metric keywords → narrow the exact-facts lookup when the query names one.
+    # Order matters: the first term found in the query wins, so put multi-word /
+    # more-specific terms before their substrings ("net sales" before "sales").
     _METRIC_TERMS = [
-        "revenue", "net income", "operating income", "gross margin", "operating margin",
-        "net margin", "profit margin", "operating cash flow", "free cash flow", "cash flow",
+        "net sales", "total revenue", "net income", "operating income", "gross profit",
+        "cost of revenue", "cost of goods", "cogs", "revenue",
+        "gross margin", "operating margin", "net margin", "profit margin",
+        "operating cash flow", "free cash flow", "cash flow",
         "capital expenditure", "capex", "total assets", "total liabilities", "long-term debt",
-        "total debt", "cash and", "shareholders equity", "eps", "earnings per share",
-        "return on equity", "roe", "dividend", "buyback", "share repurchase", "research and development",
+        "total debt", "inventory", "accounts receivable", "cash and", "shareholders equity",
+        "eps", "earnings per share", "return on equity", "roe", "dividend", "buyback",
+        "share repurchase", "research and development",
     ]
+
+    # Metrics with NO single XBRL row — they are computed from components. Matching
+    # the literal name returns 0 rows; instead we fetch the period's core items so
+    # the components are in context for the LLM/ratio engine to compute the result.
+    _DERIVED_METRICS: frozenset[str] = frozenset({
+        "free cash flow",      # = operating cash flow − capex
+        "gross margin",        # = gross profit / revenue
+        "operating margin",    # = operating income / revenue
+        "net margin", "profit margin",
+    })
 
     async def search(
         self,
