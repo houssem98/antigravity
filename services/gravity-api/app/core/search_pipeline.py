@@ -616,10 +616,31 @@ class SearchPipeline:
                 def _cid(p):
                     return getattr(p, "chunk_id", None)
 
+                # Interleave exact facts by company (round-robin) so a multi-entity
+                # comparison keeps EACH company's facts in the pin. They arrive
+                # concatenated (all META, then all GOOGL); a flat cap kept only the
+                # first company → GOOGL revenue dropped, context was META-only and the
+                # model couldn't compare. Round-robin guarantees every company appears.
+                if _n_tickers >= 2 and _sf:
+                    def _ent(p):
+                        md = getattr(p, "metadata", None) or {}
+                        return md.get("entity_ticker") or getattr(p, "ticker", "") or ""
+                    from collections import OrderedDict as _OD
+                    _by_ent = _OD()
+                    for _p in _sf:
+                        _by_ent.setdefault(_ent(_p), []).append(_p)
+                    _lists = list(_by_ent.values())
+                    _ordered_sf, _k = [], 0
+                    while any(_k < len(_l) for _l in _lists):
+                        for _l in _lists:
+                            if _k < len(_l):
+                                _ordered_sf.append(_l[_k])
+                        _k += 1
+                    _sf = _ordered_sf
                 # Cap exact-fact pins by entity count: a 3-4 way comparison needs ~2
-                # facts per company (e.g. net income + revenue for net margin), so a
-                # fixed 6 would drop a company. Scale with tickers, capped at 12.
-                _struct_cap = min(12, max(6, 3 * max(_n_tickers, 1)))
+                # facts per company, so a fixed 6 would drop a company. Scale with
+                # tickers (×4 → ~4 facts/company), capped at 14.
+                _struct_cap = min(14, max(6, 4 * max(_n_tickers, 1)))
                 _struct_pin = _sf[:_struct_cap]            # exact facts — highest authority
                 _pin_ids = {_cid(p) for p in _struct_pin}
                 _tn_pin = [p for p in _tn if _cid(p) not in _pin_ids][:3]
@@ -1111,7 +1132,12 @@ class SearchPipeline:
             # pure latency with no payoff on exact-XBRL-fact answers. The deterministic
             # guards (numeric grounding, temporal, contradiction, grounded-or-refuse
             # prompt) stay and cover fast-path hallucinations. Deep modes keep both.
-            _deep_validate = reasoning_depth != "fast"
+            # Tie deep validation to whether we actually ran the agentic/iterative
+            # path — NOT the raw depth string. A "auto" comparison resolves to
+            # single-pass yet "auto" != "fast" used to flip deep-validate on, running
+            # the NLI + CitationValidator (dead Groq 429) → 110s timeout. Only the
+            # genuinely iterative path pays for the heavyweight validators.
+            _deep_validate = _use_iterative
 
             # NLI entailment check: split answer into sentences, score each
             if _deep_validate:
