@@ -472,7 +472,16 @@ class SearchPipeline:
             # (Apple FCF, Pfizer R&D, JPM) were MEDIUM queries routed to iterative,
             # which drifts to the wrong company/period. Reserve iterative for
             # explicit deep/agentic depth.
-            _use_iterative = reasoning_depth != "fast" and (
+            # Multi-entity comparisons (2+ resolved tickers) must NOT go iterative:
+            # the CoRAG path only scopes a SINGLE ticker, so a 2-company compare runs
+            # unscoped and drifts onto random filings ("Meta or Google" → Match Group
+            # + Sweetgreen). The single-pass branch has search_multi_entity (one
+            # scoped pass per company + structured facts) which answers them correctly.
+            _n_tickers = len([
+                e for e in query_plan.get("entities", {}).get("companies", [])
+                if isinstance(e, dict) and e.get("ticker")
+            ])
+            _use_iterative = reasoning_depth != "fast" and _n_tickers <= 1 and (
                 complexity in ("medium", "complex")
                 or intent in ("multi_hop_reasoning", "trend_analysis")
             )
@@ -543,7 +552,11 @@ class SearchPipeline:
                     if _c not in _channels:
                         _channels.append(_c)
 
-                if len(_tickers) >= 2 and complexity in ("medium", "complex"):
+                if len(_tickers) >= 2:
+                    # ANY 2+ ticker query is a comparison → one scoped pass per
+                    # company. Don't gate on complexity: "Which grew faster, Meta or
+                    # Google?" classifies SIMPLE yet still has two entities that, run
+                    # unscoped, drift onto unrelated filings.
                     retrieval_results = await self.retrieval.search_multi_entity(
                         query=query,
                         tickers=_tickers,
@@ -603,7 +616,11 @@ class SearchPipeline:
                 def _cid(p):
                     return getattr(p, "chunk_id", None)
 
-                _struct_pin = _sf[:6]                      # exact facts — highest authority
+                # Cap exact-fact pins by entity count: a 3-4 way comparison needs ~2
+                # facts per company (e.g. net income + revenue for net margin), so a
+                # fixed 6 would drop a company. Scale with tickers, capped at 12.
+                _struct_cap = min(12, max(6, 3 * max(_n_tickers, 1)))
+                _struct_pin = _sf[:_struct_cap]            # exact facts — highest authority
                 _pin_ids = {_cid(p) for p in _struct_pin}
                 _tn_pin = [p for p in _tn if _cid(p) not in _pin_ids][:3]
                 _pin_ids |= {_cid(p) for p in _tn_pin}
@@ -612,9 +629,9 @@ class SearchPipeline:
 
                 if _pinned:
                     # Effective budget = whichever is larger: the configured cap, or
-                    # enough room for every pin + 3 prose passages. Capped at 14 to
+                    # enough room for every pin + 3 prose passages. Capped at 18 to
                     # avoid context flooding (which regressed accuracy + timed out).
-                    _eff = min(14, max(settings.max_context_passages, len(_pinned) + 3))
+                    _eff = min(18, max(settings.max_context_passages, len(_pinned) + 3))
                     top_passages = (_pinned + _prose)[:_eff]
 
                 # R2 — period-aware retrieval: when the query names a fiscal year,
