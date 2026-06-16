@@ -356,37 +356,37 @@ export default function GridView() {
                 </div>
 
                 {/* Config */}
-                <div className="mt-5 p-4 rounded-sm bg-[color:var(--surface)] border border-[color:var(--line)]">
-                    <label className="label block mb-1.5">Tickers (comma-separated)</label>
+                <div className="mt-6 p-6 rounded-xl bg-[color:var(--surface)] border border-[color:var(--line)] shadow-lg shadow-[color:color-mix(in_oklch,var(--accent)_5%,transparent)]">
+                    <label className="label block mb-2 font-semibold text-[color:var(--text)]">Tickers (comma-separated)</label>
                     <input
                         type="text"
                         value={tickersInput}
                         onChange={e => setTickersInput(e.target.value)}
                         placeholder="NVDA, AAPL, MSFT"
                         disabled={running}
-                        className="w-full px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] disabled:opacity-50"
+                        className="w-full px-4 py-3 rounded-lg text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:ring-offset-0 focus:border-transparent disabled:opacity-50 transition-all"
                     />
 
-                    <label className="label block mt-4 mb-1.5">LLM Model</label>
-                    <div className="flex gap-1.5 mb-4">
+                    <label className="label block mt-5 mb-3 font-semibold text-[color:var(--text)]">LLM Model</label>
+                    <div className="flex gap-2.5 mb-6">
                         {['deepseek', 'claude', 'gemini'].map(model => (
                             <button
                                 key={model}
                                 onClick={() => setSelectedModel(model as 'deepseek' | 'claude' | 'gemini')}
                                 disabled={running}
-                                className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors border ${
+                                className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-all border ${
                                     selectedModel === model
-                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
-                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)]'
-                                } disabled:opacity-50`}
+                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] shadow-md shadow-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] scale-105'
+                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--text-2)] hover:shadow-sm'
+                                } disabled:opacity-40 cursor-pointer`}
                             >
                                 {model === 'deepseek' ? 'DeepSeek ($)' : model === 'claude' ? 'Claude ($$)' : 'Gemini (Free)'}
                             </button>
                         ))}
                     </div>
 
-                    <label className="label block mt-4 mb-1.5">Analyst prompts</label>
-                    <div className="flex flex-wrap gap-1.5">
+                    <label className="label block mt-5 mb-3 font-semibold text-[color:var(--text)]">Analyst prompts</label>
+                    <div className="flex flex-wrap gap-2">
                         {SEED_GRID_PROMPTS.map(p => {
                             const active = promptIds.includes(p.id);
                             return (
@@ -394,10 +394,10 @@ export default function GridView() {
                                     key={p.id}
                                     onClick={() => togglePrompt(p.id)}
                                     disabled={running}
-                                    className={`px-2.5 py-1 rounded-sm text-xs transition-colors border ${active
-                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
-                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)]'
-                                        } disabled:opacity-50`}
+                                    className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-all border ${active
+                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] shadow-md shadow-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]'
+                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--text-2)] hover:shadow-sm'
+                                        } disabled:opacity-40 cursor-pointer`}
                                 >
                                     {p.label}
                                 </button>
@@ -405,22 +405,22 @@ export default function GridView() {
                         })}
                     </div>
 
-                    <div className="flex items-center gap-3 mt-4">
+                    <div className="flex items-center gap-3 mt-6">
                         {!running ? (
                             <button
                                 onClick={startRun}
                                 disabled={!tickersInput.trim() || activePrompts.length === 0}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-sm font-medium bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:opacity-90 disabled:opacity-40 transition-opacity"
+                                className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-semibold bg-gradient-to-br from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_80%,black)] text-[color:var(--accent-ink)] hover:shadow-lg hover:shadow-[color:color-mix(in_oklch,var(--accent)_30%,transparent)] disabled:opacity-40 active:scale-95 transition-all"
                             >
-                                <Play className="w-3.5 h-3.5" />
+                                <Play className="w-4 h-4" />
                                 Run grid
                             </button>
                         ) : (
                             <button
                                 onClick={cancelRun}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-sm text-[color:var(--down)] border border-[color:var(--down)] hover:bg-[color:color-mix(in_oklch,var(--down)_12%,transparent)] transition-colors"
+                                className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-semibold text-[color:var(--down)] border-2 border-[color:var(--down)] hover:bg-[color:color-mix(in_oklch,var(--down)_15%,transparent)] hover:shadow-md active:scale-95 transition-all"
                             >
-                                <X className="w-3.5 h-3.5" />
+                                <X className="w-4 h-4" />
                                 Cancel
                             </button>
                         )}
@@ -439,7 +439,7 @@ export default function GridView() {
                                 <button
                                     onClick={handleExportCSV}
                                     title="Export CSV"
-                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs text-[color:var(--text-2)] border border-[color:var(--line)] hover:text-[color:var(--text)] hover:border-[color:var(--line-strong)] transition-colors"
+                                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-[color:var(--text-2)] border border-[color:var(--line)] hover:text-[color:var(--text)] hover:border-[color:var(--text-2)] hover:shadow-sm hover:bg-[color:var(--surface-2)] transition-all"
                                 >
                                     <Download className="w-3.5 h-3.5" />
                                     CSV
@@ -447,7 +447,7 @@ export default function GridView() {
                                 <button
                                     onClick={handleExportXLSX}
                                     title="Export Excel (formatted, with Sources sheet)"
-                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs text-[color:var(--accent-ink)] bg-[color:var(--accent)] hover:opacity-90 transition-opacity"
+                                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-[color:var(--accent-ink)] bg-gradient-to-br from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_80%,black)] hover:shadow-md hover:shadow-[color:color-mix(in_oklch,var(--accent)_30%,transparent)] active:scale-95 transition-all"
                                 >
                                     <Download className="w-3.5 h-3.5" />
                                     Excel
@@ -500,24 +500,24 @@ export default function GridView() {
 
                 {/* Search */}
                 {state && (
-                    <div className="mt-4 flex items-center gap-2">
+                    <div className="mt-6 flex items-center gap-2.5">
                         <input
                             type="text"
                             placeholder="Search cells by ticker or content..."
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
-                            className="flex-1 px-3 py-2 rounded-sm text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:border-[color:var(--accent)] focus:ring-1 focus:ring-[color:var(--accent)]"
+                            className="flex-1 px-4 py-3 rounded-lg text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:border-transparent transition-all shadow-sm"
                         />
                         {searchQuery && (
                             <button
                                 onClick={() => setSearchQuery('')}
-                                className="px-2 py-1.5 rounded-sm text-xs text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)] transition-colors"
+                                className="px-3 py-2 rounded-lg text-xs font-medium text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:bg-[color:var(--surface-2)] transition-all"
                             >
                                 Clear
                             </button>
                         )}
                         {filteredTickers.length !== sortedTickers.length && (
-                            <span className="text-xs text-[color:var(--text-3)]">
+                            <span className="text-xs font-semibold text-[color:var(--text-3)] px-3 py-2 rounded-lg bg-[color:var(--surface)]">
                                 {filteredTickers.length} / {sortedTickers.length}
                             </span>
                         )}
@@ -526,11 +526,11 @@ export default function GridView() {
 
                 {/* Grid */}
                 {state && (
-                    <div className="mt-5 rounded-sm border border-[color:var(--line)] overflow-hidden" style={{ maxHeight: 'calc(100vh - 450px)' }}>
+                    <div className="mt-6 rounded-xl border border-[color:var(--line)] overflow-hidden shadow-xl shadow-[color:color-mix(in_oklch,var(--accent)_5%,transparent)]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
                         <div className="overflow-x-auto overflow-y-auto h-full">
                             <table className="w-full">
                                 <thead className="sticky top-0 z-20">
-                                    <tr className="bg-[color:var(--surface-2)] border-b-2 border-[color:var(--line)]">
+                                    <tr className="bg-gradient-to-r from-[color:var(--surface-2)] to-[color:var(--surface-2)] border-b-2 border-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]">
                                         <th
                                             onClick={() => {
                                                 if (sortBy === 'ticker') {
@@ -540,22 +540,22 @@ export default function GridView() {
                                                     setSortDesc(false);
                                                 }
                                             }}
-                                            className="sticky left-0 z-30 px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px] cursor-pointer hover:bg-[color:var(--surface-2)] hover:text-[color:var(--accent)] transition-colors"
+                                            className="sticky left-0 z-30 px-5 py-4 text-left font-bold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px] cursor-pointer hover:text-[color:var(--accent)] transition-colors uppercase tracking-wider"
                                         >
-                                            <div className="flex items-center gap-1">
+                                            <div className="flex items-center gap-2">
                                                 TICKER
                                                 {sortBy === 'ticker' && (
-                                                    <span className="text-[10px]">{sortDesc ? '↓' : '↑'}</span>
+                                                    <span className="text-sm">{sortDesc ? '↓' : '↑'}</span>
                                                 )}
                                             </div>
                                         </th>
                                         {state.def.prompts.map(p => (
                                             <th
                                                 key={p.id}
-                                                className={`px-4 py-3 text-left font-semibold text-xs text-[color:var(--text)] cursor-pointer transition-colors ${
+                                                className={`px-5 py-4 text-left font-bold text-xs text-[color:var(--text)] cursor-pointer transition-colors uppercase tracking-wider ${
                                                     p.synthesis
-                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)]'
-                                                        : 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-2)]'
+                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)]'
+                                                        : 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface)]'
                                                 }`}
                                                 style={{ minWidth: p.synthesis ? '280px' : '220px' }}
                                             >
