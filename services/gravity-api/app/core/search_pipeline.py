@@ -725,9 +725,12 @@ class SearchPipeline:
                         if e.get("ticker")
                     ]
                     if tickers:
-                        period = "FY2025"
+                        # Parse the fiscal year straight from the query (understanding
+                        # often misses dates, same as companies) → else FY2025.
+                        _ym = re.search(r"((?:19|20)\d{2})", query)
+                        period = f"FY{_ym.group(1)}" if _ym else "FY2025"
                         date_entities = query_plan.get("entities", {}).get("dates", [])
-                        if date_entities:
+                        if not _ym and date_entities:
                             resolved = date_entities[0].get("resolved", "")
                             if resolved:
                                 period = resolved

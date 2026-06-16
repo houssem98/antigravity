@@ -71,6 +71,84 @@ def _safe_div(n, d, pct=False):
     return result * 100 if pct else result
 
 
+# us-gaap concept (stored in financials.caption) → the engine's internal metric name.
+_CONCEPT_TO_METRIC: dict[str, str] = {
+    "RevenueFromContractWithCustomerExcludingAssessedTax": "revenue",
+    "Revenues": "revenue",
+    "CostOfGoodsAndServicesSold": "cost_of_goods_sold",
+    "CostOfRevenue": "cost_of_goods_sold",
+    "GrossProfit": "gross_profit",
+    "OperatingIncomeLoss": "operating_income",
+    "OperatingExpenses": "operating_expenses",
+    "NetIncomeLoss": "net_income",
+    "ResearchAndDevelopmentExpense": "research_development",
+    "SellingGeneralAndAdministrativeExpense": "selling_general_administrative",
+    "IncomeTaxExpenseBenefit": "income_tax",
+    "Assets": "total_assets",
+    "AssetsCurrent": "current_assets",
+    "CashAndCashEquivalentsAtCarryingValue": "cash",
+    "AccountsReceivableNetCurrent": "accounts_receivable",
+    "InventoryNet": "inventory",
+    "PropertyPlantAndEquipmentNet": "net_ppe",
+    "Goodwill": "goodwill",
+    "Liabilities": "total_liabilities",
+    "LiabilitiesCurrent": "current_liabilities",
+    "AccountsPayableCurrent": "accounts_payable",
+    "LongTermDebtNoncurrent": "long_term_debt",
+    "LongTermDebt": "total_debt",
+    "DebtCurrent": "current_debt",
+    "StockholdersEquity": "shareholders_equity",
+    "RetainedEarningsAccumulatedDeficit": "retained_earnings",
+    "CommonStockSharesOutstanding": "shares_outstanding",
+    "WeightedAverageNumberOfDilutedSharesOutstanding": "shares_outstanding",
+    "EarningsPerShareDiluted": "eps_diluted",
+    "EarningsPerShareBasic": "eps_basic",
+    "NetCashProvidedByUsedInOperatingActivities": "operating_cash_flow",
+    "PaymentsToAcquirePropertyPlantAndEquipment": "capex",
+    "DepreciationDepletionAndAmortization": "depreciation_amortization",
+}
+
+
+def _derive_metrics(b: dict[str, float]) -> dict[str, float]:
+    """Compute composite line items the ratios need from the base XBRL facts."""
+    def _set(k: str, v: float | None) -> None:
+        if v is not None and k not in b:
+            b[k] = v
+
+    rev = b.get("revenue"); cogs = b.get("cost_of_goods_sold")
+    if rev is not None and cogs is not None:
+        _set("gross_profit", rev - cogs)
+
+    ca = b.get("current_assets"); cl = b.get("current_liabilities"); inv = b.get("inventory")
+    if ca is not None and cl is not None:
+        _set("working_capital", ca - cl)
+    if ca is not None and inv is not None:
+        _set("quick_assets", ca - inv)
+
+    if b.get("total_debt") is None:
+        ltd = b.get("long_term_debt"); cd = b.get("current_debt")
+        if ltd is not None or cd is not None:
+            _set("total_debt", (ltd or 0.0) + (cd or 0.0))
+    td = b.get("total_debt"); cash = b.get("cash")
+    if td is not None and cash is not None:
+        _set("net_debt", td - cash)
+
+    se = b.get("shareholders_equity")
+    if se is not None:
+        _set("book_value", se)
+
+    ocf = b.get("operating_cash_flow"); capex = b.get("capex")
+    if ocf is not None and capex is not None:
+        _set("free_cash_flow", ocf - capex)
+
+    oi = b.get("operating_income"); da = b.get("depreciation_amortization")
+    if oi is not None:
+        _set("ebit", oi)
+        if da is not None:
+            _set("ebitda", oi + da)
+    return b
+
+
 RATIO_DEFINITIONS: dict[str, RatioDef] = {
     # ══════════════════════════════════════════════════════════════════════
     # VALUATION
@@ -885,40 +963,47 @@ class RatioEngine:
         return list(dict.fromkeys(keys))  # deduplicate, preserve order
 
     async def _fetch_metrics(self, ticker: str, period: str, metric_names: list[str]) -> dict[str, float]:
-        """Fetch raw metric values from TimescaleDB financial_statements table."""
-        if not metric_names or self.db is None:
+        """Fetch raw metric values from the Supabase XBRL `financials` table (the
+        TimescaleDB pool is a permanent None-stub here). Maps us-gaap concepts →
+        the engine's internal metric names, derives composites (working_capital,
+        free_cash_flow, ebitda, etc.), and resolves `*_prior` from the prior year."""
+        if not metric_names:
             return {}
         try:
-            # Parse period: "FY2025" → fiscal_year=2025, fiscal_quarter="FY"
-            fiscal_quarter = "FY"
-            fiscal_year = None
-            import re
-            m = re.match(r"(FY|Q[1-4])(\d{4})", period.upper())
-            if m:
-                fiscal_quarter = m.group(1)
-                fiscal_year = int(m.group(2))
+            from app.db import supabase_rest
+            if not supabase_rest.configured():
+                return {}
+            import re as _re
+            m = _re.match(r"(?:FY|Q[1-4])?(\d{4})", period.upper())
+            year = int(m.group(1)) if m else None
+            if year is None:
+                return {}
 
-            async with self.db.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT metric_name, value
-                    FROM financial_statements
-                    WHERE ticker = $1
-                      AND ($2::int IS NULL OR fiscal_year = $2)
-                      AND ($3::text IS NULL OR fiscal_quarter = $3)
-                      AND metric_name = ANY($4::text[])
-                    ORDER BY filing_date DESC
-                    LIMIT $5
-                    """,
-                    ticker.upper(),
-                    fiscal_year,
-                    fiscal_quarter,
-                    metric_names,
-                    len(metric_names),
+            async def _facts_for(yr: int) -> dict[str, float]:
+                rows = await supabase_rest.sb_select(
+                    "financials",
+                    {"ticker": f"eq.{ticker.upper()}", "period": f"eq.FY{yr}"},
+                    select="caption,value_float", limit=200,
                 )
-                return {row["metric_name"]: float(row["value"]) for row in rows}
+                base: dict[str, float] = {}
+                for r in rows:
+                    concept = r.get("caption")
+                    val = r.get("value_float")
+                    if concept in _CONCEPT_TO_METRIC and val is not None:
+                        mkey = _CONCEPT_TO_METRIC[concept]
+                        # first non-null wins (CORE concept preferred by insert order)
+                        base.setdefault(mkey, float(val))
+                return _derive_metrics(base)
+
+            out = await _facts_for(year)
+            # prior-year metrics (CAGR / YoY / "_prior")
+            if any(n.endswith("_prior") for n in metric_names):
+                prior = await _facts_for(year - 1)
+                for k, v in prior.items():
+                    out[f"{k}_prior"] = v
+            return {k: v for k, v in out.items() if k in metric_names or True}
         except Exception as e:
-            logger.warning("ratio_engine_fetch_failed", ticker=ticker, error=str(e))
+            logger.warning("ratio_engine_fetch_failed", ticker=ticker, error=str(e)[:120])
             return {}
 
     async def compute(
