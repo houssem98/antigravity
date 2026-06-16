@@ -19,9 +19,20 @@ Sequence by trust-impact-per-effort. Do R1+R2 first — they're the crisis and m
 - **R5 coverage — DONE (partial).** FCF/margins compute from components; bank NII
   backfilled (12 banks); comparison path fixed (scoped per-entity + interleaved facts).
   Long-tail tickers/periods still need wider `--sp500` backfill.
-- **R6 eval — NOT yet wired into CI.** Cold battery is manual (`POST /v1/search`).
-Result: 12/12 single-entity exact-XBRL + working comparisons, mostly HIGH confidence.
-Remaining gap is **latency under load (spend)**, not correctness.
+- **R6 eval — DONE.** `scripts/reliability_battery.py` — 17-case pass/fail gate (12
+  single + 5 compare) vs the live endpoint, value-correctness (comma/billion-insensitive)
+  + confidence floor on direct facts + latency budget, exit-codes to gate deploys.
+  Currently **17/17 green**.
+Result: 17/17 battery green — single-entity exact-XBRL + 2/3-way + derived + bank +
+short-name comparisons all correct. **Remaining gap is latency (spend), not correctness.**
+
+## Multi-entity (P1) — DONE this sprint
+Comparisons broke 4 ways, all fixed: (1) 2+ tickers forced to scoped single-pass
+search_multi_entity (not the drift-prone iterative path); (2) structured facts
+round-robin interleaved by entity so every company stays in context; (3) gemini-dropped
+comparison entities recovered + merged (Ford was lost); (4) short Title-case names
+(Ford→F, Nike→NKE) no longer rejected by the acronym guard; (5) period-reorder no longer
+re-trims the expanded pin; (6) revenue lookup anchored so it can't grab "Cost of Revenue".
 
 ## R1 — Determinism (the 25% same-query failure) · CRISIS · free
 Same query "Apple FY2023 net income": 3/4 OK, 1/4 "not found" (a 3s path that
