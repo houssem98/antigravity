@@ -475,32 +475,31 @@ export default function TradingAssistantPage() {
               />
 
               {/* Chart area or Tab content */}
+              {activeTab === 'Chart' ? (
               <div className="flex flex-row flex-1 overflow-hidden relative">
-                {activeTab === 'Chart' ? (
-                  <>
-                    {/* Drawing tools sidebar */}
-                    <div className="shrink-0">
-                      <Sidebar
-                        onToolClick={handleToolClick}
-                        activeTool={activeTool}
-                        activeIndicators={activeIndicators}
-                        onIndicatorToggle={handleIndicatorToggle}
-                      />
-                    </div>
+                {/* Drawing tools sidebar */}
+                <div className="shrink-0">
+                  <Sidebar
+                    onToolClick={handleToolClick}
+                    activeTool={activeTool}
+                    activeIndicators={activeIndicators}
+                    onIndicatorToggle={handleIndicatorToggle}
+                  />
+                </div>
 
-                    {/* Chart */}
-                    <div className="flex-1 relative min-w-0">
-                      <Chart
-                        ref={chartRef}
-                        asset={currentAsset}
-                        timeframe={currentTimeframe}
-                        colors={chartColors}
-                        activeIndicators={activeIndicators}
-                        activeTool={activeTool}
-                        drawingPoints={drawingPoints}
-                        drawingConfig={drawingConfig}
-                        onChartClick={handleChartClick}
-                      />
+                {/* Chart */}
+                <div className="flex-1 relative min-w-0">
+                  <Chart
+                    ref={chartRef}
+                    asset={currentAsset}
+                    timeframe={currentTimeframe}
+                    colors={chartColors}
+                    activeIndicators={activeIndicators}
+                    activeTool={activeTool}
+                    drawingPoints={drawingPoints}
+                    drawingConfig={drawingConfig}
+                    onChartClick={handleChartClick}
+                  />
 
                   {/* Ask AI bar */}
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
@@ -538,29 +537,26 @@ export default function TradingAssistantPage() {
                       </div>
                     </div>
                   )}
-                    </div>
-                  </>
-                ) : activeTab === 'News' ? (
-                  <div className="flex-1 min-w-0">
-                    <NewsTab asset={currentAsset} />
-                  </div>
-                ) : activeTab === 'Yield' ? (
-                  <div className="flex-1 min-w-0">
-                    <YieldTab asset={currentAsset} />
-                  </div>
-                ) : activeTab === 'Holders' ? (
-                  <div className="flex-1 min-w-0">
-                    <HoldersTab asset={currentAsset} />
-                  </div>
-                ) : activeTab === 'About' ? (
-                  <div className="flex-1 min-w-0">
-                    <AboutTab asset={currentAsset} />
-                  </div>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center text-[color:var(--text-3)]">
-                    Tab content coming soon
-                  </div>
-                )}
+                </div>
+              </div>
+              ) : activeTab === 'Markets' ? (
+                <Markets onAssetSelect={(asset) => {
+                  setCurrentAsset(asset);
+                  setActiveTab('Chart');
+                }} />
+              ) : activeTab === 'News' ? (
+                <NewsTab asset={currentAsset} />
+              ) : activeTab === 'Yield' ? (
+                <YieldTab asset={currentAsset} />
+              ) : activeTab === 'Holders' ? (
+                <HoldersTab asset={currentAsset} />
+              ) : activeTab === 'About' ? (
+                <AboutTab asset={currentAsset} />
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-[color:var(--text-3)]">
+                  Tab content coming soon
+                </div>
+              )}
               </div>
             </div>
 
