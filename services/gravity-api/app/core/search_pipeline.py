@@ -969,6 +969,22 @@ class SearchPipeline:
             )
             system_msg = LLMMessage(role="system", content=reasoning_system)
             user_content = build_user_message(query, top_passages)
+            # TEMPORAL HONESTY (RESEARCH_ASSISTANT_ROADMAP §0) — the corpus is SEC
+            # filings only; we have NO live market data. If the query wants something
+            # real-time (current price, today's move, intraday), say so instead of
+            # answering from a stale filing. Cite the latest filing date we DO have.
+            if query_plan.get("needs_live_data"):
+                _dates = [getattr(p, "filing_date", "") for p in top_passages if getattr(p, "filing_date", "")]
+                _latest = max(_dates) if _dates else "the latest filing"
+                user_content = (
+                    "## DATA-COVERAGE NOTICE\n"
+                    "This system answers ONLY from SEC filings (no live market data, "
+                    "stock price, or intraday feed). The user asked for real-time/current "
+                    f"data. State plainly that live market data is not available; the most "
+                    f"recent filed data is from {_latest}. Do NOT present any filing figure "
+                    "as a current price or today's value. Offer the latest *reported* figure "
+                    "only if relevant, clearly labeled with its filing date.\n\n"
+                ) + user_content
             # Prepend deterministic data (ratios + calculator) before sources
             # so the LLM sees verified numbers first and never needs to recompute
             if ratio_context_block:

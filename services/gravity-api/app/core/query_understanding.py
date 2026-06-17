@@ -20,7 +20,49 @@ DEFAULT_QUERY_PLAN = {
     "expanded_terms": {"original": [], "synonyms": [], "concepts": []},
     "filters": {},
     "retrieval_channels": ["dense", "bm25", "splade"],
+    "temporal_intent": "historical",
+    "needs_live_data": False,
 }
+
+
+# Temporal/source intent — free heuristic, drives recency routing + honesty.
+# "current price / today / now" must NOT be answered from a 2-year-old filing.
+import re as _re
+
+_LIVE_TERMS = _re.compile(
+    r"\b(current(?:ly)?|right now|as of today|today'?s?|latest price|stock price|"
+    r"share price|trading at|market cap|quote|premarket|after.?hours|intraday|"
+    r"this (?:morning|afternoon|week)|past (?:hour|day)|real.?time|live)\b",
+    _re.IGNORECASE,
+)
+_OPINION_TERMS = _re.compile(
+    r"\b(analyst|consensus|price target|rating|upgrade|downgrade|sentiment|"
+    r"buy or sell|is it a buy|overvalued|undervalued|bullish|bearish|"
+    r"should i (?:buy|sell)|fair value)\b",
+    _re.IGNORECASE,
+)
+_MGMT_TERMS = _re.compile(
+    r"\b(what did .* say|on the (?:call|earnings call)|management (?:said|guidance|"
+    r"commentary)|ceo said|cfo said|guidance (?:on|from) the call|prepared remarks|"
+    r"q&a)\b",
+    _re.IGNORECASE,
+)
+
+
+def classify_temporal_intent(query: str) -> dict:
+    """Returns {temporal_intent, needs_live_data}. Free, deterministic, <1ms.
+      latest      → wants current/real-time → live quote/news (we lack these today)
+      opinion     → analyst/sentiment       → estimates/news
+      qualitative → management commentary    → transcripts
+      historical  → reported facts           → filings/XBRL (our strength)"""
+    q = query or ""
+    if _LIVE_TERMS.search(q):
+        return {"temporal_intent": "latest", "needs_live_data": True}
+    if _OPINION_TERMS.search(q):
+        return {"temporal_intent": "opinion", "needs_live_data": False}
+    if _MGMT_TERMS.search(q):
+        return {"temporal_intent": "qualitative", "needs_live_data": False}
+    return {"temporal_intent": "historical", "needs_live_data": False}
 
 
 class QueryUnderstanding:
@@ -67,6 +109,9 @@ class QueryUnderstanding:
                 if "structured" not in plan["retrieval_channels"]:
                     plan["retrieval_channels"].append("structured")
 
+            # Temporal/source intent (free heuristic) — drives recency routing + honesty
+            plan.update(classify_temporal_intent(query))
+
             logger.info(
                 "query_analyzed",
                 intent=plan["intent"],
@@ -79,4 +124,8 @@ class QueryUnderstanding:
 
         except Exception as e:
             logger.warning("query_understanding_failed", error=str(e))
-            return {**DEFAULT_QUERY_PLAN, "expanded_terms": {"original": query.split()}}
+            return {
+                **DEFAULT_QUERY_PLAN,
+                "expanded_terms": {"original": query.split()},
+                **classify_temporal_intent(query),
+            }
