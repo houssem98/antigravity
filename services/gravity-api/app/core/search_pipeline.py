@@ -100,12 +100,25 @@ class SearchPipeline:
         self.audit_logger = audit_logger
 
     def _should_use_agentic(self, reasoning_depth: str, query_plan: dict) -> bool:
-        """Decide whether to use the multi-agent pipeline."""
+        """Decide whether to use the multi-agent orchestrator.
+
+        GATED OFF by default: the Planner→Reader→Extractor→Critic→Writer orchestrator
+        returns an EMPTY final answer (the Writer's facts never reach it — it has none
+        of the structured force-include / multi-metric pinning the single-pass path
+        carries) and empty is strictly worse than a grounded single-pass answer. Until
+        the orchestrator is rebuilt on the working retrieval, route everything to
+        single-pass, which now handles complex/analytical queries with pinned XBRL
+        facts + the analyst prompt. Re-enable via settings.agentic_orchestrator_enabled.
+        """
+        try:
+            if not getattr(settings, "agentic_orchestrator_enabled", False):
+                return False
+        except Exception:
+            return False
         if reasoning_depth == "agentic":
             return True
         if reasoning_depth == "fast":
             return False
-        # Auto-detect: use agentic for complex / multi-hop queries
         complexity = query_plan.get("complexity", "simple")
         intent = query_plan.get("intent", "")
         return complexity in ("complex", "math") or intent in (
@@ -502,8 +515,7 @@ class SearchPipeline:
             # multi-period / multi-metric pinning the single-pass path carries. Send
             # them single-pass where the XBRL facts actually reach the LLM.
             _use_iterative = reasoning_depth != "fast" and _n_tickers <= 1 and (
-                complexity == "complex"
-                or intent == "multi_hop_reasoning"
+                intent == "multi_hop_reasoning"
             )
 
             yield SearchEvent(
