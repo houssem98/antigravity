@@ -75,12 +75,11 @@ class LLMRouter:
             # TPD is ~98% burned by the app's own components by mid-day, so groq-first
             # just adds a failed 429 attempt before deepseek. No free fast model survives
             # the shared cap → consistent low latency needs a funded fast tier (spend).
-            # SIMPLE: try gemini_flash first (~2s). It previously ignored in-context
-            # facts, but that was BEFORE the eviction fix pinned exact XBRL facts to
-            # Source 1 — re-evaluating whether it now reads them. Gated by the battery:
-            # kept only if correctness holds 20/20, else deepseek-first. deepseek is the
-            # reliable fallback on any gemini rate-limit/miss.
-            QueryComplexity.SIMPLE:  ["gemini_flash", "deepseek", "groq_large", "groq_fast", "gpt4o", "claude_haiku"],
+            # deepseek first. PROVEN (2026-06-17) that gemini_flash AND groq_large are
+            # both free-tier rate-limited/capped → putting either first just adds a
+            # failed attempt before deepseek with no latency gain (battery stayed 12-21s).
+            # Correctness held 20/20 either way. Consistent low latency = funded fast tier.
+            QueryComplexity.SIMPLE:  ["deepseek", "gemini_flash", "groq_large", "groq_fast", "gpt4o", "claude_haiku"],
             QueryComplexity.MEDIUM:  ["deepseek", "gemini_pro", "gemini_flash", "groq_large", "gpt4o", "claude_sonnet"],
             QueryComplexity.COMPLEX: ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus", "claude_sonnet"],
             QueryComplexity.MATH:    ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus"],
