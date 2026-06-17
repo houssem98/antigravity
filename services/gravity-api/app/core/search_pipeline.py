@@ -464,26 +464,39 @@ class SearchPipeline:
                     mode="agentic",
                     complexity=query_plan.get("complexity"),
                 )
-                from app.core.agents.orchestrator import AgentOrchestrator
-
-                orchestrator = AgentOrchestrator(
-                    llm_router=self.llm_router,
-                    retrieval_orchestrator=self.retrieval,
-                    reranker=self.reranker,
-                    query_understander=self.query_understander,
-                    semantic_cache=self.cache,
-                )
-                async for event in orchestrator.run(
-                    query=query,
-                    query_plan=query_plan,
-                    trace_id=trace_id,
-                    stream=stream,
-                ):
-                    yield event
-
-                # Cache the agentic result
-                # (cache is handled inside orchestrator's final events)
-                return
+                # Best-effort with a hard floor: buffer the orchestrator's events and
+                # only commit them if it produced a NON-EMPTY answer without crashing.
+                # On exception or empty answer, fall through to single-pass (which now
+                # handles analytical/bull-bear queries reliably) — the agentic path must
+                # never leave the user with a blank or 500.
+                _agentic_ok = False
+                try:
+                    from app.core.agents.orchestrator import AgentOrchestrator
+                    orchestrator = AgentOrchestrator(
+                        llm_router=self.llm_router,
+                        retrieval_orchestrator=self.retrieval,
+                        reranker=self.reranker,
+                        query_understander=self.query_understander,
+                        semantic_cache=self.cache,
+                    )
+                    _buf: list = []
+                    async for event in orchestrator.run(
+                        query=query, query_plan=query_plan, trace_id=trace_id, stream=stream,
+                    ):
+                        _buf.append(event)
+                        if event.type == "answer":
+                            _a = (event.data or {}).get("answer", "") if isinstance(event.data, dict) else ""
+                            if isinstance(_a, str) and _a.strip():
+                                _agentic_ok = True
+                    if _agentic_ok:
+                        for event in _buf:
+                            yield event
+                        return
+                    logger.warning("agentic_empty_fallback_singlepass", trace_id=trace_id)
+                except Exception as _ag_err:
+                    logger.warning("agentic_failed_fallback_singlepass", trace_id=trace_id,
+                                   error=str(_ag_err)[:200])
+                # fall through to single-pass (do NOT return)
 
             # ── Stage 3: Retrieval (single-pass or iterative) ───────────
             # CoRAG (arXiv 2501.14342): For MEDIUM/COMPLEX queries, use
