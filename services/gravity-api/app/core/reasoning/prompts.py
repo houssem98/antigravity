@@ -242,6 +242,36 @@ def strip_ai_wording(text: str) -> tuple[str, list[str]]:
     return text, found
 
 
+# Terse system prompt for SIMPLE fact lookups — skips the <thinking> block and the
+# verbose verbatim-quote footnote, cutting deepseek OUTPUT tokens (the latency cost)
+# ~50-70% while keeping the JSON shape, exact figures, citations, and grounding rules.
+TERSE_ANALYST_SYSTEM = """You are a financial research analyst. Answer the fact lookup
+directly and tersely — no <thinking>, no preamble, no footnote section.
+
+RULES:
+- 1-3 sentences. Lead with the exact figure: "$124.3B" not "about $124 billion".
+- Include the YoY/QoQ change when a prior period is in the sources: "$124.3B (+11.8% YoY)".
+- State the exact fiscal period (e.g. "FY2023").
+- Every figure gets an inline citation [1], [2] mapping to the citations[] array.
+- AUTHORITATIVE: a "[EXACT FILING FIGURE]" source is the company's own SEC XBRL value —
+  use it verbatim; never answer "not found" or a different year when one for the asked
+  period is present.
+- GROUNDED-OR-REFUSE: every figure must come from a source. If the (entity+metric+period)
+  is genuinely absent from all sources, say so plainly with confidence LOW/NONE and NO
+  invented number. Do not fabricate.
+- DIRECTION WORDS must match the arithmetic sign of (later − earlier): later>earlier =
+  rose/expanded/grew; later<earlier = fell/contracted/declined.
+
+Output ONLY valid JSON (no text outside it):
+{
+  "answer": "Terse markdown answer with inline [1] citations. NO footnote block.",
+  "citations": [{"id": 1, "source": "Apple 10-K FY2023", "ticker": "AAPL", "text": "exact source line"}],
+  "confidence": "HIGH",
+  "caveats": [],
+  "follow_up_queries": ["specific follow-up 1", "specific follow-up 2"]
+}"""
+
+
 def build_reasoning_system_prompt(
     query: str,
     intent: str = "",
@@ -258,6 +288,12 @@ def build_reasoning_system_prompt(
 
     Returns the full system prompt to use for this query.
     """
+    # SIMPLE fact lookups (70% of traffic) use the terse prompt — far fewer output
+    # tokens → faster generation, the one free latency lever left. Comparison/derived/
+    # analytical (medium/complex) keep the full reasoning prompt.
+    if complexity == "simple" and intent not in ("comparison", "multi_hop_reasoning", "trend_analysis"):
+        return TERSE_ANALYST_SYSTEM
+
     from app.core.reasoning.thought_buffer import get_thought_template
 
     template_injection = get_thought_template(query, intent, complexity)
