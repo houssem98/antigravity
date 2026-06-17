@@ -71,11 +71,11 @@ class LLMRouter:
             # DeepSeek actually reads them. With no fast+reliable model available, a
             # correct 12s answer beats a fast wrong one. DeepSeek first for ALL tiers;
             # revisit when a funded fast model (Groq dev tier) exists.
-            # SIMPLE: groq llama-3.3-70b FIRST — it's fast (1-3s vs deepseek's 15s) AND
-            # actually reads the in-context XBRL facts (unlike gemini_flash). Daily-capped
-            # (100k TPD); on 429 the fallback chain drops cleanly to deepseek (reliable,
-            # slow). Best-effort latency: fast while budget lasts, correct always.
-            QueryComplexity.SIMPLE:  ["groq_large", "deepseek", "gemini_flash", "groq_fast", "gpt4o", "claude_haiku"],
+            # deepseek first: PROVEN (2026-06-17) that groq llama-3.3-70b's free 100k
+            # TPD is ~98% burned by the app's own components by mid-day, so groq-first
+            # just adds a failed 429 attempt before deepseek. No free fast model survives
+            # the shared cap → consistent low latency needs a funded fast tier (spend).
+            QueryComplexity.SIMPLE:  ["deepseek", "gemini_flash", "groq_large", "groq_fast", "gpt4o", "claude_haiku"],
             QueryComplexity.MEDIUM:  ["deepseek", "gemini_pro", "gemini_flash", "groq_large", "gpt4o", "claude_sonnet"],
             QueryComplexity.COMPLEX: ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus", "claude_sonnet"],
             QueryComplexity.MATH:    ["deepseek", "gemini_pro", "groq_large", "gpt5", "gpt4o", "claude_opus"],
