@@ -16,6 +16,10 @@ import { OrderBlockModal } from '../components/trading/OrderBlockModal';
 import { SymbolSearchModal } from '../components/trading/SymbolSearchModal';
 import { PortfolioPanel } from '../components/trading/PortfolioPanel';
 import { Markets } from '../components/trading/Markets';
+import { NewsTab } from '../components/trading/tabs/NewsTab';
+import { HoldersTab } from '../components/trading/tabs/HoldersTab';
+import { YieldTab } from '../components/trading/tabs/YieldTab';
+import { AboutTab } from '../components/trading/tabs/AboutTab';
 
 import { X, MessageSquare, Search, Settings, PieChart, Star, ArrowLeft, Zap, BarChart3, History, Building2, Database, TrendingUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -41,6 +45,7 @@ export default function TradingAssistantPage() {
   const [currentView, setCurrentView] = useState<'markets' | 'chart'>('markets');
   const [currentAsset, setCurrentAsset] = useState<string>('BTC');
   const [currentTimeframe, setCurrentTimeframe] = useState<string>('1D');
+  const [activeTab, setActiveTab] = useState<string>('Chart');
   const [chartColors, setChartColors] = useState<ChartColors>({
     upColor: '#00E676',
     downColor: '#FF1744',
@@ -465,33 +470,37 @@ export default function TradingAssistantPage() {
                 onToolClick={handleToolClick}
                 isOrderBookOpen={isOrderBookOpen}
                 onToggleOrderBook={() => setIsOrderBookOpen(!isOrderBookOpen)}
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
               />
 
-              {/* Chart area */}
+              {/* Chart area or Tab content */}
               <div className="flex flex-row flex-1 overflow-hidden relative">
-                {/* Drawing tools sidebar */}
-                <div className="shrink-0">
-                  <Sidebar
-                    onToolClick={handleToolClick}
-                    activeTool={activeTool}
-                    activeIndicators={activeIndicators}
-                    onIndicatorToggle={handleIndicatorToggle}
-                  />
-                </div>
+                {activeTab === 'Chart' ? (
+                  <>
+                    {/* Drawing tools sidebar */}
+                    <div className="shrink-0">
+                      <Sidebar
+                        onToolClick={handleToolClick}
+                        activeTool={activeTool}
+                        activeIndicators={activeIndicators}
+                        onIndicatorToggle={handleIndicatorToggle}
+                      />
+                    </div>
 
-                {/* Chart */}
-                <div className="flex-1 relative min-w-0">
-                  <Chart
-                    ref={chartRef}
-                    asset={currentAsset}
-                    timeframe={currentTimeframe}
-                    colors={chartColors}
-                    activeIndicators={activeIndicators}
-                    activeTool={activeTool}
-                    drawingPoints={drawingPoints}
-                    drawingConfig={drawingConfig}
-                    onChartClick={handleChartClick}
-                  />
+                    {/* Chart */}
+                    <div className="flex-1 relative min-w-0">
+                      <Chart
+                        ref={chartRef}
+                        asset={currentAsset}
+                        timeframe={currentTimeframe}
+                        colors={chartColors}
+                        activeIndicators={activeIndicators}
+                        activeTool={activeTool}
+                        drawingPoints={drawingPoints}
+                        drawingConfig={drawingConfig}
+                        onChartClick={handleChartClick}
+                      />
 
                   {/* Ask AI bar */}
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
@@ -529,7 +538,29 @@ export default function TradingAssistantPage() {
                       </div>
                     </div>
                   )}
-                </div>
+                    </div>
+                  </>
+                ) : activeTab === 'News' ? (
+                  <div className="flex-1 min-w-0">
+                    <NewsTab asset={currentAsset} />
+                  </div>
+                ) : activeTab === 'Yield' ? (
+                  <div className="flex-1 min-w-0">
+                    <YieldTab asset={currentAsset} />
+                  </div>
+                ) : activeTab === 'Holders' ? (
+                  <div className="flex-1 min-w-0">
+                    <HoldersTab asset={currentAsset} />
+                  </div>
+                ) : activeTab === 'About' ? (
+                  <div className="flex-1 min-w-0">
+                    <AboutTab asset={currentAsset} />
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-[color:var(--text-3)]">
+                    Tab content coming soon
+                  </div>
+                )}
               </div>
             </div>
 

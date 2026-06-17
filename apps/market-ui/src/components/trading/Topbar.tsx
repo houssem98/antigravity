@@ -17,6 +17,8 @@ interface TopbarProps {
   onToggleOrderBook?: () => void;
   onSellClick?: () => void;
   onBuyClick?: () => void;
+  activeTab?: string;
+  onTabChange?: (tab: string) => void;
 }
 
 /** Two-row topbar: section tabs + CTA, then chart controls.
@@ -28,8 +30,9 @@ export const Topbar: React.FC<TopbarProps> = ({
   chartColors,
   onChartColorsChange,
   onBuyClick,
+  activeTab = 'Chart',
+  onTabChange,
 }) => {
-  const [activeTab, setActiveTab] = useState<string>('Chart');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dexMode, setDexMode] = useState(false);
@@ -47,7 +50,7 @@ export const Topbar: React.FC<TopbarProps> = ({
             return (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => onTabChange?.(tab)}
                 className={`relative flex items-center px-4 text-body font-medium whitespace-nowrap transition-colors ${
                   isActive
                     ? 'text-[color:var(--text)]'
