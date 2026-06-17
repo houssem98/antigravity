@@ -133,6 +133,16 @@ class StructuredSearch:
             else:
                 flt["metric_name"] = f"ilike.*{metric.replace(' ', '*')}*"
 
+        # No specific metric AND no component filter (qualitative/analytical query —
+        # "bull/bear case", "did profitability improve while capex rose"). A bare
+        # metric=None fetched 24 mixed rows and the top-6 pin kept arbitrary ones,
+        # dropping net income / capex → "no profitability data". Pin the KEY financials
+        # via an OR filter so the headline metrics always reach context.
+        if "metric_name" not in flt and "or" not in flt:
+            flt["or"] = "(" + ",".join(
+                f"metric_name.ilike.{p}" for p in self._KEY_METRIC_PATTERNS
+            ) + ")"
+
         rows = await supabase_rest.sb_select("financials", flt, limit=max(top_k, 24))
         out: list[RetrievalResult] = []
         for r in rows:
@@ -212,6 +222,13 @@ class StructuredSearch:
         "eps": ("eps", "*Earnings*Per*Share*"),
         "earnings per share": ("eps", "*Earnings*Per*Share*"),
     }
+
+    # Headline financials pinned for qualitative/analytical queries that name no
+    # single metric (bull/bear case, "did profitability improve"). One per statement.
+    _KEY_METRIC_PATTERNS: list[str] = [
+        "Revenue*", "*Net*Income*", "*Operating*Income*", "*Gross*Profit*",
+        "*Operating*Cash*Flow*", "*Capital*Expenditure*", "*Total*Assets*",
+    ]
 
     _DERIVED_COMPONENTS: dict[str, list[str]] = {
         "free cash flow":  ["operating*cash*flow", "capital*expenditure"],

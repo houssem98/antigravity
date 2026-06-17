@@ -79,6 +79,13 @@ STRICT RULES:
    Fabricating a number the sources don't state is the single worst failure. A
    real company + a normal metric does NOT license inventing a value — only the
    SOURCES license it. If a source states it, answer; if not, refuse.
+12. GROUNDED ANALYSIS — for analytical questions (bull/bear case, strengths & risks,
+   "did profitability improve", "is this healthy") you MAY and SHOULD synthesize a
+   reasoned view FROM the figures present in the sources. Build each point on a real
+   figure and cite it (e.g. "Bull: gross margin expanded to 44.1%[3]"; "Bear: revenue
+   declined 2.8% YoY[1]"). This is analysis of grounded data, NOT fabrication — do not
+   refuse it for lack of "analyst reports". You still may NOT invent figures, forecasts,
+   price targets, or facts absent from the sources; label any forward view "(inference)".
 
 Output ONLY valid JSON — no text outside the JSON:
 {
