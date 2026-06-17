@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     # outranked prose and REGRESSED FinanceBench 40%->20%. Flip on when clean.
     structured_facts_enabled: bool = False
 
+    # Multi-agent orchestrator (Planner→Reader→Extractor→Critic→Writer) for genuinely
+    # complex/multi-hop reasoning. Gated: its Reader now scopes + pins structured XBRL
+    # facts and the Writer never returns empty. Enable via env once verified.
+    agentic_orchestrator_enabled: bool = False
+
     # GravityIndex doc-grounding engine — vectorless tree-nav retrieval (the Mafin
     # paradigm, owned). Build trees (tree_builder) into Supabase doc_trees, then
     # flip on to route filing/narrative queries through reasoning-based navigation.

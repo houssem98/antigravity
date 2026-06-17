@@ -78,19 +78,28 @@ class ReaderAgent(BaseAgent):
         Based on: Agentic RAG (arXiv 2602.03442) — fallback channel rotation.
         """
 
-        # Build filters from sub-task targets
+        # Build filters from sub-task targets. The retrieval + structured channels
+        # scope on filters["companies"] (NOT "tickers") — the old "tickers" key was
+        # silently ignored, so structured XBRL search ran unscoped/empty and the
+        # agents got no exact facts → empty answers. Set both to be safe.
         filters: dict = {}
         if sub_task.target_companies:
+            filters["companies"] = sub_task.target_companies
             filters["tickers"] = sub_task.target_companies
 
-        # Determine which channels to use
+        # Determine which channels. ALWAYS include structured + tree_nav: the agentic
+        # path needs the exact XBRL facts just like single-pass (the default
+        # dense/bm25/splade set never queried them → numeric/analytical queries had no
+        # facts to extract).
         if sub_task.retrieval_strategy == "all":
-            channels = ctx.query_plan.get("retrieval_channels", ["dense", "bm25", "splade"])
+            channels = list(ctx.query_plan.get("retrieval_channels", ["dense", "bm25", "splade"]))
         else:
             channels = [sub_task.retrieval_strategy]
-            # Always include dense as baseline
             if "dense" not in channels:
                 channels.append("dense")
+        for _c in ("dense", "bm25", "structured", "tree_nav"):
+            if _c not in channels:
+                channels.append(_c)
 
         # Primary retrieval attempt
         result = await self._run_single_retrieval(
@@ -178,4 +187,16 @@ class ReaderAgent(BaseAgent):
         else:
             reranked = fused
 
-        return reranked[:settings.max_context_passages]
+        top = reranked[:settings.max_context_passages]
+
+        # Force-include the exact XBRL facts (same fix as single-pass): the reranker
+        # demotes terse one-line facts below verbose prose, so the Extractor never saw
+        # the exact figure. Pin structured-channel results to the front so each
+        # sub-task carries its ground-truth numbers.
+        _sf = retrieval_results.get("structured") or []
+        if _sf:
+            _have = {getattr(p, "chunk_id", None) for p in top}
+            _pre = [p for p in _sf if getattr(p, "chunk_id", None) not in _have]
+            if _pre:
+                top = (_pre[:6] + top)[:max(settings.max_context_passages, len(_pre[:6]) + 3)]
+        return top
