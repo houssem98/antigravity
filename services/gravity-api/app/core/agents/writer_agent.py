@@ -153,6 +153,23 @@ class WriterAgent(BaseAgent):
             ctx.structured_data = result.get("structured_data", ctx.extracted_facts)
             ctx.chart_specs = result.get("chart_specs", [])
 
+            # Never return empty: json_mode sometimes yields valid JSON with an empty
+            # "answer" (the model put everything in reasoning, or truncated). Retry once
+            # WITHOUT json_mode so the prose answer is the whole response.
+            if not (ctx.final_answer or "").strip():
+                logger.warning("writer_empty_answer_retry", query=ctx.query[:60])
+                _retry = await self.llm.generate(
+                    messages=[
+                        LLMMessage(role="system", content=system_prompt),
+                        LLMMessage(role="user", content=user_content
+                                   + "\n\nWrite the answer as clean markdown prose with inline [n] citations. Do NOT wrap it in JSON."),
+                    ],
+                    config=LLMConfig(temperature=0.2, max_tokens=4096),
+                )
+                ctx.total_cost_usd += _retry.cost_usd
+                if (_retry.content or "").strip():
+                    ctx.final_answer = _retry.content.strip()
+
             # ── AI Wording Check ─────────────────────────────────────
             _, ai_phrases = strip_ai_wording(ctx.final_answer)
             if ai_phrases:
