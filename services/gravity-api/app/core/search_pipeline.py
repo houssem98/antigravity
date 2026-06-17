@@ -1341,14 +1341,22 @@ class SearchPipeline:
                 try:
                     _ungrounded = _numeric_grounding_check(
                         parsed_answer, top_passages, ratio_context_block)
+                    _pa_l0 = parsed_answer.lower()
+                    _anchored = ("[EXACT FILING FIGURE]" in user_content
+                                 and not any(p in _pa_l0 for p in _negative_phrases))
                     if _ungrounded:
-                        confidence_out = "LOW"
+                        # If the answer is anchored on exact XBRL facts, an "ungrounded"
+                        # flag is almost always a derived figure the checker can't trace
+                        # (3-way diff, multi-step calc) — NOT a fabrication. Keep MEDIUM +
+                        # caveat rather than dropping a correct grounded answer to LOW.
+                        # LOW only for genuinely un-anchored floating numbers.
+                        confidence_out = "MEDIUM" if _anchored else "LOW"
                         _cav = (f"Unverified figures (not found in sources): "
                                 f"{', '.join(_ungrounded[:5])}. Treat with caution.")
                         if isinstance(caveats, list):
                             caveats = caveats + [_cav]
                         logger.info("numeric_grounding_violation", trace_id=trace_id,
-                                    ungrounded=_ungrounded[:8], n=len(_ungrounded))
+                                    ungrounded=_ungrounded[:8], n=len(_ungrounded), anchored=_anchored)
                     else:
                         # Floor confidence at HIGH when the answer is grounded on an
                         # exact SEC XBRL fact and nothing is unsupported and it isn't
