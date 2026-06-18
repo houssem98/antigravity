@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { TrendingUp, BarChart3, Zap } from 'lucide-react';
+import { TrendingUp, BarChart3, Zap, Sparkles } from 'lucide-react';
+import { HermesQueryPanel } from '../HermesQueryPanel';
+import { useHermesPanel } from '../../hooks/useHermesPanel';
 
 interface Exchange {
   rank: number;
@@ -33,6 +35,7 @@ interface MarketsTabProps {
 export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
   const [hoveredRank, setHoveredRank] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | 'cex' | 'dex'>('all');
+  const hermesPanel = useHermesPanel();
 
   const filteredData = EXCHANGES_DATA.filter(ex => {
     if (filter === 'all') return true;
@@ -85,7 +88,14 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
               {f}
             </button>
           ))}
-          <button className="ml-auto px-3 py-1.5 rounded-md text-label font-medium bg-[color:var(--surface-2)] text-[color:var(--text-3)] hover:bg-[color:var(--surface)] transition-colors flex items-center gap-1">
+          <button
+            onClick={() => hermesPanel.openPanel({ exchanges: filteredData, asset })}
+            className="ml-auto px-3 py-1.5 rounded-md text-label font-medium bg-gradient-to-r from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_70%,transparent)] text-[color:var(--accent-ink)] hover:brightness-110 transition-all flex items-center gap-1 shadow-lg shadow-[color:var(--accent)]/20"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Ask Hermes
+          </button>
+          <button className="px-3 py-1.5 rounded-md text-label font-medium bg-[color:var(--surface-2)] text-[color:var(--text-3)] hover:bg-[color:var(--surface)] transition-colors flex items-center gap-1">
             <Zap className="w-3.5 h-3.5" />
             Filters
           </button>
@@ -251,6 +261,15 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
           </div>
         </div>
       </div>
+
+      {/* Hermes Query Panel */}
+      {hermesPanel.isOpen && (
+        <HermesQueryPanel
+          asset={asset}
+          context={hermesPanel.selectedContext}
+          onClose={hermesPanel.closePanel}
+        />
+      )}
     </div>
   );
 };
