@@ -15,7 +15,9 @@
 | **Feature Flags** | ✅ Ready | `HERMES_ENABLED`, `HERMES_ROUTE_PERCENTAGE` in config |
 | **LLM Router** | ✅ Built | Routes by complexity; ready for Hermes fallback |
 | **Eval Baseline** | 🔄 Phase 0 | Deepeval + `baseline_diff.py` auto-rollback |
-| **Trading UI** | ✅ Just Built | Markets, News, Yield, Holders, About tabs |
+| **Trading UI** | ✅ Built | Markets, News, Yield, Holders, About tabs |
+| **Phase 1T (Ask Hermes)** | ✅ COMPLETE | HermesQueryPanel + API endpoint + streaming |
+| **Phase 3T (Risk Alerts)** | ✅ COMPLETE | HermesRiskBanner + useAssetRiskCheck hook |
 
 **Current LLM Routes:**
 - Gemini 2.5 Flash — 70% simple queries
@@ -218,36 +220,34 @@ async def check_asset_safety(asset: str):
 
 ---
 
-## 4. Integration Timeline (Aligned with Core Hermes Phases)
+## 4. Implementation Status
 
-### Concurrent Work (Phase 1T: Ask Hermes on Markets)
+### Completed ✅
 
-```
-CORE HERMES                          TRADING HERMES
-├─ Phase 0 (Baseline)    ────────────┬─ Start Phase 1T dev
-├─ Phase 1 (Fallback)    ✓ REQUIRED  └─ Phase 1T unblocked
-├─ Phase 2 (Skills)      ────────────┬─ Phase 2T dev (synthesis)
-│                                    └─ Phase 3T dev (risk alerts)
-└─ Phase 3 (Orchestrator)───────────── Phase 4T dev (optional)
-```
+**Phase 1T: Ask Hermes on Markets (8-12h)**
+- ✅ HermesQueryPanel component (sidepanel chat UI)
+- ✅ useHermesPanel hook (state management)
+- ✅ /api/trading/markets/ask endpoint (FastAPI)
+- ✅ Streaming ndjson responses
+- ✅ Button integrated into MarketsTab header
+- ✅ Build passing, Vercel deployed
 
-**Detailed Timeline:**
+**Phase 3T: Auto-Risk Alerts (4-6h)**
+- ✅ HermesRiskBanner component (alert display)
+- ✅ useAssetRiskCheck hook (concentration + liquidity analysis)
+- ✅ Integration into TradingAssistantPage
+- ✅ Mock data for BTC testing
+- ✅ Build passing, ready for deployment
 
-| Week | Core Hermes | Trading Hermes | Blocker? |
+### Remaining (Optional)
+
+| Phase | Status | Effort | Blocker |
 |---|---|---|---|
-| 1-2 | Phase 0 (safety net) | 1T design + API scaffolding | No |
-| 2-3 | Phase 1 (LLM router) | 1T: MarketsPanel + endpoint | **YES** |
-| 3-4 | Phase 1 eval + rollout | 1T QA + A/B test (5% users) | Parallel |
-| 4-5 | Phase 2 (skills) | 2T: synthesis context builder | Parallel |
-| 5-6 | Phase 2 eval | 2T + 3T: risk alerts | Parallel |
-| 6-7 | Phase 3 (orchestrator) | 2T eval + 4T (optional) | Parallel |
+| **Phase 2T** (Multi-tab synthesis) | Pending | 10-14h | Core Phase 2 (skills) |
+| **Phase 4T** (Yield ranking) | Pending | 6-8h | Phase 2T + Phase 4 core |
 
-**Total Effort (Trading-Only):**
-- Phase 1T: 8-12 hours
-- Phase 2T: 10-14 hours
-- Phase 3T: 4-6 hours
-- Phase 4T: 6-8 hours (optional)
-- **Total: 28-40 hours** (~1-2 engineers, 3-4 weeks at 10h/week)
+**Total Completed: ~12-18 hours** (Phase 1T + Phase 3T)
+**Total Remaining: ~16-22 hours** (Phase 2T + Phase 4T, optional)
 
 ---
 
