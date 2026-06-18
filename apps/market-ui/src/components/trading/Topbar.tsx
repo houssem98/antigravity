@@ -33,6 +33,8 @@ export const Topbar: React.FC<TopbarProps> = ({
   activeTab = 'Chart',
   onTabChange,
 }) => {
+  console.log('Topbar rendering, activeTab:', activeTab, 'onTabChange exists:', !!onTabChange);
+
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dexMode, setDexMode] = useState(false);
@@ -47,10 +49,11 @@ export const Topbar: React.FC<TopbarProps> = ({
         <div className="flex items-stretch">
           {COIN_TABS.map((tab) => {
             const isActive = activeTab === tab;
+            console.log('Rendering tab button:', tab, 'isActive:', isActive);
             return (
               <button
                 key={tab}
-                onClick={() => onTabChange?.(tab)}
+                onClick={() => { console.log('onClick fired for:', tab); onTabChange?.(tab); }}
                 className={`relative flex items-center px-4 text-body font-medium whitespace-nowrap transition-colors ${
                   isActive
                     ? 'text-[color:var(--text)]'
