@@ -46,6 +46,48 @@ export default function TradingAssistantPage() {
   const [currentAsset, setCurrentAsset] = useState<string>('BTC');
   const [currentTimeframe, setCurrentTimeframe] = useState<string>('1D');
   const [activeTab, setActiveTab] = useState<string>('Chart');
+
+  const renderTabContent = () => {
+    switch(activeTab) {
+      case 'Markets': return <Markets onAssetSelect={(a) => { setCurrentAsset(a); setActiveTab('Chart'); }} />;
+      case 'News': return <NewsTab asset={currentAsset} />;
+      case 'Yield': return <YieldTab asset={currentAsset} />;
+      case 'Holders': return <HoldersTab asset={currentAsset} />;
+      case 'About': return <AboutTab asset={currentAsset} />;
+      case 'Chart':
+      default:
+        return (
+          <div className="flex flex-row flex-1 overflow-hidden relative">
+            <div className="shrink-0">
+              <Sidebar onToolClick={handleToolClick} activeTool={activeTool} activeIndicators={activeIndicators} onIndicatorToggle={handleIndicatorToggle} />
+            </div>
+            <div className="flex-1 relative min-w-0">
+              <Chart ref={chartRef} asset={currentAsset} timeframe={currentTimeframe} colors={chartColors} activeIndicators={activeIndicators} activeTool={activeTool} drawingPoints={drawingPoints} drawingConfig={drawingConfig} onChartClick={handleChartClick} />
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
+                <div className="rounded-sm p-1.5 flex items-center gap-2 cursor-text transition-colors bg-[color:var(--surface)] border border-[color:var(--line-strong)] hover:border-[color:var(--accent)]" onClick={() => setIsAssistantOpen(true)}>
+                  <div className="w-7 h-7 rounded-sm flex items-center justify-center shrink-0 bg-[color:var(--accent)] glint chrome">
+                    <Sparkles className="w-3.5 h-3.5 text-[color:var(--accent-ink)]" />
+                  </div>
+                  <input type="text" placeholder="Ask AI about this chart..." className="flex-1 bg-transparent text-body focus:outline-none cursor-text text-[color:var(--text)] placeholder:text-[color:var(--text-3)]" onFocus={() => setIsAssistantOpen(true)} readOnly />
+                  <div className="text-label px-1.5 py-0.5 rounded-sm font-mono shrink-0 bg-[color:var(--surface-2)] text-[color:var(--text-3)] border border-[color:var(--line)]">Shift+/</div>
+                </div>
+              </div>
+              {activeTool && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
+                  <div className="px-3 py-1.5 rounded-sm flex items-center gap-3 text-body bg-[color:var(--surface-2)] border border-[color:var(--line-strong)] text-[color:var(--text)]">
+                    <span>{drawingPoints.length === 0 ? `Click to set first point for ${activeTool}` : `Click to set point ${drawingPoints.length + 1} for ${activeTool}`}</span>
+                    <div className="w-px h-4 bg-[color:var(--line)]" />
+                    <button onClick={() => { setActiveTool(null); setDrawingPoints([]); }} className="text-[color:var(--text-3)] hover:text-[color:var(--text)]">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+    }
+  };
   const [chartColors, setChartColors] = useState<ChartColors>({
     upColor: '#00E676',
     downColor: '#FF1744',
@@ -474,13 +516,8 @@ export default function TradingAssistantPage() {
                 onTabChange={setActiveTab}
               />
 
-              {/* Tab router - switch statement */}
-              {activeTab === 'Chart' && <div className="flex flex-row flex-1 overflow-hidden relative"><div className="shrink-0"><Sidebar onToolClick={handleToolClick} activeTool={activeTool} activeIndicators={activeIndicators} onIndicatorToggle={handleIndicatorToggle} /></div><div className="flex-1 relative min-w-0"><Chart ref={chartRef} asset={currentAsset} timeframe={currentTimeframe} colors={chartColors} activeIndicators={activeIndicators} activeTool={activeTool} drawingPoints={drawingPoints} drawingConfig={drawingConfig} onChartClick={handleChartClick} /><div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20"><div className="rounded-sm p-1.5 flex items-center gap-2 cursor-text transition-colors bg-[color:var(--surface)] border border-[color:var(--line-strong)] hover:border-[color:var(--accent)]" onClick={() => setIsAssistantOpen(true)}><div className="w-7 h-7 rounded-sm flex items-center justify-center shrink-0 bg-[color:var(--accent)] glint chrome"><Sparkles className="w-3.5 h-3.5 text-[color:var(--accent-ink)]" /></div><input type="text" placeholder="Ask AI about this chart..." className="flex-1 bg-transparent text-body focus:outline-none cursor-text text-[color:var(--text)] placeholder:text-[color:var(--text-3)]" onFocus={() => setIsAssistantOpen(true)} readOnly /><div className="text-label px-1.5 py-0.5 rounded-sm font-mono shrink-0 bg-[color:var(--surface-2)] text-[color:var(--text-3)] border border-[color:var(--line)]">Shift+/</div></div></div>{activeTool && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2"><div className="px-3 py-1.5 rounded-sm flex items-center gap-3 text-body bg-[color:var(--surface-2)] border border-[color:var(--line-strong)] text-[color:var(--text)]"><span>{drawingPoints.length === 0 ? `Click to set first point for ${activeTool}` : `Click to set point ${drawingPoints.length + 1} for ${activeTool}`}</span><div className="w-px h-4 bg-[color:var(--line)]" /><button onClick={() => { setActiveTool(null); setDrawingPoints([]); }} className="text-[color:var(--text-3)] hover:text-[color:var(--text)]"><X className="w-3.5 h-3.5" /></button></div></div>}</div></div>}
-              {activeTab === 'Markets' && <Markets onAssetSelect={(asset) => { setCurrentAsset(asset); setActiveTab('Chart'); }} />}
-              {activeTab === 'News' && <NewsTab asset={currentAsset} />}
-              {activeTab === 'Yield' && <YieldTab asset={currentAsset} />}
-              {activeTab === 'Holders' && <HoldersTab asset={currentAsset} />}
-              {activeTab === 'About' && <AboutTab asset={currentAsset} />}
+              {/* Render active tab content */}
+              {renderTabContent()}
               </div>
             </div>
 
