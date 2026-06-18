@@ -475,10 +475,6 @@ export default function TradingAssistantPage() {
                 onTabChange={(tab) => { console.log('setActiveTab:', tab); setActiveTab(tab); }}
               />
 
-              {/* Tab content - DEBUG */}
-              <div className="fixed top-20 left-4 bg-red-500 text-white p-4 z-50 text-h2 font-bold">
-                ACTIVE TAB: {activeTab}
-              </div>
               {activeTab === 'Chart' ? (
                 <div className="flex flex-row flex-1 overflow-hidden relative">
                   <div className="shrink-0">
@@ -509,9 +505,7 @@ export default function TradingAssistantPage() {
                   </div>
                 </div>
               ) : activeTab === 'Markets' ? (
-                <div className="flex-1 flex items-center justify-center bg-[color:var(--bg)]">
-                  <div className="text-h2 font-bold text-[color:var(--accent)]">MARKETS TAB WORKS!</div>
-                </div>
+                <MarketsTab asset={currentAsset} />
               ) : activeTab === 'News' ? (
                 <NewsTab asset={currentAsset} />
               ) : activeTab === 'Yield' ? (
