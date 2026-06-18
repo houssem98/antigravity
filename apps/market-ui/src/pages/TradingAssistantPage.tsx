@@ -522,8 +522,8 @@ export default function TradingAssistantPage() {
                 <AboutTab asset={currentAsset} />
               ) : (
                 <div className="flex-1 text-center text-[color:var(--text-3)] p-8">Unknown tab</div>
-              )}
-              </div>
+              )
+              }
             </div>
 
             {/* Right: Community / Twitter tracker */}
