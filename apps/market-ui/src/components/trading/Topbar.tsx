@@ -38,8 +38,6 @@ export const Topbar: React.FC<TopbarProps> = ({
   const [dexMode, setDexMode] = useState(false);
   const [showAllTf, setShowAllTf] = useState(false);
 
-  console.log('Topbar props:', { activeTab, onTabChange: !!onTabChange });
-
   const visibleTf = TIMEFRAMES.slice(0, 3);
 
   return (
@@ -52,10 +50,7 @@ export const Topbar: React.FC<TopbarProps> = ({
             return (
               <button
                 key={tab}
-                onClick={() => {
-                  console.log('Button clicked, tab:', tab, 'onTabChange:', typeof onTabChange);
-                  onTabChange?.(tab);
-                }}
+                onClick={() => onTabChange?.(tab)}
                 className={`relative flex items-center px-4 text-body font-medium whitespace-nowrap transition-colors ${
                   isActive
                     ? 'text-[color:var(--text)]'
