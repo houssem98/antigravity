@@ -475,6 +475,9 @@ export default function TradingAssistantPage() {
               />
 
               {/* Tab content router */}
+              <div style={{ position: 'absolute', top: '200px', right: '20px', background: 'red', color: 'white', padding: '8px', borderRadius: '4px', zIndex: 9999, fontSize: '12px' }}>
+                DEBUG: {activeTab}
+              </div>
               {activeTab === 'Chart' && (
               <div className="flex flex-row flex-1 overflow-hidden relative">
                 <div className="shrink-0">
