@@ -46,6 +46,12 @@ export default function TradingAssistantPage() {
   const [currentAsset, setCurrentAsset] = useState<string>('BTC');
   const [currentTimeframe, setCurrentTimeframe] = useState<string>('1D');
   const [activeTab, setActiveTab] = useState<string>('Chart');
+
+  const handleTabChange = (tab: string) => {
+    console.log('handleTabChange called with:', tab);
+    setActiveTab(tab);
+    console.log('activeTab state set to:', tab);
+  };
   const [chartColors, setChartColors] = useState<ChartColors>({
     upColor: '#00E676',
     downColor: '#FF1744',
@@ -323,6 +329,8 @@ export default function TradingAssistantPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  console.log('TradingAssistantPage render - activeTab:', activeTab);
+
   return (
     <div className="flex h-screen w-full font-sans overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-2)]">
       {/* Persistent Left Nav Sidebar */}
@@ -471,7 +479,7 @@ export default function TradingAssistantPage() {
                 isOrderBookOpen={isOrderBookOpen}
                 onToggleOrderBook={() => setIsOrderBookOpen(!isOrderBookOpen)}
                 activeTab={activeTab}
-                onTabChange={setActiveTab}
+                onTabChange={handleTabChange}
               />
 
               {/* Tab content router */}
