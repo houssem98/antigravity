@@ -506,7 +506,9 @@ export default function TradingAssistantPage() {
                   </div>
                 </div>
               ) : activeTab === 'Markets' ? (
-                <Markets onAssetSelect={(a) => { setCurrentAsset(a); setActiveTab('Chart'); }} />
+                <div className="flex-1 flex items-center justify-center bg-[color:var(--bg)]">
+                  <div className="text-h2 font-bold text-[color:var(--accent)]">MARKETS TAB WORKS!</div>
+                </div>
               ) : activeTab === 'News' ? (
                 <NewsTab asset={currentAsset} />
               ) : activeTab === 'Yield' ? (
