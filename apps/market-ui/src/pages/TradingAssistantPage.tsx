@@ -475,7 +475,10 @@ export default function TradingAssistantPage() {
                 onTabChange={(tab) => { console.log('setActiveTab:', tab); setActiveTab(tab); }}
               />
 
-              {/* Tab content */}
+              {/* Tab content - DEBUG */}
+              <div className="fixed top-20 left-4 bg-red-500 text-white p-4 z-50 text-h2 font-bold">
+                ACTIVE TAB: {activeTab}
+              </div>
               {activeTab === 'Chart' ? (
                 <div className="flex flex-row flex-1 overflow-hidden relative">
                   <div className="shrink-0">
