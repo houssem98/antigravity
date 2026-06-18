@@ -474,10 +474,9 @@ export default function TradingAssistantPage() {
                 onTabChange={setActiveTab}
               />
 
-              {/* Chart area or Tab content */}
-              {activeTab === 'Chart' ? (
+              {/* Tab content router */}
+              {activeTab === 'Chart' && (
               <div className="flex flex-row flex-1 overflow-hidden relative">
-                {/* Drawing tools sidebar */}
                 <div className="shrink-0">
                   <Sidebar
                     onToolClick={handleToolClick}
@@ -486,8 +485,6 @@ export default function TradingAssistantPage() {
                     onIndicatorToggle={handleIndicatorToggle}
                   />
                 </div>
-
-                {/* Chart */}
                 <div className="flex-1 relative min-w-0">
                   <Chart
                     ref={chartRef}
@@ -500,8 +497,6 @@ export default function TradingAssistantPage() {
                     drawingConfig={drawingConfig}
                     onChartClick={handleChartClick}
                   />
-
-                  {/* Ask AI bar */}
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[480px] max-w-[90%] z-20">
                     <div
                       className="rounded-sm p-1.5 flex items-center gap-2 cursor-text transition-colors bg-[color:var(--surface)] border border-[color:var(--line-strong)] hover:border-[color:var(--accent)]"
@@ -520,8 +515,6 @@ export default function TradingAssistantPage() {
                       <div className="text-label px-1.5 py-0.5 rounded-sm font-mono shrink-0 bg-[color:var(--surface-2)] text-[color:var(--text-3)] border border-[color:var(--line)]">Shift+/</div>
                     </div>
                   </div>
-
-                  {/* Active tool toast */}
                   {activeTool && (
                     <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
                       <div className="px-3 py-1.5 rounded-sm flex items-center gap-3 text-body bg-[color:var(--surface-2)] border border-[color:var(--line-strong)] text-[color:var(--text)]">
@@ -539,24 +532,12 @@ export default function TradingAssistantPage() {
                   )}
                 </div>
               </div>
-              ) : activeTab === 'Markets' ? (
-                <Markets onAssetSelect={(asset) => {
-                  setCurrentAsset(asset);
-                  setActiveTab('Chart');
-                }} />
-              ) : activeTab === 'News' ? (
-                <NewsTab asset={currentAsset} />
-              ) : activeTab === 'Yield' ? (
-                <YieldTab asset={currentAsset} />
-              ) : activeTab === 'Holders' ? (
-                <HoldersTab asset={currentAsset} />
-              ) : activeTab === 'About' ? (
-                <AboutTab asset={currentAsset} />
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-[color:var(--text-3)]">
-                  Tab content coming soon
-                </div>
               )}
+              {activeTab === 'Markets' && <Markets onAssetSelect={(asset) => { setCurrentAsset(asset); setActiveTab('Chart'); }} />}
+              {activeTab === 'News' && <NewsTab asset={currentAsset} />}
+              {activeTab === 'Yield' && <YieldTab asset={currentAsset} />}
+              {activeTab === 'Holders' && <HoldersTab asset={currentAsset} />}
+              {activeTab === 'About' && <AboutTab asset={currentAsset} />}
               </div>
             </div>
 
