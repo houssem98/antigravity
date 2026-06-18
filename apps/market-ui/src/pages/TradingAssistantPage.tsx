@@ -20,6 +20,7 @@ import { NewsTab } from '../components/trading/tabs/NewsTab';
 import { HoldersTab } from '../components/trading/tabs/HoldersTab';
 import { YieldTab } from '../components/trading/tabs/YieldTab';
 import { AboutTab } from '../components/trading/tabs/AboutTab';
+import { MarketsTab } from '../components/trading/tabs/MarketsTab';
 
 import { X, MessageSquare, Search, Settings, PieChart, Star, ArrowLeft, Zap, BarChart3, History, Building2, Database, TrendingUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
