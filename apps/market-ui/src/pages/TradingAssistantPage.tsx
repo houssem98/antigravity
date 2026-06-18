@@ -513,7 +513,7 @@ export default function TradingAssistantPage() {
                 isOrderBookOpen={isOrderBookOpen}
                 onToggleOrderBook={() => setIsOrderBookOpen(!isOrderBookOpen)}
                 activeTab={activeTab}
-                onTabChange={setActiveTab}
+                onTabChange={(tab) => { console.log('setActiveTab:', tab); setActiveTab(tab); }}
               />
 
               {/* Render active tab content */}
