@@ -650,8 +650,6 @@ export default function GridView() {
                                             })}
                                         </tr>
                                     )}
-                                        ))
-                                    )}
                                 </tbody>
                             </table>
                         </div>
