@@ -14,7 +14,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.config import settings
 from app.api.routes import search, documents, entities, health, usage, workspaces, feedback
-from app.api.routes import grid_search, analytics, sso, auth as auth_routes, billing
+from app.api.routes import grid_search, analytics, sso, auth as auth_routes, billing, trading
 from app.db.qdrant import qdrant_client
 from app.db.elasticsearch import es_client
 from app.db.neo4j import neo4j_driver
@@ -324,6 +324,7 @@ app.include_router(billing.router)
 from app.api.routes import claude, hermes
 app.include_router(claude.router, prefix="/v1", tags=["Claude Managed Agents"])
 app.include_router(hermes.router, prefix="/v1", tags=["Hermes Agent"])
+app.include_router(trading.router, prefix="/api", tags=["Trading (Phase 1T)"])
 from app.api.routes import forecast
 app.include_router(forecast.router, tags=["Forecast (Kronos)"])
 
