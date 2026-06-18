@@ -475,6 +475,10 @@ export default function TradingAssistantPage() {
               />
 
               {/* Tab content router */}
+              <div className="flex flex-col flex-1 overflow-hidden">
+                <div style={{ padding: '20px', background: '#333', color: '#0f0', fontFamily: 'monospace' }}>
+                  Current Tab: {activeTab}
+                </div>
               {activeTab === 'Chart' && (
               <div className="flex flex-row flex-1 overflow-hidden relative">
                 <div className="shrink-0">
@@ -538,6 +542,7 @@ export default function TradingAssistantPage() {
               {activeTab === 'Yield' && <YieldTab asset={currentAsset} />}
               {activeTab === 'Holders' && <HoldersTab asset={currentAsset} />}
               {activeTab === 'About' && <AboutTab asset={currentAsset} />}
+              </div>
               </div>
             </div>
 
