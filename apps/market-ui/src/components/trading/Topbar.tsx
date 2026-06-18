@@ -50,7 +50,10 @@ export const Topbar: React.FC<TopbarProps> = ({
             return (
               <button
                 key={tab}
-                onClick={() => onTabChange?.(tab)}
+                onClick={() => {
+                  console.log('Tab clicked:', tab);
+                  onTabChange?.(tab);
+                }}
                 className={`relative flex items-center px-4 text-body font-medium whitespace-nowrap transition-colors ${
                   isActive
                     ? 'text-[color:var(--text)]'
