@@ -618,7 +618,7 @@ export default function GridView() {
                                                 );
                                             })}
                                         </tr>
-                                    ))}
+                                    )))}
                                     {/* Synthesis row (comparison) */}
                                     {state.def.prompts.some(p => p.synthesis) && (
                                         <tr className="bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)] border-t-2 border-[color:var(--accent)]">
