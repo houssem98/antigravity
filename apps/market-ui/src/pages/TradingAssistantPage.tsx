@@ -21,6 +21,8 @@ import { HoldersTab } from '../components/trading/tabs/HoldersTab';
 import { YieldTab } from '../components/trading/tabs/YieldTab';
 import { AboutTab } from '../components/trading/tabs/AboutTab';
 import { MarketsTab } from '../components/trading/tabs/MarketsTab';
+import { HermesRiskBanner } from '../components/trading/HermesRiskBanner';
+import { useAssetRiskCheck } from '../hooks/useAssetRiskCheck';
 
 import { X, MessageSquare, Search, Settings, PieChart, Star, ArrowLeft, Zap, BarChart3, History, Building2, Database, TrendingUp, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -64,7 +66,20 @@ export default function TradingAssistantPage() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  
+  // Phase 3T: Risk analysis for current asset
+  const mockHolders = currentAsset === 'BTC' ? [
+    { percentage: 4.25 },
+    { percentage: 3.12 },
+    { percentage: 2.89 },
+    { percentage: 2.45 },
+    { percentage: 2.12 },
+  ] : [];
+  const mockMarkets = currentAsset === 'BTC' ? [
+    { depth: '$16,614,755', volumePercent: '3.95%' },
+  ] : [];
+
+  const riskCheck = useAssetRiskCheck(currentAsset, mockHolders, mockMarkets);
+
   const [drawingConfig] = useState({
     color: '#2962FF',
     lineWidth: 2,
@@ -474,6 +489,17 @@ export default function TradingAssistantPage() {
                 activeTab={activeTab}
                 onTabChange={(tab) => { console.log('setActiveTab:', tab); setActiveTab(tab); }}
               />
+
+              {/* Phase 3T: Risk Alert Banner */}
+              {riskCheck.hasAlerts && activeTab === 'Chart' && (
+                <div className="px-4 py-3 border-b border-[color:var(--line)] bg-gradient-to-r from-[color:var(--surface)] to-[color:color-mix(in_oklch,var(--accent)_2%,var(--surface))]">
+                  <HermesRiskBanner
+                    alerts={riskCheck.alerts}
+                    isLoading={riskCheck.isLoading}
+                    onDismiss={riskCheck.dismissAlert}
+                  />
+                </div>
+              )}
 
               {activeTab === 'Chart' ? (
                 <div className="flex flex-row flex-1 overflow-hidden relative">
