@@ -197,7 +197,7 @@ export default function GridView() {
         const prompt = state.def.prompts.find(p => p.id === promptId);
         if (!prompt) return;
 
-        setState(s => updateCell(s, ticker, promptId, { status: 'running' }));
+        setState(s => s ? updateCell(s, ticker, promptId, { status: 'running' }) : s);
 
         const deps: CellRunnerDeps = {
             callLLM: (p, signal) => callLLMProxy(p, selectedModel, signal),
@@ -216,13 +216,13 @@ export default function GridView() {
                 };
             }
             const cell = await runGridCell(def, ticker, promptId, deps, undefined, state);
-            setState(s => updateCell(s, ticker, promptId, cell));
+            setState(s => s ? updateCell(s, ticker, promptId, cell) : s);
             setEditingCell(null);
         } catch (e: any) {
-            setState(s => updateCell(s, ticker, promptId, {
+            setState(s => s ? updateCell(s, ticker, promptId, {
                 status: 'error',
                 error: e?.message ?? 'Unknown error',
-            }));
+            }) : s);
         }
     };
 
@@ -282,7 +282,7 @@ export default function GridView() {
 
     // Sort tickers based on current sort setting
     const getSortedTickers = () => {
-        if (!state || !sortBy) return state.def.tickers;
+        if (!state || !sortBy) return state?.def.tickers ?? [];
 
         const tickers = [...state.def.tickers];
         const collator = new Intl.Collator();
