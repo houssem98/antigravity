@@ -1,126 +1,107 @@
 import React, { useState, useEffect } from 'react';
-import { ExternalLink, Loader, Calendar, User } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface NewsItem {
   id: string;
   title: string;
-  description: string;
-  url: string;
+  image: string;
   source: string;
-  published_at: string;
-  image?: string;
+  time: string;
 }
+
+const MOCK_NEWS: NewsItem[] = [
+  {
+    id: '1',
+    title: "Strategy's STRC Drops to $91.7 as Bitcoin Buys Spook Investors",
+    image: 'https://via.placeholder.com/300x180?text=Bitcoin+News',
+    source: 'CoinMarketCap',
+    time: '7 hours ago'
+  },
+  {
+    id: '2',
+    title: 'Bitcoin Covenants Part 2: OP_CHECKTEMPLATEVERIFY',
+    image: 'https://via.placeholder.com/300x180?text=BTC+Technical',
+    source: 'Cointelegraph.com News (Full)',
+    time: '10 hours ago'
+  },
+  {
+    id: '3',
+    title: 'Understanding the BTC/USDT Spot CVD Chart: A Trader\'s Guide to Order Flow',
+    image: 'https://via.placeholder.com/300x180?text=Trading+Guide',
+    source: 'BitcoinWorld',
+    time: '15 hours ago'
+  },
+  {
+    id: '4',
+    title: '10x Research: BlackRock\'s New Bitcoin Income ETF Is Structurally Set to Underperform BTC',
+    image: 'https://via.placeholder.com/300x180?text=Research',
+    source: 'BitcoinWorld',
+    time: '18 hours ago'
+  },
+];
 
 interface NewsTabProps {
   asset: string;
 }
 
 export const NewsTab: React.FC<NewsTabProps> = ({ asset }) => {
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchNews = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch(
-          `https://api.coingecko.com/api/v3/news?language=en`
-        );
-        if (!response.ok) throw new Error('Failed to fetch news');
-        const data = await response.json();
-
-        // Filter news by asset name or use all news
-        const filtered = data.data
-          .slice(0, 20)
-          .map((item: any) => ({
-            id: item.id,
-            title: item.title,
-            description: item.description || item.title,
-            url: item.url,
-            source: item.source || 'News',
-            published_at: item.published_at,
-            image: item.image?.thumb || item.image?.small,
-          }));
-
-        setNews(filtered);
-      } catch (error) {
-        console.error('Error fetching news:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchNews();
-  }, [asset]);
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffHours < 1) return 'Just now';
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader className="w-6 h-6 text-[color:var(--text-3)] animate-spin" />
-      </div>
-    );
-  }
+  const [filter, setFilter] = useState<'top' | 'latest' | 'analysis'>('top');
 
   return (
-    <div className="p-4 space-y-3 overflow-y-auto max-h-[calc(100vh-200px)]">
-      {news.length === 0 ? (
-        <div className="py-12 text-center text-[color:var(--text-3)]">
-          No news available
+    <div className="flex flex-col flex-1 overflow-hidden bg-[color:var(--bg)]">
+      {/* Header with filters */}
+      <div className="p-4 border-b border-[color:var(--line)] flex items-center gap-3">
+        <span className="text-body font-semibold text-[color:var(--text)]">{asset} News</span>
+        <div className="flex gap-2 ml-auto">
+          {(['top', 'latest', 'analysis'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-3 py-1.5 rounded-sm text-label font-medium capitalize transition-colors ${
+                filter === f
+                  ? 'bg-[color:var(--accent)] text-[color:var(--accent-ink)]'
+                  : 'bg-[color:var(--surface)] text-[color:var(--text-3)] hover:text-[color:var(--text)]'
+              }`}
+            >
+              {f === 'analysis' ? 'CMC Daily Analysis' : f}
+            </button>
+          ))}
         </div>
-      ) : (
-        news.map((item, idx) => (
-          <motion.a
-            key={item.id}
-            href={item.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: idx * 0.05 }}
-            className="flex gap-3 p-3 bg-[color:var(--surface)] border border-[color:var(--line)] hover:border-[color:var(--line-strong)] rounded-sm transition-colors group cursor-pointer"
-          >
-            {item.image && (
-              <div className="shrink-0 w-20 h-20 bg-[color:var(--bg)] rounded-sm overflow-hidden border border-[color:var(--line)]">
+      </div>
+
+      {/* News grid */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+          {MOCK_NEWS.map((item, idx) => (
+            <motion.a
+              key={item.id}
+              href="#"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.05 }}
+              className="group cursor-pointer rounded-sm overflow-hidden border border-[color:var(--line)] hover:border-[color:var(--line-strong)] transition-colors"
+            >
+              <div className="aspect-video bg-[color:var(--surface)] overflow-hidden">
                 <img
                   src={item.image}
                   alt={item.title}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                 />
               </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <h3 className="text-body font-semibold text-[color:var(--text)] group-hover:text-[color:var(--accent)] transition-colors line-clamp-2">
-                {item.title}
-              </h3>
-              <p className="text-label text-[color:var(--text-3)] mt-1 line-clamp-2">
-                {item.description}
-              </p>
-              <div className="flex items-center gap-3 mt-2 text-label text-[color:var(--text-4)]">
-                <div className="flex items-center gap-1">
-                  <Calendar className="w-3 h-3" />
-                  {formatDate(item.published_at)}
+              <div className="p-3 bg-[color:var(--surface)]">
+                <h3 className="text-body font-semibold text-[color:var(--text)] group-hover:text-[color:var(--accent)] transition-colors line-clamp-2 mb-2">
+                  {item.title}
+                </h3>
+                <div className="flex items-center justify-between text-label text-[color:var(--text-3)]">
+                  <span>{item.source}</span>
+                  <span>{item.time}</span>
                 </div>
-                <span className="text-[color:var(--text-3)]">{item.source}</span>
-                <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
               </div>
-            </div>
-          </motion.a>
-        ))
-      )}
+            </motion.a>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
