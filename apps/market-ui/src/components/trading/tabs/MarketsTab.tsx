@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { TrendingUp, BarChart3, Zap, Sparkles } from 'lucide-react';
 import { HermesQueryPanel } from '../HermesQueryPanel';
-import { useHermesPanel } from '../../hooks/useHermesPanel';
+import { useHermesPanel } from '../../../hooks/useHermesPanel';
 
 interface Exchange {
   rank: number;
