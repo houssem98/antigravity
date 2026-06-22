@@ -465,6 +465,12 @@ async function getGravityToken(): Promise<string | null> {
     return (await getSession())?.access_token ?? null;
 }
 
+// Authenticated JSON fetch against gravity-api. Attaches the bearer token,
+// transparently refreshes + retries on 401, and clears the session on a hard
+// auth failure. Returns parsed JSON (or null for 204). The single entry point
+// for gravity-api data endpoints (user library, etc.).
+export const gravityApi = (path: string, init?: RequestInit) => gravityAuthFetch(path, init);
+
 export const mfaEnroll = (): Promise<MfaEnrollResponse> =>
     gravityAuthFetch('/v1/auth/mfa/enroll', { method: 'POST' });
 
