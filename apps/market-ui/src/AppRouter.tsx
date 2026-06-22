@@ -5,29 +5,32 @@
 // any leftover Supabase magic-link / OAuth hash fragments on mount so tokens
 // don't linger in the URL bar or browser history.
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { getSession, startSessionManager, subscribeAuth } from './services/supabase';
 import AppLayout from './components/AppLayout';
 import LandingPage from './pages/LandingPage';
-import AuthPage from './pages/AuthPage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import VerifyEmailPage from './pages/VerifyEmailPage';
-import MfaSetupPage from './pages/MfaSetupPage';
 
-import DashboardPage from './pages/DashboardPage';
-import SettingsPage from './pages/SettingsPage';
-import HistoryPage from './pages/HistoryPage';
-import ReportViewerPage from './pages/ReportViewerPage';
-import SearchPage from './pages/SearchPage';
-import CompanyPage from './pages/CompanyPage';
-import DocumentsPage from './pages/DocumentsPage';
-import TradingAssistantPage from './pages/TradingAssistantPage';
-import InvestorsPage from './pages/InvestorsPage';
-import BillingPage from './pages/BillingPage';
-import BillingSuccessPage from './pages/BillingSuccessPage';
-import BillingCancelPage from './pages/BillingCancelPage';
-import AdminBillingPage from './pages/AdminBillingPage';
+// Route components are code-split so the landing/auth first paint no longer
+// pulls the heavy app pages (charts, PDF renderer, deep-research engine) into
+// the initial bundle. Each route loads its own chunk on navigation.
+const AuthPage = lazy(() => import('./pages/AuthPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage'));
+const MfaSetupPage = lazy(() => import('./pages/MfaSetupPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+const ReportViewerPage = lazy(() => import('./pages/ReportViewerPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const CompanyPage = lazy(() => import('./pages/CompanyPage'));
+const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
+const TradingAssistantPage = lazy(() => import('./pages/TradingAssistantPage'));
+const InvestorsPage = lazy(() => import('./pages/InvestorsPage'));
+const BillingPage = lazy(() => import('./pages/BillingPage'));
+const BillingSuccessPage = lazy(() => import('./pages/BillingSuccessPage'));
+const BillingCancelPage = lazy(() => import('./pages/BillingCancelPage'));
+const AdminBillingPage = lazy(() => import('./pages/AdminBillingPage'));
 
 type SessionLike = { user?: { id?: string; email?: string } } | null;
 
@@ -98,13 +101,13 @@ export default function AppRouter() {
         };
     }, []);
 
-    if (loading) {
-        return (
-            <div className="min-h-screen bg-[color:var(--bg)] flex items-center justify-center">
-                <div className="w-6 h-6 rounded-full border-2 border-[color:var(--accent)] border-t-transparent animate-spin" />
-            </div>
-        );
-    }
+    const routeFallback = (
+        <div className="min-h-screen bg-[color:var(--bg)] flex items-center justify-center">
+            <div className="w-6 h-6 rounded-full border-2 border-[color:var(--accent)] border-t-transparent animate-spin" />
+        </div>
+    );
+
+    if (loading) return routeFallback;
 
     return (
         <>
@@ -124,6 +127,7 @@ export default function AppRouter() {
                     </button>
                 </div>
             )}
+            <Suspense fallback={routeFallback}>
             <Routes>
                 {/* Public */}
                 <Route path="/" element={<LandingPage />} />
@@ -169,6 +173,7 @@ export default function AppRouter() {
                     <Route path="/admin/billing" element={<AdminBillingPage />} />
                 </Route>
             </Routes>
+            </Suspense>
         </>
     );
 }

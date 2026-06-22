@@ -18,6 +18,22 @@ export default defineConfig({
       'pako',
     ],
   },
+  build: {
+    // Split the heaviest libraries into their own long-cached chunks so they
+    // load only on routes that need them and don't bloat the initial bundle.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'pdf': ['@react-pdf/renderer'],
+          'charts': ['recharts', 'lightweight-charts'],
+          'markdown': ['react-markdown'],
+          'supabase': ['@supabase/supabase-js'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 900,
+  },
   server: {
     proxy: {
       '/api/history': 'http://localhost:3002',
