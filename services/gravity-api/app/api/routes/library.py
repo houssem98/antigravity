@@ -22,7 +22,7 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routes.auth import _current_user
 from app.core.security.auth_store import UserRecord
@@ -76,6 +76,19 @@ CREATE TABLE IF NOT EXISTS lib_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_lib_reports_user
     ON lib_reports (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS lib_grid_runs (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    def          JSONB NOT NULL DEFAULT '{}',
+    cells        JSONB NOT NULL DEFAULT '{}',
+    started_at   TEXT,
+    completed_at TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lib_grid_runs_user
+    ON lib_grid_runs (user_id, created_at DESC);
 """
 
 
@@ -330,4 +343,105 @@ async def delete_report(report_id: str, user: UserRecord = Depends(_current_user
         await conn.execute(
             "DELETE FROM lib_reports WHERE id = $1 AND user_id = $2",
             report_id, user.user_id,
+        )
+
+
+# ─── Research grid runs ───────────────────────────────────────────────────────
+# `def` is a Python keyword, so the request model aliases it; grid responses are
+# plain dicts to preserve the `def` key the frontend expects.
+
+class SaveGridRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    name: str = ""
+    def_: dict = Field(default_factory=dict, alias="def")
+    cells: dict = Field(default_factory=dict)
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class SaveGridResponse(BaseModel):
+    id: Optional[str] = None
+
+
+def _grid_row_to_dict(r) -> dict:
+    return {
+        "id": str(r["id"]),
+        "name": r["name"],
+        "def": json.loads(r["def"]),
+        "cells": json.loads(r["cells"]),
+        "started_at": r["started_at"],
+        "completed_at": r["completed_at"],
+        "created_at": r["created_at"].isoformat(),
+    }
+
+
+@router.get("/grids")
+async def list_grids(limit: int = 20, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return []
+    limit = max(1, min(limit, 100))
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, def, cells, started_at, completed_at, created_at "
+            "FROM lib_grid_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+            user.user_id, limit,
+        )
+    return [_grid_row_to_dict(r) for r in rows]
+
+
+@router.post("/grids", response_model=SaveGridResponse)
+async def save_grid(req: SaveGridRequest, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return SaveGridResponse(id=None)
+    async with pool.acquire() as conn:
+        new_id = await conn.fetchval(
+            "INSERT INTO lib_grid_runs (user_id, name, def, cells, started_at, completed_at) "
+            "VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6) RETURNING id",
+            user.user_id, req.name, json.dumps(req.def_), json.dumps(req.cells),
+            req.started_at, req.completed_at,
+        )
+    return SaveGridResponse(id=str(new_id))
+
+
+@router.get("/grids/latest")
+async def latest_grid(user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT id, name, def, cells, started_at, completed_at, created_at "
+            "FROM lib_grid_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+            user.user_id,
+        )
+    return _grid_row_to_dict(r) if r is not None else None
+
+
+@router.get("/grids/{grid_id}")
+async def get_grid(grid_id: str, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="grid not found")
+    async with pool.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT id, name, def, cells, started_at, completed_at, created_at "
+            "FROM lib_grid_runs WHERE id = $1 AND user_id = $2",
+            grid_id, user.user_id,
+        )
+    if r is None:
+        raise HTTPException(status_code=404, detail="grid not found")
+    return _grid_row_to_dict(r)
+
+
+@router.delete("/grids/{grid_id}", status_code=204)
+async def delete_grid(grid_id: str, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM lib_grid_runs WHERE id = $1 AND user_id = $2",
+            grid_id, user.user_id,
         )

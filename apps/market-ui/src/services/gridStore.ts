@@ -1,7 +1,11 @@
-// gridStore — Supabase persistence for Research Grid runs.
-// See migration 20260418000001_grid_runs.sql for schema.
+// gridStore — Research Grid run persistence.
+//
+// Backed by gravity-api's own Postgres (/v1/library/grids), keyed by the gravity
+// user id. Replaces the previous Supabase-direct access to grid_runs, which was
+// dead in gravity-api auth mode (uuid FK to auth.users). Degrades gracefully:
+// with no auth session, reads return empty/null and saves return null.
 
-import { supabase } from './supabase';
+import { gravityApi } from './supabase';
 import type { GridDef, GridState, GridCell } from './gridResearch';
 
 export interface SavedGridRow {
@@ -15,65 +19,56 @@ export interface SavedGridRow {
 }
 
 export async function saveGridRun(state: GridState): Promise<string | null> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return null;
-
-    const { data, error } = await supabase.from('grid_runs').insert({
-        user_id: session.user.id,
-        name: state.def.name,
-        def: state.def,
-        cells: state.cells,
-        started_at: state.startedAt ?? null,
-        completed_at: state.completedAt ?? null,
-    }).select('id').single();
-
-    if (error) return null;
-    return data?.id ?? null;
+    try {
+        const res = await gravityApi('/v1/library/grids', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: state.def.name,
+                def: state.def,
+                cells: state.cells,
+                started_at: state.startedAt ?? null,
+                completed_at: state.completedAt ?? null,
+            }),
+        });
+        return res?.id ?? null;
+    } catch {
+        return null;
+    }
 }
 
 export async function loadLatestGridRun(): Promise<GridState | null> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return null;
-
-    const { data } = await supabase
-        .from('grid_runs')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-    if (!data) return null;
-    return rowToState(data as SavedGridRow);
+    try {
+        const row = await gravityApi('/v1/library/grids/latest');
+        return row ? rowToState(row as SavedGridRow) : null;
+    } catch {
+        return null;
+    }
 }
 
 export async function loadGridRun(id: string): Promise<GridState | null> {
-    const { data } = await supabase
-        .from('grid_runs')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-    if (!data) return null;
-    return rowToState(data as SavedGridRow);
+    try {
+        const row = await gravityApi(`/v1/library/grids/${encodeURIComponent(id)}`);
+        return row ? rowToState(row as SavedGridRow) : null;
+    } catch {
+        return null;
+    }
 }
 
 export async function listGridRuns(limit = 20): Promise<SavedGridRow[]> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return [];
-
-    const { data } = await supabase
-        .from('grid_runs')
-        .select('id, name, def, cells, started_at, completed_at, created_at')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-
-    return (data as SavedGridRow[] | null) ?? [];
+    try {
+        return (await gravityApi(`/v1/library/grids?limit=${limit}`)) ?? [];
+    } catch {
+        return [];
+    }
 }
 
 export async function deleteGridRun(id: string): Promise<boolean> {
-    const { error } = await supabase.from('grid_runs').delete().eq('id', id);
-    return !error;
+    try {
+        await gravityApi(`/v1/library/grids/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function rowToState(row: SavedGridRow): GridState {
