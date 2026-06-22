@@ -59,7 +59,8 @@ export function useMarketsData(options: UseMarketsDataOptions = {}) {
         order,
       });
 
-      const response = await fetch(`/api/trading/markets/data?${params}`);
+      const apiUrl = process.env.REACT_APP_API_URL || 'https://gravity-api-prod.fly.dev';
+      const response = await fetch(`${apiUrl}/api/trading/markets/data?${params}`);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
