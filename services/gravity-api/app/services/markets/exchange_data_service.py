@@ -3,6 +3,7 @@
 import asyncio
 import httpx
 import structlog
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 
@@ -88,8 +89,10 @@ class ExchangeDataService:
             "sparkline": False,
         }
 
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
                 url = f"{self.coingecko_base}/coins/{asset_id}/markets"
                 response = await client.get(url, params=params)
                 response.raise_for_status()
@@ -117,9 +120,34 @@ class ExchangeDataService:
                 return markets
 
         except Exception as e:
-            logger.warning("coingecko_fetch_failed", error=str(e))
-            # Fallback: return mock data for demo (external APIs blocked from Fly)
-            return self._mock_markets(asset_id, limit)
+            logger.error("coingecko_fetch_failed", error=str(e), asset=asset_id)
+            # Retry with longer timeout
+            try:
+                async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
+                    url = f"{self.coingecko_base}/coins/{asset_id}/markets"
+                    response = await client.get(url, params=params)
+                    response.raise_for_status()
+                    data = response.json()
+                    return [
+                        {
+                            "rank": idx,
+                            "name": market.get("name", "Unknown"),
+                            "pair": f"{asset_id.upper()}/USD",
+                            "price": f"${market.get('current_price', 0):,.2f}",
+                            "depth": {"bid": "$?", "ask": "$?"},
+                            "volume24h": f"${market.get('total_volume', 0) / 1e6:.2f}M",
+                            "volumePercent": "?%",
+                            "liquidity": 0,
+                            "spreadBps": 0,
+                            "lastUpdate": "now",
+                            "symbol": market.get("symbol", "").upper(),
+                        }
+                        for idx, market in enumerate(data[:limit], 1)
+                    ]
+            except Exception as retry_error:
+                logger.error("coingecko_retry_failed", error=str(retry_error))
+                # Fallback to mock (external APIs blocked from Fly IP)
+                return self._mock_markets(asset_id, limit)
 
     async def _enrich_with_binance(
         self, markets: List[Dict[str, Any]]
@@ -128,7 +156,8 @@ class ExchangeDataService:
 
         # Try to get Binance depth for USDT pairs (most liquid)
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
                 # Get top Binance pairs
                 url = f"{self.binance_base}/ticker/24hr"
                 response = await client.get(url)
