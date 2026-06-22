@@ -81,19 +81,87 @@ interface GravitySession {
     expires_at: number;        // unix seconds
 }
 
-function getGravitySession(): GravitySession | null {
+// Decode the `exp` claim from a JWT so the client's notion of expiry matches
+// the backend's actual token TTL (instead of a hardcoded guess that drifts).
+function jwtExp(token: string): number | null {
     try {
-        const raw = localStorage.getItem(GRAVITY_SESSION_KEY);
-        if (!raw) return null;
-        const s = JSON.parse(raw) as GravitySession;
-        if (Date.now() / 1000 > s.expires_at) {
-            localStorage.removeItem(GRAVITY_SESSION_KEY);
-            return null;
-        }
-        return s;
+        const part = token.split('.')[1];
+        if (!part) return null;
+        const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+        const payload = JSON.parse(json) as { exp?: number };
+        return typeof payload.exp === 'number' ? payload.exp : null;
     } catch {
         return null;
     }
+}
+
+// Raw read — returns the stored session even if expired, so the refresh_token
+// remains available to renew it. Never deletes.
+function readGravitySession(): GravitySession | null {
+    try {
+        const raw = localStorage.getItem(GRAVITY_SESSION_KEY);
+        return raw ? (JSON.parse(raw) as GravitySession) : null;
+    } catch {
+        return null;
+    }
+}
+
+function clearGravitySession(): void {
+    localStorage.removeItem(GRAVITY_SESSION_KEY);
+    _notifyAuth();
+}
+
+// Treat the token as expired 60s early so a renewal lands before the backend
+// would 401.
+function gravitySessionExpired(s: { expires_at: number }, skewSec = 60): boolean {
+    return Date.now() / 1000 > s.expires_at - skewSec;
+}
+
+// Backward-compatible sync reader: valid session or null. No longer deletes on
+// expiry (the refresh path needs the stored refresh_token to survive).
+function getGravitySession(): GravitySession | null {
+    const s = readGravitySession();
+    if (!s) return null;
+    return gravitySessionExpired(s, 0) ? null : s;
+}
+
+// Exchange the stored refresh_token for a fresh access token via the backend
+// `/v1/auth/refresh` endpoint. Concurrent callers share one in-flight request.
+let _refreshInFlight: Promise<GravitySession | null> | null = null;
+async function refreshGravitySession(): Promise<GravitySession | null> {
+    const cur = readGravitySession();
+    if (!cur?.refresh_token) return null;
+    if (_refreshInFlight) return _refreshInFlight;
+    _refreshInFlight = (async () => {
+        try {
+            const res = await fetch(`${GRAVITY_API_URL}/v1/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: cur.refresh_token }),
+            });
+            if (res.status === 401) {
+                // Refresh token itself is dead — session is unrecoverable.
+                clearGravitySession();
+                return null;
+            }
+            if (!res.ok) return null; // transient server error — keep session, retry later
+            return saveGravitySession(await res.json());
+        } catch {
+            return null; // network blip — keep session, retry later
+        } finally {
+            _refreshInFlight = null;
+        }
+    })();
+    return _refreshInFlight;
+}
+
+// Async accessor: returns a valid session, refreshing transparently if the
+// access token has expired. Returns null only when truly logged out.
+async function ensureGravitySession(): Promise<GravitySession | null> {
+    const cur = readGravitySession();
+    if (!cur) return null;
+    if (!gravitySessionExpired(cur)) return cur;
+    return refreshGravitySession();
 }
 
 function saveGravitySession(payload: {
@@ -105,10 +173,91 @@ function saveGravitySession(payload: {
         access_token: payload.access_token,
         refresh_token: payload.refresh_token,
         user: { id: payload.user.user_id, email: payload.user.email, org_id: payload.user.org_id },
-        expires_at: Math.floor(Date.now() / 1000) + 12 * 3600,  // matches backend JWT TTL
+        // Prefer the JWT's real exp; fall back to 12h only if it can't be read.
+        expires_at: jwtExp(payload.access_token) ?? Math.floor(Date.now() / 1000) + 12 * 3600,
     };
     localStorage.setItem(GRAVITY_SESSION_KEY, JSON.stringify(s));
+    _notifyAuth();
     return s;
+}
+
+// ─── Session manager ──────────────────────────────────────────────────────────
+// Single source of truth for the auth lifecycle: proactive refresh (token never
+// expires mid-use), cross-tab synchronization, and a pub/sub observer so the
+// whole app reacts to login/logout/refresh from one place.
+
+export type AuthUser = { id: string; email?: string; org_id?: string };
+export type AuthState = { user: AuthUser } | null;
+
+const _authListeners = new Set<(s: AuthState) => void>();
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let _managerStarted = false;
+
+// Best-effort synchronous read of the current session across all backends.
+function currentAuthState(): AuthState {
+    if (DEV_AUTH_BYPASS) {
+        const s = getDevSession();
+        return s ? { user: { id: s.user.id, email: s.user.email } } : null;
+    }
+    if (USE_GRAVITY_API_AUTH) {
+        const s = readGravitySession();
+        return s ? { user: s.user } : null;
+    }
+    return null; // Supabase mode emits via its own onAuthStateChange below
+}
+
+function _notifyAuth(): void {
+    const state = currentAuthState();
+    for (const cb of _authListeners) {
+        try { cb(state); } catch { /* a bad listener must not break the others */ }
+    }
+    scheduleProactiveRefresh();
+}
+
+// Subscribe to auth changes. Fires immediately with the current state, and on
+// every login/logout/refresh (including changes made in other tabs). Returns an
+// unsubscribe function.
+export function subscribeAuth(cb: (s: AuthState) => void): () => void {
+    _authListeners.add(cb);
+    cb(currentAuthState());
+    return () => { _authListeners.delete(cb); };
+}
+
+export function getCurrentUserId(): string | null {
+    return currentAuthState()?.user.id ?? null;
+}
+
+// Schedule a refresh to fire ~60s before the access token expires, so an active
+// session is renewed before it can ever 401. Re-armed on every token change.
+function scheduleProactiveRefresh(): void {
+    if (!USE_GRAVITY_API_AUTH || typeof window === 'undefined') return;
+    if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null; }
+    const s = readGravitySession();
+    if (!s) return;
+    const msUntilRefresh = Math.max(0, (s.expires_at - 60) * 1000 - Date.now());
+    // Cap at ~24d (setTimeout 32-bit limit); re-arms itself on each fire anyway.
+    _refreshTimer = setTimeout(() => { void refreshGravitySession(); },
+        Math.min(msUntilRefresh, 2_000_000_000));
+}
+
+// Start the session manager once at app boot. Idempotent.
+export function startSessionManager(): void {
+    if (_managerStarted || typeof window === 'undefined') return;
+    _managerStarted = true;
+
+    // Cross-tab sync: a login/logout/refresh in any tab writes localStorage,
+    // which fires a `storage` event in every *other* tab. Re-notify so all tabs
+    // converge on the same session without a reload.
+    window.addEventListener('storage', (e) => {
+        if (e.key === GRAVITY_SESSION_KEY || e.key === DEV_SESSION_KEY) _notifyAuth();
+    });
+
+    // Renew the moment a backgrounded tab returns, then keep the timer armed.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') void ensureGravitySession();
+    });
+
+    scheduleProactiveRefresh();
 }
 
 async function gravityFetch(path: string, init?: RequestInit) {
@@ -125,7 +274,9 @@ async function gravityFetch(path: string, init?: RequestInit) {
             const body = await res.json();
             if (typeof body?.detail === 'string') detail = body.detail;
         } catch { /* ignore */ }
-        throw new Error(detail);
+        const err = new Error(detail) as Error & { status?: number };
+        err.status = res.status; // reliable signal for the 401 refresh interceptor
+        throw err;
     }
     return res.status === 204 ? null : res.json();
 }
@@ -172,6 +323,7 @@ export const signIn = async (email: string, password: string, mfaCode?: string) 
 export const signOut = async () => {
     if (DEV_AUTH_BYPASS) {
         localStorage.removeItem(DEV_SESSION_KEY);
+        _notifyAuth();
         return;
     }
     if (USE_GRAVITY_API_AUTH) {
@@ -184,7 +336,7 @@ export const signOut = async () => {
                 });
             } catch { /* best effort */ }
         }
-        localStorage.removeItem(GRAVITY_SESSION_KEY);
+        clearGravitySession(); // clears storage + notifies all tabs/subscribers
         return;
     }
     const { error } = await supabase.auth.signOut();
@@ -196,7 +348,7 @@ export const getSession = async () => {
         return getDevSession();
     }
     if (USE_GRAVITY_API_AUTH) {
-        return getGravitySession();
+        return ensureGravitySession();
     }
     const { data: { session } } = await supabase.auth.getSession();
     return session;
@@ -264,19 +416,52 @@ export interface MfaVerifyResponse {
 
 async function gravityAuthFetch(path: string, init?: RequestInit) {
     const token = await getGravityToken();
-    if (!token) throw new Error('not authenticated');
-    return gravityFetch(path, {
-        ...init,
-        headers: {
-            Authorization: `Bearer ${token}`,
-            ...((init?.headers ?? {}) as Record<string, string>),
-        },
-    });
+    if (!token) {
+        onSessionLost();
+        throw new Error('not authenticated');
+    }
+    try {
+        return await gravityFetch(path, {
+            ...init,
+            headers: {
+                Authorization: `Bearer ${token}`,
+                ...((init?.headers ?? {}) as Record<string, string>),
+            },
+        });
+    } catch (err) {
+        // Token was rejected mid-flight (e.g. revoked, or clock skew). Force one
+        // refresh and retry before giving up — this is what stops the app from
+        // wedging into a "logged-in but every call 401s" zombie state.
+        if (USE_GRAVITY_API_AUTH && (err as { status?: number })?.status === 401) {
+            const fresh = await refreshGravitySession();
+            if (fresh) {
+                return gravityFetch(path, {
+                    ...init,
+                    headers: {
+                        Authorization: `Bearer ${fresh.access_token}`,
+                        ...((init?.headers ?? {}) as Record<string, string>),
+                    },
+                });
+            }
+            onSessionLost();
+        }
+        throw err;
+    }
+}
+
+// Session is unrecoverable — drop it and bounce to the login screen so the user
+// never gets stuck on a dead page with non-working navigation.
+function onSessionLost(): void {
+    if (typeof window === 'undefined') return;
+    clearGravitySession();
+    if (window.location.pathname !== '/auth') {
+        window.location.assign('/auth');
+    }
 }
 
 async function getGravityToken(): Promise<string | null> {
     if (DEV_AUTH_BYPASS) return getDevSession()?.access_token ?? null;
-    if (USE_GRAVITY_API_AUTH) return getGravitySession()?.access_token ?? null;
+    if (USE_GRAVITY_API_AUTH) return (await ensureGravitySession())?.access_token ?? null;
     return (await getSession())?.access_token ?? null;
 }
 

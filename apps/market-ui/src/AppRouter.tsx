@@ -6,7 +6,7 @@
 // don't linger in the URL bar or browser history.
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { getSession } from './services/supabase';
+import { getSession, startSessionManager, subscribeAuth } from './services/supabase';
 import AppLayout from './components/AppLayout';
 import LandingPage from './pages/LandingPage';
 import AuthPage from './pages/AuthPage';
@@ -71,10 +71,31 @@ export default function AppRouter() {
         const { error } = scrubAuthHash();
         if (error) setHashError(error);
 
+        let cancelled = false;
+
+        // Start the central session manager: proactive token refresh, cross-tab
+        // sync, and the auth observer below. Idempotent.
+        startSessionManager();
+
+        // Single live source of truth. Fires now with the current session and on
+        // every login/logout/refresh — including changes from other tabs and the
+        // proactive refresh timer — so the app never wedges in a zombie state.
+        const unsubscribe = subscribeAuth((s) => {
+            if (!cancelled) setSession((s ?? null) as SessionLike);
+        });
+
+        // Initial gate: getSession() transparently refreshes an expired-but-
+        // renewable token, so a tab resumed after days silently renews instead
+        // of bouncing to /auth. subscribeAuth already seeded state synchronously.
         getSession()
-            .then((s) => setSession((s ?? null) as SessionLike))
-            .catch(() => setSession(null))
-            .finally(() => setLoading(false));
+            .then((s) => { if (!cancelled) setSession((s ?? null) as SessionLike); })
+            .catch(() => { if (!cancelled) setSession(null); })
+            .finally(() => { if (!cancelled) setLoading(false); });
+
+        return () => {
+            cancelled = true;
+            unsubscribe();
+        };
     }, []);
 
     if (loading) {

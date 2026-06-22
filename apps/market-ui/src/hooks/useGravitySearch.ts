@@ -190,11 +190,14 @@ export function useGravitySearch() {
 
         setState({ ...INITIAL_STATE, status: 'understanding' });
 
-        // Auth token captured once per search. Browsers can't set WS headers,
-        // so it is passed as a query param the backend reads.
-        let authToken = '';
+        // Browsers can't set WS headers, so the token is passed as a query param.
+        async function connect() {
+            // Fetch a FRESH token on every attempt (initial + reconnects). The
+            // session manager may have rotated/refreshed it mid-search or across
+            // backoff, so a token captured once would reconnect with a dead one.
+            let authToken = '';
+            try { authToken = (await getAccessToken()) ?? ''; } catch { /* dev bypass / no auth */ }
 
-        function connect() {
             const params = new URLSearchParams({ trace_id: traceId });
             if (authToken) params.set('token', authToken);
             const ws = new WebSocket(`${GRAVITY_WS}?${params.toString()}`);
@@ -304,12 +307,7 @@ export function useGravitySearch() {
             ws.onerror = () => { /* onclose handles reconnect */ };
         }
 
-        // Fetch the access token first, then open the socket. If token lookup
-        // fails, still connect — dev mode bypasses auth server-side.
-        getAccessToken()
-            .then(tok => { authToken = tok ?? ''; })
-            .catch(() => { /* connect without token */ })
-            .finally(() => { connect(); });
+        void connect(); // each attempt (incl. reconnects) fetches its own fresh token
     }, []);
 
     const cancel = useCallback(() => {
