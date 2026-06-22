@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle, ArrowLeft } from 'lucide-react';
-import { supabase } from '../services/supabase';
+import { getReport } from '../services/reports';
 import ResearchReportComponent from '../components/research/ResearchReport';
 import type { ResearchReport } from '../services/deepResearchService';
 
@@ -17,17 +17,8 @@ export default function ReportViewerPage() {
         if (!id) return;
 
         const fetchReport = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) { navigate('/auth'); return; }
-
-            const { data, error: dbError } = await supabase
-                .from('research_reports')
-                .select('*')
-                .eq('id', id)
-                .eq('user_id', session.user.id)
-                .single();
-
-            if (dbError || !data) {
+            const data = await getReport(id);
+            if (!data) {
                 setError('Report not found');
                 setLoading(false);
                 return;
@@ -38,7 +29,7 @@ export default function ReportViewerPage() {
                 title: data.title,
                 summary: data.summary || '',
                 markdown: data.markdown,
-                citations: data.citations || [],
+                citations: (data.citations ?? []) as ResearchReport['citations'],
                 metadata: {
                     sourcesAnalyzed: data.sources_analyzed || 0,
                     generatedAt: data.created_at,

@@ -6,17 +6,9 @@ import {
     Sparkles, Trash2, BarChart3, TrendingUp, BookOpen, Calendar,
     ArrowRight, Filter, SortDesc
 } from 'lucide-react';
-import { supabase } from '../services/supabase';
+import { listReports, deleteReport, type ReportMeta } from '../services/reports';
 
-interface ReportSummary {
-    id: string;
-    query: string;
-    title: string;
-    summary: string;
-    sources_analyzed: number;
-    read_time: number;
-    created_at: string;
-}
+type ReportSummary = ReportMeta;
 
 export default function HistoryPage() {
     const [reports, setReports] = useState<ReportSummary[]>([]);
@@ -32,24 +24,15 @@ export default function HistoryPage() {
 
     const fetchReports = async () => {
         setLoading(true);
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const { data, error } = await supabase
-            .from('research_reports')
-            .select('id, query, title, summary, sources_analyzed, read_time, created_at')
-            .eq('user_id', session.user.id)
-            .order('created_at', { ascending: false });
-
-        if (!error && data) setReports(data);
+        setReports(await listReports());
         setLoading(false);
     };
 
-    const deleteReport = async (id: string, e: React.MouseEvent) => {
+    const handleDelete = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         if (!confirm('Delete this report permanently?')) return;
         setDeletingId(id);
-        await supabase.from('research_reports').delete().eq('id', id);
+        await deleteReport(id);
         setReports(prev => prev.filter(r => r.id !== id));
         setDeletingId(null);
     };
@@ -302,7 +285,7 @@ export default function HistoryPage() {
                                         {/* Actions */}
                                         <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button
-                                                onClick={(e) => deleteReport(report.id, e)}
+                                                onClick={(e) => handleDelete(report.id, e)}
                                                 className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-red-500/15 transition-all"
                                                 title="Delete report"
                                             >

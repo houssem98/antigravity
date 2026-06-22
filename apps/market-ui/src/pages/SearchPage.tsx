@@ -23,13 +23,14 @@ import {
     GEMINI_MODELS,
     ResearchCancelledError,
 } from '../services/deepResearchService';
-import type { ResearchBlueprint } from '../services/deepResearchService';
+import type { ResearchBlueprint, ResearchReport } from '../services/deepResearchService';
 import { runResearchGraph } from '../services/researchGraph';
 import ResearchProgress from '../components/research/ResearchProgress';
 import ResearchReportComponent from '../components/research/ResearchReport';
 import BlueprintReview from '../components/research/BlueprintReview';
 import QaSearchProgress from '../components/qa/QaSearchProgress';
-import { supabase, getAccessToken } from '../services/supabase';
+import { getAccessToken } from '../services/supabase';
+import { listReports, getReport, saveReport, deleteReport } from '../services/reports';
 import {
     listQaConversations, createQaConversation, loadQaTurns, saveQaTurn,
     deleteQaConversation, conversationTitle,
@@ -966,15 +967,7 @@ export default function SearchPage() {
     const fetchHistory = useCallback(async (force = false) => {
         // Skip if already loaded unless forced (e.g. after delete)
         if (!force && history.length > 0) return;
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const { data } = await supabase
-            .from('research_reports')
-            .select('id, query, title, created_at')
-            .eq('user_id', session.user.id)
-            .order('created_at', { ascending: false })
-            .limit(50);
-        if (data) setHistory(data);
+        setHistory(await listReports());
     }, [history.length, setHistory]);
 
     const runResearch = async (searchQuery: string) => {
@@ -1025,22 +1018,18 @@ export default function SearchPage() {
                 );
             setReport(result);
             try {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session) {
-                    const { data: saved } = await supabase.from('research_reports').insert({
-                        user_id: session.user.id,
-                        query: result.query,
-                        title: result.title,
-                        summary: result.summary || '',
-                        markdown: result.markdown,
-                        citations: result.citations,
-                        sources_analyzed: result.metadata.sourcesAnalyzed,
-                        read_time: result.metadata.estimatedReadTime,
-                    }).select('id').single();
-                    if (saved) {
-                        setActiveId(saved.id);
-                        prependHistory({ id: saved.id, query: result.query, title: result.title, created_at: new Date().toISOString() });
-                    }
+                const savedId = await saveReport({
+                    query: result.query,
+                    title: result.title,
+                    summary: result.summary || '',
+                    markdown: result.markdown,
+                    citations: result.citations,
+                    sources_analyzed: result.metadata.sourcesAnalyzed,
+                    read_time: result.metadata.estimatedReadTime,
+                });
+                if (savedId) {
+                    setActiveId(savedId);
+                    prependHistory({ id: savedId, query: result.query, title: result.title, created_at: new Date().toISOString() });
                 }
             } catch { /* non-blocking */ }
         } catch (err) {
@@ -1068,8 +1057,8 @@ export default function SearchPage() {
         setResearchError(null);
         setActiveId(item.id);
         try {
-            const { data } = await supabase.from('research_reports').select('*').eq('id', item.id).single();
-            if (data) setReport({ query: data.query, title: data.title, summary: data.summary, markdown: data.markdown, citations: data.citations || [], metadata: { sourcesAnalyzed: data.sources_analyzed, generatedAt: data.created_at, estimatedReadTime: data.read_time } });
+            const data = await getReport(item.id);
+            if (data) setReport({ query: data.query, title: data.title, summary: data.summary || '', markdown: data.markdown, citations: (data.citations ?? []) as ResearchReport['citations'], metadata: { sourcesAnalyzed: data.sources_analyzed ?? 0, generatedAt: data.created_at, estimatedReadTime: data.read_time ?? 0 } });
         } catch { setResearchError('Failed to load report'); }
         finally { setLoadingReport(false); }
     };
@@ -1082,7 +1071,7 @@ export default function SearchPage() {
 
     const handleDeleteReport = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
-        await supabase.from('research_reports').delete().eq('id', id);
+        await deleteReport(id);
         removeFromHistory(id);
         if (activeId === id) handleNewResearch();
     };

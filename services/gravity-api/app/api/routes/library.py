@@ -21,7 +21,7 @@ import json
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import _current_user
@@ -61,6 +61,21 @@ CREATE TABLE IF NOT EXISTS lib_qa_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_lib_qa_turns_conv
     ON lib_qa_turns (conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS lib_reports (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          TEXT NOT NULL,
+    query            TEXT NOT NULL DEFAULT '',
+    title            TEXT NOT NULL DEFAULT '',
+    summary          TEXT NOT NULL DEFAULT '',
+    markdown         TEXT NOT NULL DEFAULT '',
+    citations        JSONB NOT NULL DEFAULT '[]',
+    sources_analyzed INTEGER NOT NULL DEFAULT 0,
+    read_time        INTEGER NOT NULL DEFAULT 0,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lib_reports_user
+    ON lib_reports (user_id, created_at DESC);
 """
 
 
@@ -214,4 +229,105 @@ async def delete_conversation(
         await conn.execute(
             "DELETE FROM lib_qa_conversations WHERE id = $1 AND user_id = $2",
             conversation_id, user.user_id,
+        )
+
+
+# ─── Research reports (Deep Research) ─────────────────────────────────────────
+
+class ReportMeta(BaseModel):
+    id: str
+    query: str
+    title: str
+    summary: str = ""
+    sources_analyzed: int = 0
+    read_time: int = 0
+    created_at: str
+
+
+class Report(ReportMeta):
+    markdown: str = ""
+    citations: list = Field(default_factory=list)
+
+
+class SaveReportRequest(BaseModel):
+    query: str = ""
+    title: str = ""
+    summary: str = ""
+    markdown: str = ""
+    citations: list = Field(default_factory=list)
+    sources_analyzed: int = 0
+    read_time: int = 0
+
+
+class SaveReportResponse(BaseModel):
+    id: Optional[str] = None
+
+
+@router.get("/reports", response_model=list[ReportMeta])
+async def list_reports(user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, query, title, summary, sources_analyzed, read_time, created_at "
+            "FROM lib_reports WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200",
+            user.user_id,
+        )
+    return [
+        ReportMeta(
+            id=str(r["id"]), query=r["query"], title=r["title"], summary=r["summary"],
+            sources_analyzed=r["sources_analyzed"], read_time=r["read_time"],
+            created_at=r["created_at"].isoformat(),
+        )
+        for r in rows
+    ]
+
+
+@router.post("/reports", response_model=SaveReportResponse)
+async def save_report(req: SaveReportRequest, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return SaveReportResponse(id=None)
+    async with pool.acquire() as conn:
+        new_id = await conn.fetchval(
+            "INSERT INTO lib_reports "
+            "(user_id, query, title, summary, markdown, citations, sources_analyzed, read_time) "
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING id",
+            user.user_id, req.query, req.title, req.summary, req.markdown,
+            json.dumps(req.citations), req.sources_analyzed, req.read_time,
+        )
+    return SaveReportResponse(id=str(new_id))
+
+
+@router.get("/reports/{report_id}", response_model=Report)
+async def get_report(report_id: str, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    async with pool.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT id, query, title, summary, markdown, citations, sources_analyzed, "
+            "read_time, created_at FROM lib_reports WHERE id = $1 AND user_id = $2",
+            report_id, user.user_id,
+        )
+    if r is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return Report(
+        id=str(r["id"]), query=r["query"], title=r["title"], summary=r["summary"],
+        markdown=r["markdown"], citations=json.loads(r["citations"]),
+        sources_analyzed=r["sources_analyzed"], read_time=r["read_time"],
+        created_at=r["created_at"].isoformat(),
+    )
+
+
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_report(report_id: str, user: UserRecord = Depends(_current_user)):
+    pool = get_db_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM lib_reports WHERE id = $1 AND user_id = $2",
+            report_id, user.user_id,
         )
