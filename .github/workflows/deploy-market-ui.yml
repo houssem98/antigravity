@@ -1,0 +1,24 @@
+name: Deploy Market UI to Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/market-ui/**'
+      - 'api/**'
+      - 'vercel.json'
+      - '.github/workflows/deploy-market-ui.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: vercel/action@main
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          production: true

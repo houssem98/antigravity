@@ -3,5 +3,11 @@
   "buildCommand": "npm -w market-ui run build",
   "outputDirectory": "apps/market-ui/dist",
   "framework": null,
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "env": {
+    "GRAVITY_API_URL": "https://antigravity.fly.dev"
+  }
 }

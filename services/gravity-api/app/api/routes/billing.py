@@ -598,18 +598,37 @@ async def _save_crypto_invoice(pool, invoice_id, user_id, plan, amount, currency
 # PUBLIC ROUTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _provider_configured(pid: str, pdata: dict) -> bool:
+    """True when provider has working creds → customer can actually pay."""
+    if pid == "paddle":
+        return bool(os.getenv("PADDLE_API_KEY") and os.getenv("PADDLE_PRICE_PRO"))
+    if pid == "paypal":
+        return bool(os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET"))
+    if pid == "payoneer":
+        return bool(os.getenv("PAYONEER_EMAIL") or pdata.get("email"))
+    if pid == "crypto":
+        wallets = pdata.get("wallets", {}) or {}
+        return bool(any(wallets.values()) or os.getenv("COINBASE_COMMERCE_API_KEY"))
+    return False
+
+
 @router.get("/config")
 async def public_config(request: Request):
-    """Return plans + active providers for the frontend (no auth required)."""
+    """Return plans + payable providers for the frontend (no auth required).
+
+    Only providers with working creds are returned so customers never hit a
+    503 'not configured' after clicking. Set creds via Fly secrets or admin.
+    """
     pool = _pool(request)
     cfg = await _load_config(pool)
     active_plans = {k: v for k, v in cfg["plans"].items() if v.get("active", True)}
     active_providers = []
     for pid, pdata in cfg["providers"].items():
-        if pdata.get("enabled", False):
+        if pdata.get("enabled", False) and _provider_configured(pid, pdata):
             pub = {k: v for k, v in pdata.items()
                    if k not in ("wallets",)}  # never expose wallets publicly
             pub["id"] = pid
+            pub["configured"] = True
             active_providers.append(pub)
     return {
         "plans": active_plans,

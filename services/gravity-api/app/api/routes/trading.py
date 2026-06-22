@@ -1,11 +1,15 @@
-"""Trading Markets Hermes Integration - Ask questions about market data."""
+"""Trading Markets & Hermes Integration - Live market data + AI analysis."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
 
+from app.services.markets.exchange_data_service import ExchangeDataService
+from app.services.markets.caching_layer import MarketDataCache
+
 router = APIRouter(prefix="/trading/markets", tags=["trading"])
+market_service = ExchangeDataService()
 
 
 class AskRequest(BaseModel):
@@ -15,11 +19,55 @@ class AskRequest(BaseModel):
     context: dict = {}
 
 
-async def stream_hermes_response(query: str, context: dict):
-    """Stream responses from Hermes (placeholder - Phase 1 depends on core Hermes Phase 1)."""
+@router.get("/data")
+async def get_market_data(
+    asset: str = Query("BTC", description="Asset symbol (BTC, ETH, SOL)"),
+    limit: int = Query(50, ge=1, le=250),
+    sort: str = Query("volume_24h", description="Sort by: volume_24h, price, liquidity"),
+    order: str = Query("desc", description="Order: asc or desc"),
+):
+    """
+    Get live market data for an asset.
 
-    # Phase 1T: Until core Hermes Phase 1 (LLM router) is ready,
-    # return mock response with streaming format
+    Phase 1: Real data from CoinGecko + Binance API
+    - Caching: 60s TTL via Redis
+    - Fallback: return cached data on error
+    - Always return something (never blank)
+    """
+
+    try:
+        # Check cache first
+        cached = await MarketDataCache.get(asset)
+        if cached:
+            return cached
+
+        # Fetch live data
+        data = await market_service.get_markets(asset, limit, sort, order)
+
+        # Cache for 60s
+        await MarketDataCache.set(asset, data, ttl=60)
+
+        return data
+
+    except Exception as e:
+        # Fallback: return cached or empty
+        cached = await MarketDataCache.get(asset)
+        if cached:
+            return cached
+
+        return {
+            "asset": asset.upper(),
+            "exchanges": [],
+            "metadata": {
+                "source": "error",
+                "health": "error",
+                "error": str(e),
+            },
+        }
+
+
+async def stream_hermes_response(context: dict):
+    """Stream responses from Hermes (placeholder - Phase 1T depends on core Phase 1)."""
 
     mock_response = f"""Based on the {context.get('asset', 'asset')} market data:
 
@@ -28,21 +76,19 @@ The current market structure shows:
 - Order book depth indicating liquidity levels
 - Volume concentration on major CEX platforms
 
-To provide more detailed analysis, I need access to the Hermes agent system which is currently in Phase 0 (safety net) in the main search pipeline.
+To provide more detailed analysis, I need access to the Hermes agent system which is currently in Phase 0 (safety net).
 
-Ask a question to engage with market analysis once Hermes integration is complete."""
+Ask a question to engage with market analysis once Hermes Phase 1 (LLM router) is ready."""
 
-    # Stream mock response token-by-token
     tokens = mock_response.split()
     for token in tokens:
         yield json.dumps({"token": token + " "}) + "\n"
 
-    # Final message with citations (Phase 2+)
     yield json.dumps({
         "token": "",
         "citations": [
-            "Markets Tab - Current Assets Data",
-            "Exchange Volume Rankings"
+            "Markets Tab - Live Exchange Data",
+            "Volume Rankings"
         ],
         "done": True
     }) + "\n"
@@ -53,14 +99,7 @@ async def ask_about_market(request: AskRequest):
     """
     Ask Hermes about market data.
 
-    Streams token-by-token response via Server-Sent Events.
-
-    Phase 1T implementation:
-    - User query input
-    - Market context preparation
-    - Streaming response (mock until Phase 1 core ready)
-    - Citation tracking
-
+    Phase 1T: Ask Hermes feature (sidepanel)
     Depends on: Core Hermes Phase 1 (LLM router integration)
     """
 
@@ -68,17 +107,18 @@ async def ask_about_market(request: AskRequest):
         raise HTTPException(status_code=400, detail="asset and question required")
 
     try:
-        # Build context for Hermes
+        # Fetch live market context
+        market_context = await get_market_data(asset=request.asset)
+
         hermes_context = {
             "asset": request.asset,
-            "exchanges": request.context.get("exchanges", []),
-            "asset_info": request.context.get("asset_info", {}),
+            "exchanges": market_context.get("exchanges", []),
+            "metadata": market_context.get("metadata", {}),
             "user_question": request.question,
         }
 
-        # Return streaming response
         return StreamingResponse(
-            stream_hermes_response(request.question, hermes_context),
+            stream_hermes_response(hermes_context),
             media_type="application/x-ndjson"
         )
 

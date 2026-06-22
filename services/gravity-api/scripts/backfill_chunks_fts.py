@@ -1,80 +1,61 @@
-"""
-Backfill the Supabase `chunks` table (Postgres FTS keyword channel) from the
-chunks already indexed in Qdrant. Existing corpus lives only in Qdrant; this
-copies paragraph-level chunk text into Supabase so the revived keyword channel
-(sparse_search → search_chunks_fts) has data without re-ingesting from EDGAR.
+#!/usr/bin/env python3
+"""Backfill Supabase chunks table from Qdrant for FTS keyword search."""
 
-Run ON FLY (has QDRANT_URL + SUPABASE_SERVICE_ROLE_KEY in env):
-  fly ssh console -a gravity-api-prod -C "python scripts/backfill_chunks_fts.py"
-
-Idempotent: upserts by chunk id (on_conflict=id).
-"""
-
+import argparse
 import asyncio
+import os
 import sys
 
-from app.config import settings
-from app.db.qdrant import qdrant_client, collection_for_org
-from app.db import supabase_rest
+import asyncpg
+import structlog
+from qdrant_client.async_client import AsyncQdrantClient
+
+logger = structlog.get_logger()
 
 
-async def backfill(batch: int = 500) -> int:
-    if not supabase_rest.configured():
-        print("SUPABASE not configured (need SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)")
-        return 0
+async def backfill():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
 
-    collection = collection_for_org(None)
-    print(f"scroll qdrant collection={collection}")
+    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+    qdrant_key = os.getenv("QDRANT_API_KEY", "")
+    db_url = os.getenv("DATABASE_URL")
 
-    offset = None
-    written = 0
-    scanned = 0
-    while True:
-        points, offset = await qdrant_client.scroll(
-            collection_name=collection,
-            limit=batch,
-            offset=offset,
-            with_payload=True,
-            with_vectors=False,
-        )
-        if not points:
-            break
+    if not db_url:
+        logger.error("database_url_required")
+        sys.exit(1)
 
-        rows = []
+    # Fetch from Qdrant
+    qdr = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_key)
+    points, _ = await qdr.scroll("gravity_chunks", limit=args.limit or 10000, with_payload=True)
+
+    logger.info("fetched", count=len(points))
+
+    # Backfill to Supabase
+    conn = await asyncpg.connect(db_url)
+    try:
+        inserted = 0
         for p in points:
-            scanned += 1
-            pl = p.payload or {}
-            if pl.get("chunk_level") not in (2, None):
-                continue
-            text = pl.get("text") or ""
-            if not text.strip():
-                continue
-            rows.append({
-                "id": str(pl.get("chunk_id") or p.id),
-                "document_id": pl.get("document_id", "") or "",
-                "ticker": (pl.get("ticker", "") or "").upper(),
-                "company": pl.get("company_name", "") or "",
-                "document_title": pl.get("document_title", "") or "",
-                "filing_type": pl.get("filing_type", "") or "",
-                "filing_date": pl.get("filing_date") or None,
-                "section": pl.get("section", "") or "",
-                "page": pl.get("page"),
-                "chunk_level": pl.get("chunk_level"),
-                "text": text,
-            })
-
-        if rows:
-            rows = list({r["id"]: r for r in rows}.values())  # dedupe within batch
-            written += await supabase_rest.sb_insert("chunks", rows, on_conflict="id")
-            print(f"  scanned={scanned} written={written}")
-
-        if offset is None:
-            break
-
-    print(f"DONE scanned={scanned} written={written}")
-    return written
+            meta = p.payload or {}
+            if not args.dry_run:
+                await conn.execute(
+                    """insert into public.chunks (id, document_id, ticker, company,
+                       document_title, filing_type, filing_date, section, page, chunk_level, text)
+                       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                       on conflict (id) do nothing""",
+                    str(p.id), meta.get("document_id"), meta.get("ticker"), meta.get("company"),
+                    meta.get("document_title"), meta.get("filing_type"), meta.get("filing_date"),
+                    meta.get("section"), meta.get("page"), meta.get("chunk_level"), meta.get("text")
+                )
+                inserted += 1
+            if inserted % 100 == 0:
+                logger.info("progress", inserted=inserted)
+        logger.info("done", inserted=inserted, dry_run=args.dry_run)
+    finally:
+        await conn.close()
 
 
 if __name__ == "__main__":
-    n = asyncio.run(backfill())
-    sys.exit(0 if n >= 0 else 1)
+    asyncio.run(backfill())
