@@ -4,33 +4,34 @@
 // the client lib still ships in the bundle for read-only fallback. We scrub
 // any leftover Supabase magic-link / OAuth hash fragments on mount so tokens
 // don't linger in the URL bar or browser history.
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, Suspense } from 'react';
 import { getSession, startSessionManager, subscribeAuth } from './services/supabase';
+import { lazyWithReload, RouteErrorBoundary } from './lib/lazyWithReload';
 import AppLayout from './components/AppLayout';
 import LandingPage from './pages/LandingPage';
 
 // Route components are code-split so the landing/auth first paint no longer
 // pulls the heavy app pages (charts, PDF renderer, deep-research engine) into
-// the initial bundle. Each route loads its own chunk on navigation.
-const AuthPage = lazy(() => import('./pages/AuthPage'));
-const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
-const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
-const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage'));
-const MfaSetupPage = lazy(() => import('./pages/MfaSetupPage'));
-const DashboardPage = lazy(() => import('./pages/DashboardPage'));
-const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const HistoryPage = lazy(() => import('./pages/HistoryPage'));
-const ReportViewerPage = lazy(() => import('./pages/ReportViewerPage'));
-const SearchPage = lazy(() => import('./pages/SearchPage'));
-const CompanyPage = lazy(() => import('./pages/CompanyPage'));
-const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
-const TradingAssistantPage = lazy(() => import('./pages/TradingAssistantPage'));
-const InvestorsPage = lazy(() => import('./pages/InvestorsPage'));
-const BillingPage = lazy(() => import('./pages/BillingPage'));
-const BillingSuccessPage = lazy(() => import('./pages/BillingSuccessPage'));
-const BillingCancelPage = lazy(() => import('./pages/BillingCancelPage'));
-const AdminBillingPage = lazy(() => import('./pages/AdminBillingPage'));
+// the initial bundle. lazyWithReload recovers from stale chunks after a deploy.
+const AuthPage = lazyWithReload(() => import('./pages/AuthPage'));
+const ForgotPasswordPage = lazyWithReload(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazyWithReload(() => import('./pages/ResetPasswordPage'));
+const VerifyEmailPage = lazyWithReload(() => import('./pages/VerifyEmailPage'));
+const MfaSetupPage = lazyWithReload(() => import('./pages/MfaSetupPage'));
+const DashboardPage = lazyWithReload(() => import('./pages/DashboardPage'));
+const SettingsPage = lazyWithReload(() => import('./pages/SettingsPage'));
+const HistoryPage = lazyWithReload(() => import('./pages/HistoryPage'));
+const ReportViewerPage = lazyWithReload(() => import('./pages/ReportViewerPage'));
+const SearchPage = lazyWithReload(() => import('./pages/SearchPage'));
+const CompanyPage = lazyWithReload(() => import('./pages/CompanyPage'));
+const DocumentsPage = lazyWithReload(() => import('./pages/DocumentsPage'));
+const TradingAssistantPage = lazyWithReload(() => import('./pages/TradingAssistantPage'));
+const InvestorsPage = lazyWithReload(() => import('./pages/InvestorsPage'));
+const BillingPage = lazyWithReload(() => import('./pages/BillingPage'));
+const BillingSuccessPage = lazyWithReload(() => import('./pages/BillingSuccessPage'));
+const BillingCancelPage = lazyWithReload(() => import('./pages/BillingCancelPage'));
+const AdminBillingPage = lazyWithReload(() => import('./pages/AdminBillingPage'));
 
 type SessionLike = { user?: { id?: string; email?: string } } | null;
 
@@ -66,6 +67,7 @@ function scrubAuthHash(): { error?: string } {
 }
 
 export default function AppRouter() {
+    const location = useLocation();
     const [session, setSession] = useState<SessionLike>(null);
     const [loading, setLoading] = useState(true);
     const [hashError, setHashError] = useState<string | null>(null);
@@ -107,6 +109,32 @@ export default function AppRouter() {
         </div>
     );
 
+    const errorFallback = (reset: () => void) => (
+        <div className="min-h-screen bg-[color:var(--bg)] flex items-center justify-center p-6">
+            <div className="max-w-sm w-full text-center rounded-xl border border-[color:var(--line)] bg-[color:var(--surface)] p-6">
+                <p className="text-[color:var(--text)] font-semibold mb-1">This page hit a snag.</p>
+                <p className="text-sm text-[color:var(--text-3)] mb-4">
+                    The rest of the app still works — reload, or head back to search.
+                </p>
+                <div className="flex gap-2 justify-center">
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="px-3 py-1.5 rounded-md text-sm bg-[color:var(--accent)] text-[color:var(--accent-ink)] font-medium"
+                    >
+                        Reload
+                    </button>
+                    <a
+                        href="/search"
+                        onClick={reset}
+                        className="px-3 py-1.5 rounded-md text-sm border border-[color:var(--line)] text-[color:var(--text-2)]"
+                    >
+                        Back to search
+                    </a>
+                </div>
+            </div>
+        </div>
+    );
+
     if (loading) return routeFallback;
 
     return (
@@ -127,6 +155,7 @@ export default function AppRouter() {
                     </button>
                 </div>
             )}
+            <RouteErrorBoundary key={location.pathname} fallback={errorFallback}>
             <Suspense fallback={routeFallback}>
             <Routes>
                 {/* Public */}
@@ -174,6 +203,7 @@ export default function AppRouter() {
                 </Route>
             </Routes>
             </Suspense>
+            </RouteErrorBoundary>
         </>
     );
 }
