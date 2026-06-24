@@ -50,6 +50,11 @@ export function lazyWithReload<T extends ComponentType<unknown>>(
 interface BoundaryProps {
     children: ReactNode;
     fallback: (reset: () => void) => ReactNode;
+    // Changes on navigation. When it changes, any captured error is cleared so a
+    // new route renders fresh — WITHOUT remounting children (keying the boundary
+    // by route path remounts <Routes> on every nav and breaks the top-level →
+    // nested route transition, leaving the old page visible).
+    resetKey?: string;
 }
 
 export class RouteErrorBoundary extends Component<BoundaryProps, { error: Error | null }> {
@@ -67,6 +72,14 @@ export class RouteErrorBoundary extends Component<BoundaryProps, { error: Error 
                 sessionStorage.setItem(RELOAD_TS_KEY, String(Date.now()));
                 window.location.reload();
             }
+        }
+    }
+
+    componentDidUpdate(prev: BoundaryProps) {
+        // Clear a prior error when the route changes, so navigating away from a
+        // broken page recovers automatically.
+        if (this.state.error && prev.resetKey !== this.props.resetKey) {
+            this.setState({ error: null });
         }
     }
 

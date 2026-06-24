@@ -12,8 +12,8 @@ import AppLayout from './components/AppLayout';
 import LandingPage from './pages/LandingPage';
 
 // Route components are code-split so the landing/auth first paint no longer
-// pulls the heavy app pages (charts, PDF renderer, deep-research engine) into
-// the initial bundle. lazyWithReload recovers from stale chunks after a deploy.
+// pulls the heavy app pages into the initial bundle. lazyWithReload recovers
+// from stale chunks after a deploy.
 const AuthPage = lazyWithReload(() => import('./pages/AuthPage'));
 const ForgotPasswordPage = lazyWithReload(() => import('./pages/ForgotPasswordPage'));
 const ResetPasswordPage = lazyWithReload(() => import('./pages/ResetPasswordPage'));
@@ -155,7 +155,7 @@ export default function AppRouter() {
                     </button>
                 </div>
             )}
-            <RouteErrorBoundary key={location.pathname} fallback={errorFallback}>
+            <RouteErrorBoundary resetKey={location.pathname} fallback={errorFallback}>
             <Suspense fallback={routeFallback}>
             <Routes>
                 {/* Public */}

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { Chart } from '../components/trading/Chart';
 import type { ChartRef, ChartColors } from '../components/trading/Chart';
@@ -66,17 +66,22 @@ export default function TradingAssistantPage() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Phase 3T: Risk analysis for current asset
-  const mockHolders = currentAsset === 'BTC' ? [
+  // Phase 3T: Risk analysis for current asset.
+  // MUST be memoized: useAssetRiskCheck's effect depends on these arrays by
+  // reference, and it calls setState. New array literals every render would make
+  // that effect re-run → setState → re-render → new arrays → infinite (async)
+  // render loop that starves React, freezing client-side navigation away from
+  // this page ("can't move to another tab").
+  const mockHolders = useMemo(() => (currentAsset === 'BTC' ? [
     { percentage: 4.25 },
     { percentage: 3.12 },
     { percentage: 2.89 },
     { percentage: 2.45 },
     { percentage: 2.12 },
-  ] : [];
-  const mockMarkets = currentAsset === 'BTC' ? [
+  ] : []), [currentAsset]);
+  const mockMarkets = useMemo(() => (currentAsset === 'BTC' ? [
     { depth: '$16,614,755', volumePercent: '3.95%' },
-  ] : [];
+  ] : []), [currentAsset]);
 
   const riskCheck = useAssetRiskCheck(currentAsset, mockHolders, mockMarkets);
 
