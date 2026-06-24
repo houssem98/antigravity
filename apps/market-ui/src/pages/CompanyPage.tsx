@@ -209,7 +209,56 @@ export default function CompanyPage() {
         });
     }, [symbol]);
 
-    if (!symbol) return null;
+    // No ticker in the URL (the "Companies" nav link points to bare /companies).
+    // Render a ticker picker instead of a blank page (which looked like a freeze).
+    if (!symbol) {
+        return (
+            <div className="min-h-[calc(100vh-64px)] flex items-center justify-center p-6">
+                <div className="w-full max-w-md text-center">
+                    <div className="w-12 h-12 rounded-xl bg-[#5B8DF6]/10 flex items-center justify-center mx-auto mb-4">
+                        <Building2 className="w-6 h-6 text-[#5B8DF6]" />
+                    </div>
+                    <h1 className="text-xl font-semibold text-[#F4F6FF] mb-1">Company Intelligence</h1>
+                    <p className="text-sm text-[#A7B0C8] mb-5">
+                        Enter a ticker to view filings, financials, and sentiment.
+                    </p>
+                    <form
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            const v = new FormData(e.currentTarget)
+                                .get('ticker')?.toString().trim().toUpperCase();
+                            if (v) navigate(`/companies/${encodeURIComponent(v)}`);
+                        }}
+                        className="flex gap-2"
+                    >
+                        <input
+                            name="ticker"
+                            autoFocus
+                            placeholder="e.g. AAPL, NVDA, TSLA"
+                            className="flex-1 px-4 py-2.5 rounded-lg bg-[#0B0E14] border border-[#1F2937] text-[#F4F6FF] placeholder-[#4A5568] focus:outline-none focus:border-[#5B8DF6]"
+                        />
+                        <button
+                            type="submit"
+                            className="px-4 py-2.5 rounded-lg bg-[#5B8DF6] text-white font-medium text-sm hover:bg-[#5B8DF6]/90 transition-colors"
+                        >
+                            View
+                        </button>
+                    </form>
+                    <div className="flex flex-wrap gap-2 justify-center mt-4">
+                        {['AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN'].map((t) => (
+                            <button
+                                key={t}
+                                onClick={() => navigate(`/companies/${t}`)}
+                                className="px-3 py-1 rounded-md text-xs bg-[#1F2937] text-[#A7B0C8] hover:text-[#F4F6FF] transition-colors"
+                            >
+                                {t}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     const price = quote?.['05. price'] ?? null;
     const changePct = quote?.['10. change percent']?.replace('%', '') ?? null;
