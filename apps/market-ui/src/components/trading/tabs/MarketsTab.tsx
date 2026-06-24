@@ -14,8 +14,8 @@ interface MarketsTabProps {
 const SkeletonRow = () => (
   <tr className="border-b border-[color:var(--line)]">
     {Array.from({ length: 8 }).map((_, i) => (
-      <td key={i} className="px-3 py-3">
-        <div className="h-4 bg-[color:var(--surface-2)] rounded animate-pulse" />
+      <td key={i} className="px-4 py-4">
+        <div className="h-4 bg-[color:var(--surface-2)] rounded-md animate-pulse" />
       </td>
     ))}
   </tr>
@@ -49,61 +49,65 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
   return (
     <div className="flex flex-col flex-1 overflow-y-auto bg-gradient-to-b from-[color:var(--bg)] via-[color:var(--bg)] to-[color:color-mix(in_oklch,var(--accent)_2%,var(--bg))]">
       {/* Header with Filters */}
-      <div className="sticky top-0 z-30 px-6 py-5 border-b border-[color:var(--line)] bg-[color:var(--surface)] bg-opacity-80 backdrop-blur-md">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-gradient-to-br from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_70%,transparent)]">
-              <BarChart3 className="w-5 h-5 text-[color:var(--accent-ink)]" />
+      <div className="sticky top-0 z-30 px-8 py-6 border-b border-[color:var(--line)] bg-[color:var(--surface)] bg-opacity-95 backdrop-blur-xl">
+        {/* Title Section */}
+        <div className="flex items-end justify-between mb-6">
+          <div className="flex items-end gap-4">
+            <div className="p-3 rounded-xl bg-gradient-to-br from-[color:var(--accent)] via-[color:color-mix(in_oklch,var(--accent)_85%,transparent)] to-[color:color-mix(in_oklch,var(--accent)_60%,transparent)] shadow-lg shadow-[color:var(--accent)]/25">
+              <BarChart3 className="w-6 h-6 text-[color:var(--accent-ink)]" />
             </div>
             <div>
-              <h2 className="text-h3 font-semibold text-[color:var(--text)]">{asset} Markets</h2>
-              <p className="text-label text-[color:var(--text-3)] mt-0.5">Top exchanges by volume</p>
+              <h2 className="text-2xl font-bold text-[color:var(--text)] tracking-tight">{asset} Markets</h2>
+              <p className="text-sm text-[color:var(--text-3)] mt-1.5 font-medium">Real-time exchange data • 24h metrics</p>
             </div>
           </div>
         </div>
 
-        {/* Search & Filter Row */}
-        <div className="flex items-center gap-2 mb-3">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-[color:var(--text-3)]" />
+        {/* Control Row */}
+        <div className="flex items-center gap-3">
+          {/* Search Bar */}
+          <div className="flex-1 relative max-w-md">
+            <Search className="absolute left-4 top-3 w-4 h-4 text-[color:var(--text-3)]" />
             <input
               type="text"
               placeholder="Search exchange or pair..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-3 py-2 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--line)] text-[color:var(--text)] placeholder-[color:var(--text-3)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+              className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[color:var(--surface-2)] border border-[color:var(--line)] text-[color:var(--text)] text-sm placeholder-[color:var(--text-3)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/50 transition-all"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-2.5 text-[color:var(--text-3)] hover:text-[color:var(--text)]"
+                className="absolute right-4 top-3 text-[color:var(--text-3)] hover:text-[color:var(--text)] transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             )}
           </div>
-        </div>
 
-        {/* Filter Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {['All', 'CEX', 'DEX'].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f.toLowerCase() as any)}
-              className={`px-3 py-1.5 rounded-md text-label font-medium transition-all duration-200 ${
-                filter === f.toLowerCase()
-                  ? 'bg-[color:var(--accent)] text-[color:var(--accent-ink)] shadow-lg shadow-[color:var(--accent)]/20'
-                  : 'bg-[color:var(--surface-2)] text-[color:var(--text-3)] hover:bg-[color:var(--surface)] hover:text-[color:var(--text-2)]'
-              }`}
-            >
-              {f}
-            </button>
-          ))}
+          {/* Filter Buttons */}
+          <div className="flex items-center gap-2">
+            {['All', 'CEX', 'DEX'].map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f.toLowerCase() as any)}
+                className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                  filter === f.toLowerCase()
+                    ? 'bg-[color:var(--accent)] text-[color:var(--accent-ink)] shadow-lg shadow-[color:var(--accent)]/25 font-semibold'
+                    : 'bg-[color:var(--surface-2)] text-[color:var(--text-3)] border border-[color:var(--line)] hover:bg-[color:var(--surface)] hover:text-[color:var(--text-2)] hover:border-[color:var(--accent)]/30'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Ask Hermes Button */}
           <button
             onClick={() => hermesPanel.openPanel({ exchanges: filteredData, asset })}
-            className="ml-auto px-3 py-1.5 rounded-md text-label font-medium bg-gradient-to-r from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_70%,transparent)] text-[color:var(--accent-ink)] hover:brightness-110 transition-all flex items-center gap-1 shadow-lg shadow-[color:var(--accent)]/20"
+            className="ml-auto px-4 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-[color:var(--accent)] via-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_80%,transparent)] text-[color:var(--accent-ink)] hover:shadow-xl hover:shadow-[color:var(--accent)]/30 transition-all duration-200 flex items-center gap-2 whitespace-nowrap"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="w-4 h-4" />
             Ask Hermes
           </button>
         </div>
@@ -122,41 +126,44 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
 
       {/* Table */}
       {!error && (
-        <div className="flex-1 px-6 py-4 overflow-x-auto">
+        <div className="flex-1 px-8 py-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[color:var(--line)] sticky top-0 bg-[color:var(--surface)]">
-                <th className="px-3 py-3 text-left label font-semibold text-[color:var(--text-3)]">#</th>
-                <th className="px-3 py-3 text-left label font-semibold text-[color:var(--text-3)]">Exchange</th>
-                <th className="px-3 py-3 text-left label font-semibold text-[color:var(--text-3)]">Pair</th>
+              <tr className="border-b-2 border-[color:var(--line)] sticky top-[70px] bg-[color:var(--surface)] bg-opacity-95 backdrop-blur-md">
+                <th className="px-4 py-4 text-left text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider">#</th>
+                <th className="px-4 py-4 text-left text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider">Exchange</th>
+                <th className="px-4 py-4 text-left text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider">Pair</th>
                 <th
                   onClick={() => toggleSort('price')}
-                  className="px-3 py-3 text-right label font-semibold text-[color:var(--text-3)] cursor-pointer hover:text-[color:var(--text-2)] transition-colors flex items-center justify-end gap-1"
+                  className="px-4 py-4 text-right text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider cursor-pointer hover:text-[color:var(--accent)] transition-colors flex items-center justify-end gap-2 group"
                 >
                   Price
                   {sortField === 'price' && (
-                    <ArrowUpDown className={`w-4 h-4 ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
+                    <ArrowUpDown className={`w-4 h-4 text-[color:var(--accent)] ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
                   )}
+                  {sortField !== 'price' && <ArrowUpDown className="w-4 h-4 opacity-0 group-hover:opacity-30 transition-opacity" />}
                 </th>
-                <th className="px-3 py-3 text-right label font-semibold text-[color:var(--text-3)]">Bid / Ask Depth</th>
+                <th className="px-4 py-4 text-right text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider">Depth</th>
                 <th
                   onClick={() => toggleSort('volume24h')}
-                  className="px-3 py-3 text-right label font-semibold text-[color:var(--text-3)] cursor-pointer hover:text-[color:var(--text-2)] transition-colors flex items-center justify-end gap-1"
+                  className="px-4 py-4 text-right text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider cursor-pointer hover:text-[color:var(--accent)] transition-colors flex items-center justify-end gap-2 group"
                 >
                   Volume (24h)
                   {sortField === 'volume24h' && (
-                    <ArrowUpDown className={`w-4 h-4 ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
+                    <ArrowUpDown className={`w-4 h-4 text-[color:var(--accent)] ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
                   )}
+                  {sortField !== 'volume24h' && <ArrowUpDown className="w-4 h-4 opacity-0 group-hover:opacity-30 transition-opacity" />}
                 </th>
-                <th className="px-3 py-3 text-right label font-semibold text-[color:var(--text-3)]">Volume %</th>
+                <th className="px-4 py-4 text-right text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider">Volume %</th>
                 <th
                   onClick={() => toggleSort('liquidity')}
-                  className="px-3 py-3 text-right label font-semibold text-[color:var(--text-3)] cursor-pointer hover:text-[color:var(--text-2)] transition-colors flex items-center justify-end gap-1"
+                  className="px-4 py-4 text-right text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider cursor-pointer hover:text-[color:var(--accent)] transition-colors flex items-center justify-end gap-2 group"
                 >
                   Liquidity
                   {sortField === 'liquidity' && (
-                    <ArrowUpDown className={`w-4 h-4 ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
+                    <ArrowUpDown className={`w-4 h-4 text-[color:var(--accent)] ${sortOrder === 'asc' ? 'rotate-180' : ''}`} />
                   )}
+                  {sortField !== 'liquidity' && <ArrowUpDown className="w-4 h-4 opacity-0 group-hover:opacity-30 transition-opacity" />}
                 </th>
               </tr>
             </thead>
@@ -175,39 +182,39 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
                         transition={{ delay: idx * 0.02 }}
                         onMouseEnter={() => setHoveredRank(ex.rank)}
                         onMouseLeave={() => setHoveredRank(null)}
-                        className={`group transition-all duration-200 ${
+                        className={`group transition-all duration-300 ${
                           isHovered
-                            ? 'bg-gradient-to-r from-[color:color-mix(in_oklch,var(--accent)_10%,var(--surface))] to-transparent'
-                            : 'hover:bg-[color:color-mix(in_oklch,var(--accent)_4%,var(--surface))]'
+                            ? 'bg-gradient-to-r from-[color:color-mix(in_oklch,var(--accent)_12%,var(--surface))] via-[color:color-mix(in_oklch,var(--accent)_6%,var(--surface))] to-transparent shadow-lg shadow-[color:var(--accent)]/10 border-l-2 border-l-[color:var(--accent)]'
+                            : 'hover:bg-[color:color-mix(in_oklch,var(--accent)_5%,var(--surface))]'
                         }`}
                       >
-                        <td className="px-3 py-3 text-center">
-                          <span className={`w-6 h-6 rounded-full inline-flex items-center justify-center text-label font-bold transition-all ${
+                        <td className="px-4 py-4 text-center">
+                          <span className={`w-7 h-7 rounded-full inline-flex items-center justify-center text-sm font-bold transition-all duration-200 ${
                             isHovered
-                              ? 'bg-[color:var(--accent)] text-[color:var(--accent-ink)]'
+                              ? 'bg-[color:var(--accent)] text-[color:var(--accent-ink)] shadow-lg shadow-[color:var(--accent)]/40'
                               : 'bg-[color:var(--surface-2)] text-[color:var(--text-3)]'
                           }`}>
                             {ex.rank}
                           </span>
                         </td>
 
-                        <td className="px-3 py-3">
-                          <div className="font-medium text-[color:var(--text)] group-hover:text-[color:var(--accent)] transition-colors">
+                        <td className="px-4 py-4">
+                          <div className="font-semibold text-[color:var(--text)] group-hover:text-[color:var(--accent)] transition-colors duration-200">
                             {ex.name}
                           </div>
                         </td>
 
-                        <td className="px-3 py-3">
-                          <div className="inline-block px-2 py-1 rounded-sm bg-[color:var(--surface-2)] border border-[color:var(--line)] font-mono text-data text-[color:var(--accent)]">
+                        <td className="px-4 py-4">
+                          <div className="inline-block px-3 py-1.5 rounded-md bg-gradient-to-br from-[color:color-mix(in_oklch,var(--accent)_15%,var(--surface))] to-[color:color-mix(in_oklch,var(--accent)_8%,var(--surface))] border border-[color:var(--accent)]/30 font-mono text-xs font-semibold text-[color:var(--accent)] tracking-wide">
                             {ex.pair}
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-right">
+                        <td className="px-4 py-4 text-right">
                           <motion.div
                             initial={{ backgroundColor: 'transparent' }}
                             animate={{ backgroundColor: 'transparent' }}
-                            className="font-mono font-semibold text-[color:var(--accent)] text-data relative"
+                            className="font-mono font-bold text-[color:var(--accent)] text-sm relative"
                           >
                             {ex.price}
                             <motion.div
@@ -218,40 +225,40 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
                           </motion.div>
                         </td>
 
-                        <td className="px-3 py-3 text-right">
-                          <div className="font-mono text-data text-[color:var(--text-2)]">
-                            <div className="flex items-center justify-end gap-1">
-                              <div className="h-2 w-6 bg-[color:color-mix(in_oklch,var(--up)_20%,var(--surface))] rounded-full" />
-                              <div className="text-[color:var(--up)]">{ex.depth.bid}</div>
+                        <td className="px-4 py-4 text-right">
+                          <div className="font-mono text-xs text-[color:var(--text-2)] space-y-1">
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="h-2 w-8 bg-[color:color-mix(in_oklch,var(--up)_25%,var(--surface))] rounded-full" />
+                              <div className="text-[color:var(--up)] font-semibold w-16 text-right">{ex.depth.bid}</div>
                             </div>
-                            <div className="flex items-center justify-end gap-1">
-                              <div className="h-2 w-6 bg-[color:color-mix(in_oklch,var(--down)_20%,var(--surface))] rounded-full" />
-                              <div className="text-[color:var(--down)]">{ex.depth.ask}</div>
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="h-2 w-8 bg-[color:color-mix(in_oklch,var(--down)_25%,var(--surface))] rounded-full" />
+                              <div className="text-[color:var(--down)] font-semibold w-16 text-right">{ex.depth.ask}</div>
                             </div>
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-right">
-                          <div className="font-mono font-semibold text-[color:var(--accent)]">
+                        <td className="px-4 py-4 text-right">
+                          <div className="font-mono font-bold text-[color:var(--accent)] text-sm">
                             {ex.volume24h}
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <div className="h-1.5 w-12 bg-[color:var(--surface-2)] rounded-full overflow-hidden">
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex items-center justify-end gap-3">
+                            <div className="h-2 w-14 bg-[color:var(--surface-2)] rounded-full overflow-hidden">
                               <div
-                                className={`h-full rounded-full transition-all ${
+                                className={`h-full rounded-full transition-all duration-300 ${
                                   volumeNum > 3
-                                    ? 'bg-gradient-to-r from-[color:var(--up)] to-[color:var(--up)]/60'
+                                    ? 'bg-gradient-to-r from-[color:var(--up)] to-[color:var(--up)]/70'
                                     : volumeNum > 1
-                                    ? 'bg-gradient-to-r from-[color:var(--accent)] to-[color:var(--accent)]/60'
-                                    : 'bg-[color:var(--text-3)]'
+                                    ? 'bg-gradient-to-r from-[color:var(--accent)] to-[color:var(--accent)]/70'
+                                    : 'bg-[color:var(--text-3)]/50'
                                 }`}
                                 style={{ width: `${Math.min(100, volumeNum * 20)}%` }}
                               />
                             </div>
-                            <span className={`font-mono font-semibold text-label w-10 ${
+                            <span className={`font-mono font-bold text-sm w-12 text-right ${
                               volumeNum > 3
                                 ? 'text-[color:var(--up)]'
                                 : volumeNum > 1
@@ -263,8 +270,8 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             {Array.from({ length: 5 }).map((_, i) => {
                               const level = (i + 1) * 200;
                               const isActive = ex.liquidity >= level;
@@ -273,12 +280,12 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
                                   key={i}
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: 'auto', opacity: 1 }}
-                                  transition={{ delay: i * 0.1 }}
-                                  className={`w-1.5 h-4 rounded-sm transition-all ${
+                                  transition={{ delay: i * 0.08 }}
+                                  className={`w-2 h-5 rounded-sm transition-all duration-200 ${
                                     isActive
-                                      ? 'bg-gradient-to-t from-[color:var(--accent)] to-[color:var(--accent)]/70'
+                                      ? 'bg-gradient-to-t from-[color:var(--accent)] via-[color:var(--accent)]/85 to-[color:var(--accent)]/70 shadow-md shadow-[color:var(--accent)]/40'
                                       : 'bg-[color:var(--surface-2)]'
-                                  } ${isHovered ? 'brightness-125' : ''}`}
+                                  } ${isHovered && isActive ? 'brightness-125' : ''}`}
                                 />
                               );
                             })}
@@ -293,23 +300,23 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
       )}
 
       {/* Footer Stats */}
-      <div className="px-6 py-4 border-t border-[color:var(--line)] bg-gradient-to-r from-[color:color-mix(in_oklch,var(--accent)_3%,var(--surface))] to-transparent">
-        <div className="grid grid-cols-4 gap-4 text-sm">
-          <div>
-            <div className="label text-[color:var(--text-3)] mb-1">Total Volume</div>
-            <div className="font-semibold text-[color:var(--text)]">—</div>
+      <div className="px-8 py-6 border-t border-[color:var(--line)] bg-gradient-to-r from-[color:color-mix(in_oklch,var(--accent)_5%,var(--surface))] via-[color:color-mix(in_oklch,var(--accent)_2%,var(--surface))] to-[color:var(--surface)]">
+        <div className="grid grid-cols-4 gap-6">
+          <div className="group">
+            <div className="text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider mb-2">Total Volume</div>
+            <div className="font-bold text-[color:var(--accent)] text-lg group-hover:text-[color:var(--accent)] transition-colors">—</div>
           </div>
-          <div>
-            <div className="label text-[color:var(--text-3)] mb-1">Top Exchange</div>
-            <div className="font-semibold text-[color:var(--text)]">{marketsData?.exchanges?.[0]?.name || '—'}</div>
+          <div className="group">
+            <div className="text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider mb-2">Top Exchange</div>
+            <div className="font-bold text-[color:var(--text)] text-lg group-hover:text-[color:var(--accent)] transition-colors">{marketsData?.exchanges?.[0]?.name || '—'}</div>
           </div>
-          <div>
-            <div className="label text-[color:var(--text-3)] mb-1">Avg Spread</div>
-            <div className="font-semibold text-[color:var(--text)]">—</div>
+          <div className="group">
+            <div className="text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider mb-2">Avg Spread</div>
+            <div className="font-bold text-[color:var(--text)] text-lg group-hover:text-[color:var(--accent)] transition-colors">—</div>
           </div>
-          <div>
-            <div className="label text-[color:var(--text-3)] mb-1">Showing</div>
-            <div className="font-semibold text-[color:var(--text)]">{filteredData.length} of {marketsData?.exchanges?.length || 0}</div>
+          <div className="group">
+            <div className="text-xs font-bold text-[color:var(--text-3)] uppercase tracking-wider mb-2">Showing</div>
+            <div className="font-bold text-[color:var(--accent)] text-lg">{filteredData.length} <span className="text-[color:var(--text-3)] text-base">of {marketsData?.exchanges?.length || 0}</span></div>
           </div>
         </div>
       </div>
