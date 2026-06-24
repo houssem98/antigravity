@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { BarChart3, Zap, Sparkles, AlertCircle, RefreshCw, Search, X, ArrowUpDown } from 'lucide-react';
 import { HermesQueryPanel } from '../HermesQueryPanel';
 import { useHermesPanel } from '../../../hooks/useHermesPanel';
-import { useMarketsData } from '../../../hooks/useMarketsData';
+import { useMarketsWebSocket } from '../../../hooks/useMarketsWebSocket';
 import { useMarketsSort } from '../../../hooks/useMarketsSort';
 import { useMarketsSearch } from '../../../hooks/useMarketsSearch';
 
@@ -25,7 +25,7 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
   const [hoveredRank, setHoveredRank] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | 'cex' | 'dex'>('all');
   const hermesPanel = useHermesPanel();
-  const { data: marketsData, loading, error, refetch } = useMarketsData({ asset });
+  const { data: marketsData, loading, error } = useMarketsWebSocket({ asset });
 
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -114,14 +114,8 @@ export const MarketsTab: React.FC<MarketsTabProps> = ({ asset }) => {
         <div className="flex-1 px-6 py-8 flex items-center justify-center">
           <div className="text-center">
             <AlertCircle className="w-12 h-12 text-[color:var(--down)] mx-auto mb-3 opacity-50" />
-            <p className="text-[color:var(--text-3)] mb-4">{error}</p>
-            <button
-              onClick={refetch}
-              className="px-4 py-2 rounded-md bg-[color:var(--accent)] text-[color:var(--accent-ink)] hover:brightness-110 flex items-center gap-2 mx-auto"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Retry
-            </button>
+            <p className="text-[color:var(--text-3)]">{error}</p>
+            <p className="text-[color:var(--text-3)] text-sm mt-2">(WebSocket reconnecting...)</p>
           </div>
         </div>
       )}
