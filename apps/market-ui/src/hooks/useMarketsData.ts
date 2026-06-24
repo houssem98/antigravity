@@ -40,7 +40,7 @@ export function useMarketsData(options: UseMarketsDataOptions = {}) {
     limit = 50,
     sort = 'volume_24h',
     order = 'desc',
-    pollInterval = 5000,
+    pollInterval = 30000,
   } = options;
 
   const [data, setData] = useState<MarketsData | null>(null);
