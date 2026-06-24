@@ -57,13 +57,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("billing_schema_skipped", error=str(e))
 
-    # Startup: user library schema (QA history etc.; non-fatal)
-    try:
-        from app.api.routes.library import ensure_library_schema
-        await ensure_library_schema(getattr(app.state, "pg_pool", None))
-    except Exception as e:
-        logger.warning("library_schema_skipped", error=str(e))
-
     # Startup: verify all connections
     await _verify_connections()
 
@@ -328,8 +321,6 @@ app.include_router(analytics.router, tags=["Analytics"])
 app.include_router(sso.router, tags=["SSO/SCIM"])
 app.include_router(auth_routes.router)
 app.include_router(billing.router)
-from app.api.routes import library
-app.include_router(library.router, tags=["Library"])
 from app.api.routes import claude, hermes
 app.include_router(claude.router, prefix="/v1", tags=["Claude Managed Agents"])
 app.include_router(hermes.router, prefix="/v1", tags=["Hermes Agent"])
