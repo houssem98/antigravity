@@ -192,6 +192,9 @@ export type AuthState = { user: AuthUser } | null;
 const _authListeners = new Set<(s: AuthState) => void>();
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let _managerStarted = false;
+// Cache of the supabase-js session, mirrored from onAuthStateChange so the
+// observer can report it synchronously in Supabase auth mode.
+let _supabaseSession: { user?: { id?: string; email?: string } } | null = null;
 
 // Best-effort synchronous read of the current session across all backends.
 function currentAuthState(): AuthState {
@@ -203,7 +206,11 @@ function currentAuthState(): AuthState {
         const s = readGravitySession();
         return s ? { user: s.user } : null;
     }
-    return null; // Supabase mode emits via its own onAuthStateChange below
+    // Supabase mode: report the session mirrored from onAuthStateChange (wired
+    // in startSessionManager). This keeps the observer truthy after a Supabase
+    // login so protected routes stop bouncing to /auth.
+    const sb = _supabaseSession?.user;
+    return sb?.id ? { user: { id: sb.id, email: sb.email } } : null;
 }
 
 function _notifyAuth(): void {
@@ -256,6 +263,19 @@ export function startSessionManager(): void {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') void ensureGravitySession();
     });
+
+    // Supabase mode: mirror supabase-js auth state into the observer so the app
+    // reacts to login/logout/refresh and protected routes recognise the session.
+    if (_useSupabaseAuth) {
+        supabase.auth.getSession().then(({ data }) => {
+            _supabaseSession = data.session;
+            _notifyAuth();
+        });
+        supabase.auth.onAuthStateChange((_event, session) => {
+            _supabaseSession = session;
+            _notifyAuth();
+        });
+    }
 
     scheduleProactiveRefresh();
 }

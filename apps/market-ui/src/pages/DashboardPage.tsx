@@ -7,7 +7,7 @@ import {
     FileText, TrendingUp, Search, ArrowRight, BarChart3,
     Clock, Database, Sparkles, Upload,
 } from 'lucide-react';
-import { listReports, type ReportMeta } from '../services/reports';
+import { supabase } from '../services/supabase';
 import { getStockList, getNews } from '../services/marketData';
 
 interface DashboardStats {
@@ -17,7 +17,13 @@ interface DashboardStats {
     docCount: number;
 }
 
-type RecentReport = ReportMeta;
+interface RecentReport {
+    id: string;
+    query: string;
+    title: string;
+    created_at: string;
+    sources_analyzed: number;
+}
 
 const GRAVITY_API = 'http://localhost:8000';
 
@@ -34,8 +40,18 @@ export default function DashboardPage() {
 
     const fetchDashboardData = async () => {
         try {
-            // Reports from gravity-api (returns [] when not authenticated)
-            const reportList = await listReports();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) { setLoading(false); return; }
+
+            // Fetch reports from Supabase
+            const { data: reports } = await supabase
+                .from('research_reports')
+                .select('id, query, title, created_at, sources_analyzed')
+                .eq('user_id', session.user.id)
+                .order('created_at', { ascending: false })
+                .limit(50);
+
+            const reportList = reports || [];
             const totalSources = reportList.reduce((sum, r) => sum + (r.sources_analyzed || 0), 0);
             const hoursSaved = reportList.length * 2.5; // ~2.5 hrs per deep research report
 
@@ -180,7 +196,7 @@ export default function DashboardPage() {
                                         </p>
                                         <div className="flex items-center gap-3 mt-1">
                                             <span className="text-[10px] text-[#4A5568]">{formatTimeAgo(report.created_at)}</span>
-                                            {(report.sources_analyzed ?? 0) > 0 && (
+                                            {report.sources_analyzed > 0 && (
                                                 <span className="text-[10px] text-[#4A5568]">
                                                     {report.sources_analyzed} sources
                                                 </span>

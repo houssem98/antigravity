@@ -1,9 +1,10 @@
 """Trading Markets & Hermes Integration - Live market data + AI analysis."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
+import asyncio
 
 from app.services.markets.exchange_data_service import ExchangeDataService
 from app.services.markets.caching_layer import MarketDataCache
@@ -127,3 +128,30 @@ async def ask_about_market(request: AskRequest):
             status_code=500,
             detail=f"Hermes query failed: {str(e)}"
         )
+
+
+@router.websocket("/ws")
+async def websocket_market_data(websocket: WebSocket, asset: str = "BTC"):
+    """
+    Real-time market data via WebSocket.
+
+    Connect: ws://localhost:8000/api/trading/markets/ws?asset=BTC
+    Receives: JSON with live market data every 2 seconds
+    """
+    await websocket.accept()
+    try:
+        while True:
+            # Fetch live data
+            data = await market_service.get_markets(asset, limit=10)
+
+            # Send to client
+            await websocket.send_json(data)
+
+            # Wait 2 seconds before next update (real-time but not excessive)
+            await asyncio.sleep(2)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await websocket.send_json({"error": str(e)})
+        await websocket.close()
