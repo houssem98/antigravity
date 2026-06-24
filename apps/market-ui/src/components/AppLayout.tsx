@@ -1,23 +1,9 @@
 // App Layout - Persistent sidebar and topbar for app pages
 
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import {
-    Zap, BarChart3, Settings, Sparkles,
-    Activity, LogOut, History, Building2, Database, TrendingUp, CreditCard, ShieldCheck,
-} from 'lucide-react';
+import { Sparkles, Activity, LogOut } from 'lucide-react';
 import { signOut } from '../services/supabase';
-
-const NAV = [
-    { to: '/search', icon: Zap, label: 'Search' },
-    { to: '/trading', icon: TrendingUp, label: 'AI Trading Assistant' },
-    { to: '/history', icon: History, label: 'History' },
-    { to: '/companies', icon: Building2, label: 'Companies' },
-    { to: '/dashboard', icon: BarChart3, label: 'Dashboard' },
-    { to: '/documents', icon: Database, label: 'Documents' },
-    { to: '/billing', icon: CreditCard, label: 'Billing' },
-    { to: '/admin/billing', icon: ShieldCheck, label: 'Admin — Billing' },
-    { to: '/settings', icon: Settings, label: 'Settings' },
-];
+import { NAV_ITEMS as NAV } from '../lib/navItems';
 
 export default function AppLayout() {
     const location = useLocation();

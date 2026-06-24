@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { useLocation, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { Chart } from '../components/trading/Chart';
 import type { ChartRef, ChartColors } from '../components/trading/Chart';
 import { Assistant } from '../components/trading/Assistant';
@@ -24,17 +24,11 @@ import { MarketsTab } from '../components/trading/tabs/MarketsTab';
 import { HermesRiskBanner } from '../components/trading/HermesRiskBanner';
 import { useAssetRiskCheck } from '../hooks/useAssetRiskCheck';
 
-import { X, MessageSquare, Search, Settings, PieChart, Star, ArrowLeft, Zap, BarChart3, History, Building2, Database, TrendingUp, Sparkles } from 'lucide-react';
+import { X, MessageSquare, Search, Settings, PieChart, Star, ArrowLeft, Sparkles, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-const NAV = [
-  { to: '/search', icon: Zap, label: 'Search' },
-  { to: '/trading', icon: TrendingUp, label: 'Trading' },
-  { to: '/history', icon: History, label: 'History' },
-  { to: '/companies', icon: Building2, label: 'Companies' },
-  { to: '/dashboard', icon: BarChart3, label: 'Dashboard' },
-  { to: '/documents', icon: Database, label: 'Documents' },
-];
+import { NAV_ITEMS as NAV } from '../lib/navItems';
+import { signOut } from '../services/supabase';
 
 const hexToRgba = (hex: string, alpha: number) => {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -45,6 +39,8 @@ const hexToRgba = (hex: string, alpha: number) => {
 
 export default function TradingAssistantPage() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const handleSignOut = async () => { await signOut(); navigate('/auth'); };
   const [currentView, setCurrentView] = useState<'markets' | 'chart'>('markets');
   const [currentAsset, setCurrentAsset] = useState<string>('BTC');
   const [currentTimeframe, setCurrentTimeframe] = useState<string>('1D');
@@ -370,6 +366,13 @@ export default function TradingAssistantPage() {
             );
           })}
         </nav>
+        <button
+          onClick={handleSignOut}
+          title="Sign Out"
+          className="w-8 h-8 rounded-sm flex items-center justify-center text-[color:var(--text-3)] hover:text-[color:var(--down)] hover:bg-[color:var(--surface-2)] transition-colors"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </aside>
 
       {/* Main Trading Area */}
