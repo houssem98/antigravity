@@ -342,51 +342,51 @@ export default function GridView() {
     const filteredTickers = getFilteredTickers();
 
     return (
-        <div className="p-6 bg-[color:var(--bg)] text-[color:var(--text-2)]">
-            <div className="max-w-[1400px] mx-auto">
+        <div className="p-6 bg-gradient-to-b from-[#0a0a0a] via-[#0f0f1a] to-[#0a0a0a] text-[color:var(--text-2)] min-h-screen">
+            <div className="max-w-[1600px] mx-auto">
                 {/* Header */}
-                <div className="flex items-center gap-3 mb-2">
-                    <div className="w-8 h-8 rounded-sm flex items-center justify-center bg-[color:var(--accent)]">
-                        <GridIcon className="w-4 h-4 text-[color:var(--accent-ink)]" />
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-gradient-to-br from-[#d4af37] to-[#aa8c2c] shadow-lg shadow-[#d4af37]/40">
+                        <GridIcon className="w-5 h-5 text-[#0a0a0a]" />
                     </div>
                     <div>
-                        <h1 className="font-display font-semibold text-h3 text-[color:var(--text)] tracking-tight">Research Grid</h1>
-                        <p className="label mt-0.5">TICKERS × PROMPTS · ONE CITED ANSWER PER CELL</p>
+                        <h1 className="font-display font-bold text-3xl text-[#d4af37] tracking-tight drop-shadow-lg">Research Grid</h1>
+                        <p className="text-xs font-bold text-[#00d9ff] mt-1 uppercase tracking-widest">Tickers × Prompts · One Cited Answer Per Cell</p>
                     </div>
                 </div>
 
                 {/* Config */}
-                <div className="mt-6 p-6 rounded-xl bg-[color:var(--surface)] border border-[color:var(--line)] shadow-lg shadow-[color:color-mix(in_oklch,var(--accent)_5%,transparent)]">
-                    <label className="label block mb-2 font-semibold text-[color:var(--text)]">Tickers (comma-separated)</label>
+                <div className="mt-8 p-6 rounded-lg bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#d4af37]/30 shadow-2xl shadow-[#d4af37]/20 backdrop-blur-sm">
+                    <label className="text-xs font-bold text-[#d4af37] block mb-2 uppercase tracking-wider">Tickers (comma-separated)</label>
                     <input
                         type="text"
                         value={tickersInput}
                         onChange={e => setTickersInput(e.target.value)}
                         placeholder="NVDA, AAPL, MSFT"
                         disabled={running}
-                        className="w-full px-4 py-3 rounded-lg text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:ring-offset-0 focus:border-transparent disabled:opacity-50 transition-all"
+                        className="w-full px-4 py-2.5 rounded-md text-sm bg-[#0a0a0a] border border-[#d4af37]/30 text-[#00d9ff] placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#d4af37]/50 focus:border-[#d4af37] disabled:opacity-40 transition-all"
                     />
 
-                    <label className="label block mt-5 mb-3 font-semibold text-[color:var(--text)]">LLM Model</label>
-                    <div className="flex gap-2.5 mb-6">
+                    <label className="text-xs font-bold text-[#d4af37] block mt-4 mb-3 uppercase tracking-wider">LLM Model</label>
+                    <div className="flex gap-2 mb-6">
                         {['deepseek', 'claude', 'gemini'].map(model => (
                             <button
                                 key={model}
                                 onClick={() => setSelectedModel(model as 'deepseek' | 'claude' | 'gemini')}
                                 disabled={running}
-                                className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-all border ${
+                                className={`px-3 py-2 rounded-md text-xs font-bold transition-all border uppercase tracking-wider ${
                                     selectedModel === model
-                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] shadow-md shadow-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] scale-105'
-                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--text-2)] hover:shadow-sm'
+                                        ? 'border-[#d4af37] text-[#d4af37] bg-[#d4af37]/15 shadow-lg shadow-[#d4af37]/30'
+                                        : 'border-[#d4af37]/30 text-[#888] hover:text-[#d4af37] hover:border-[#d4af37]/50'
                                 } disabled:opacity-40 cursor-pointer`}
                             >
-                                {model === 'deepseek' ? 'DeepSeek ($)' : model === 'claude' ? 'Claude ($$)' : 'Gemini (Free)'}
+                                {model === 'deepseek' ? 'DeepSeek' : model === 'claude' ? 'Claude' : 'Gemini'}
                             </button>
                         ))}
                     </div>
 
-                    <label className="label block mt-5 mb-3 font-semibold text-[color:var(--text)]">Analyst prompts</label>
-                    <div className="flex flex-wrap gap-2">
+                    <label className="text-xs font-bold text-[#d4af37] block mt-4 mb-3 uppercase tracking-wider">Analyst Prompts</label>
+                    <div className="flex flex-wrap gap-2 mb-6">
                         {SEED_GRID_PROMPTS.map(p => {
                             const active = promptIds.includes(p.id);
                             return (
@@ -394,9 +394,9 @@ export default function GridView() {
                                     key={p.id}
                                     onClick={() => togglePrompt(p.id)}
                                     disabled={running}
-                                    className={`px-3.5 py-2 rounded-lg text-xs font-medium transition-all border ${active
-                                        ? 'border-[color:var(--accent)] text-[color:var(--accent)] bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)] shadow-md shadow-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]'
-                                        : 'border-[color:var(--line)] text-[color:var(--text-3)] hover:text-[color:var(--text)] hover:border-[color:var(--text-2)] hover:shadow-sm'
+                                    className={`px-3 py-2 rounded-md text-xs font-bold transition-all border uppercase tracking-wider ${active
+                                        ? 'border-[#00d9ff] text-[#00d9ff] bg-[#00d9ff]/15 shadow-lg shadow-[#00d9ff]/40'
+                                        : 'border-[#d4af37]/30 text-[#888] hover:text-[#d4af37] hover:border-[#d4af37]/50'
                                         } disabled:opacity-40 cursor-pointer`}
                                 >
                                     {p.label}
@@ -405,30 +405,30 @@ export default function GridView() {
                         })}
                     </div>
 
-                    <div className="flex items-center gap-3 mt-6">
+                    <div className="flex items-center gap-3">
                         {!running ? (
                             <button
                                 onClick={startRun}
                                 disabled={!tickersInput.trim() || activePrompts.length === 0}
-                                className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-semibold bg-gradient-to-br from-[color:var(--accent)] to-[color:color-mix(in_oklch,var(--accent)_80%,black)] text-[color:var(--accent-ink)] hover:shadow-lg hover:shadow-[color:color-mix(in_oklch,var(--accent)_30%,transparent)] disabled:opacity-40 active:scale-95 transition-all"
+                                className="flex items-center gap-2 px-6 py-3 rounded-md text-sm font-bold bg-gradient-to-r from-[#00d9ff] to-[#00b8cc] text-[#0a0a0a] hover:shadow-xl hover:shadow-[#00d9ff]/50 disabled:opacity-40 active:scale-95 transition-all uppercase tracking-wider"
                             >
                                 <Play className="w-4 h-4" />
-                                Run grid
+                                Run Grid
                             </button>
                         ) : (
                             <button
                                 onClick={cancelRun}
-                                className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-semibold text-[color:var(--down)] border-2 border-[color:var(--down)] hover:bg-[color:color-mix(in_oklch,var(--down)_15%,transparent)] hover:shadow-md active:scale-95 transition-all"
+                                className="flex items-center gap-2 px-6 py-3 rounded-md text-sm font-bold text-[#ff4444] border-2 border-[#ff4444] hover:bg-[#ff4444]/15 hover:shadow-lg hover:shadow-[#ff4444]/30 active:scale-95 transition-all uppercase tracking-wider"
                             >
                                 <X className="w-4 h-4" />
                                 Cancel
                             </button>
                         )}
                         {progress && (
-                            <span className="label">
+                            <span className="text-xs font-bold text-[#00d9ff] uppercase tracking-wider">
                                 {progress.done}/{progress.total} DONE
-                                {progress.failed > 0 && <span className="down"> · {progress.failed} FAILED</span>}
-                                {progress.cancelled > 0 && <span className="text-[color:var(--text-3)]"> · {progress.cancelled} CANCELLED</span>}
+                                {progress.failed > 0 && <span className="text-[#ff4444]"> · {progress.failed} FAILED</span>}
+                                {progress.cancelled > 0 && <span className="text-[#888]"> · {progress.cancelled} CANCELLED</span>}
                             </span>
                         )}
 
@@ -506,7 +506,7 @@ export default function GridView() {
                             placeholder="Search cells by ticker or content..."
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
-                            className="flex-1 px-4 py-3 rounded-lg text-sm bg-[color:var(--bg)] border border-[color:var(--line)] text-[color:var(--text)] placeholder:text-[color:var(--text-4)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] focus:border-transparent transition-all shadow-sm"
+                            className="flex-1 px-4 py-2.5 rounded-md text-sm bg-[#0a0a0a] border border-[#d4af37]/30 text-[#00d9ff] placeholder:text-[#444] focus:outline-none focus:ring-2 focus:ring-[#d4af37]/50 focus:border-[#d4af37] transition-all"
                         />
                         {searchQuery && (
                             <button
@@ -526,11 +526,11 @@ export default function GridView() {
 
                 {/* Grid */}
                 {state && (
-                    <div className="mt-6 rounded-xl border border-[color:var(--line)] overflow-hidden shadow-xl shadow-[color:color-mix(in_oklch,var(--accent)_5%,transparent)]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
+                    <div className="mt-6 rounded-lg border border-[#d4af37]/30 overflow-hidden shadow-2xl shadow-[#d4af37]/20 bg-[#0a0a0a]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
                         <div className="overflow-x-auto overflow-y-auto h-full">
                             <table className="w-full text-xs">
                                 <thead className="sticky top-0 z-20">
-                                    <tr className="bg-gradient-to-r from-[color:var(--surface-2)] to-[color:var(--surface-2)] border-b-2 border-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]">
+                                    <tr className="bg-gradient-to-r from-[#2d2416]/80 via-[#3d3420]/80 to-[#2d2416]/80 border-b-2 border-[#d4af37]/40">
                                         <th
                                             onClick={() => {
                                                 if (sortBy === 'ticker') {
@@ -540,7 +540,7 @@ export default function GridView() {
                                                     setSortDesc(false);
                                                 }
                                             }}
-                                            className="sticky left-0 z-30 px-3 py-3 text-left font-bold text-[10px] text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[70px] cursor-pointer hover:text-[color:var(--accent)] transition-colors uppercase tracking-wider"
+                                            className="sticky left-0 z-30 px-3 py-3 text-left font-bold text-[10px] text-[#d4af37] bg-[#2d2416]/90 min-w-[70px] cursor-pointer hover:text-[#ffed4e] transition-colors uppercase tracking-wider"
                                         >
                                             <div className="flex items-center gap-1.5">
                                                 TICKER
@@ -552,10 +552,10 @@ export default function GridView() {
                                         {state.def.prompts.map(p => (
                                             <th
                                                 key={p.id}
-                                                className={`px-3 py-3 text-left font-bold text-[10px] text-[color:var(--text)] cursor-pointer transition-colors uppercase tracking-wider ${
+                                                className={`px-3 py-3 text-left font-bold text-[10px] cursor-pointer transition-colors uppercase tracking-wider ${
                                                     p.synthesis
-                                                        ? 'bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)]'
-                                                        : 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface)]'
+                                                        ? 'bg-[#1a1a1a] text-[#00d9ff] hover:bg-[#00d9ff]/10'
+                                                        : 'bg-[#2d2416]/80 text-[#d4af37] hover:text-[#ffed4e]'
                                                 }`}
                                                 style={{ minWidth: p.synthesis ? '200px' : '160px' }}
                                             >
@@ -575,13 +575,13 @@ export default function GridView() {
                                         filteredTickers.map((ticker, idx) => (
                                         <tr
                                             key={ticker}
-                                            className={`transition-colors ${
+                                            className={`transition-colors border-b border-[#333] ${
                                                 idx % 2 === 0
-                                                    ? 'bg-[color:var(--bg)]'
-                                                    : 'bg-[color:color-mix(in_oklch,var(--surface)_50%,transparent)]'
-                                            } hover:bg-[color:color-mix(in_oklch,var(--accent)_6%,transparent)]`}
+                                                    ? 'bg-[#0a0a0a]'
+                                                    : 'bg-[#111111]'
+                                            } hover:bg-[#1a1a2e]/60`}
                                         >
-                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-semibold text-xs text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit whitespace-nowrap">
+                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-xs text-[#00d9ff] border-r border-[#d4af37]/30 bg-inherit whitespace-nowrap">
                                                 {ticker}
                                             </td>
                                             {state.def.prompts.map(p => {
@@ -590,9 +590,9 @@ export default function GridView() {
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-3 py-3 align-top relative group ${
+                                                        className={`px-3 py-3 align-top relative group border-r border-[#333] ${
                                                             cell?.status === 'done'
-                                                                ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)]'
+                                                                ? 'cursor-pointer hover:bg-[#1a1a2e]/40'
                                                                 : ''
                                                         }`}
                                                         onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
@@ -604,13 +604,13 @@ export default function GridView() {
                                                                     e.stopPropagation();
                                                                     copyCell(ticker, p.id, cell.answer!);
                                                                 }}
-                                                                className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-[color:var(--surface)] border border-[color:var(--line)] hover:bg-[color:var(--surface-2)]"
+                                                                className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-[#1a1a2e] border border-[#d4af37]/30 hover:bg-[#d4af37] hover:text-[#0a0a0a]"
                                                                 title="Copy to clipboard"
                                                             >
                                                                 {isCopied ? (
-                                                                    <CheckIcon className="w-3 h-3 text-up" />
+                                                                    <CheckIcon className="w-3 h-3 text-[#00ff00]" />
                                                                 ) : (
-                                                                    <Copy className="w-3 h-3 text-[color:var(--text-3)]" />
+                                                                    <Copy className="w-3 h-3 text-[#888]" />
                                                                 )}
                                                             </button>
                                                         )}
@@ -621,9 +621,9 @@ export default function GridView() {
                                     )))}
                                     {/* Synthesis row (comparison) */}
                                     {state.def.prompts.some(p => p.synthesis) && (
-                                        <tr className="bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)] border-t-2 border-[color:var(--accent)]">
-                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-semibold text-xs text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit flex items-center gap-1.5 whitespace-nowrap">
-                                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
+                                        <tr className="bg-gradient-to-r from-[#1a1a2e]/80 via-[#1a1a3e]/80 to-[#1a1a2e]/80 border-t-2 border-b border-[#00d9ff]/40">
+                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-xs text-[#00d9ff] border-r border-[#d4af37]/30 bg-[#1a1a2e]/90 flex items-center gap-1.5 whitespace-nowrap">
+                                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00d9ff]" />
                                                 COMP
                                             </td>
                                             {state.def.prompts.map(p => {
@@ -631,12 +631,12 @@ export default function GridView() {
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-3 py-3 align-top ${
+                                                        className={`px-3 py-3 align-top border-r border-[#333] ${
                                                             p.synthesis
                                                                 ? cell?.status === 'done'
-                                                                    ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)]'
+                                                                    ? 'cursor-pointer hover:bg-[#00d9ff]/10'
                                                                     : ''
-                                                                : 'text-[color:var(--text-3)] opacity-50'
+                                                                : 'text-[#555] opacity-40'
                                                         }`}
                                                         onClick={() =>
                                                             p.synthesis &&
@@ -813,26 +813,26 @@ export default function GridView() {
 
 function CellContent({ cell }: { cell?: GridCell }) {
     if (!cell || cell.status === 'pending') {
-        return <span className="text-[color:var(--text-4)] text-[10px]">—</span>;
+        return <span className="text-[#444] text-[10px]">—</span>;
     }
     if (cell.status === 'running') {
         return (
-            <div className="flex items-center gap-1.5 text-[10px] text-[color:var(--text-3)]">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-[color:var(--accent)]" />
+            <div className="flex items-center gap-1.5 text-[10px] text-[#00d9ff]">
+                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
                 <span>Running</span>
             </div>
         );
     }
     if (cell.status === 'error') {
         return (
-            <div className="flex items-start gap-1 text-[10px] text-[color:var(--down)]" title={cell.error}>
+            <div className="flex items-start gap-1 text-[10px] text-[#ff4444]" title={cell.error}>
                 <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
                 <span className="truncate max-w-[150px]">{cell.error || 'Error'}</span>
             </div>
         );
     }
     if (cell.status === 'cancelled') {
-        return <span className="text-[10px] text-[color:var(--text-3)]">Cancelled</span>;
+        return <span className="text-[10px] text-[#888]">Cancelled</span>;
     }
     const isNoData = cell.modelUsed === 'no-sources';
     const excerpt = (cell.answer ?? '').slice(0, 120);
@@ -841,28 +841,28 @@ function CellContent({ cell }: { cell?: GridCell }) {
         <div className="space-y-1">
             {cell.ragUsed && (
                 <div className="inline-block">
-                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] text-[color:var(--accent)] uppercase">
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#00d9ff]/20 text-[#00d9ff] uppercase">
                         RAG
                     </span>
                 </div>
             )}
             {isNoData && (
                 <div className="inline-block">
-                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[color:color-mix(in_oklch,var(--text-4)_25%,transparent)] text-[color:var(--text-3)] uppercase">
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#888]/20 text-[#888] uppercase">
                         —
                     </span>
                 </div>
             )}
             <p className={`text-[10px] leading-tight line-clamp-3 max-w-[150px] ${
                 isNoData
-                    ? 'text-[color:var(--text-3)] italic'
-                    : 'text-[color:var(--text-2)]'
+                    ? 'text-[#888] italic'
+                    : 'text-[#bbb]'
             }`}>
                 {excerpt}{(cell.answer ?? '').length > 120 ? '…' : ''}
             </p>
             {cell.durationMs && (
-                <div className="flex items-center gap-1 text-[9px] text-[color:var(--text-4)]">
-                    <span className="font-bold">{(cell.durationMs / 1000).toFixed(1)}s</span>
+                <div className="flex items-center gap-1 text-[9px] text-[#666]">
+                    <span className="font-bold text-[#888]">{(cell.durationMs / 1000).toFixed(1)}s</span>
                     <span>•</span>
                     <span className="truncate">{cell.modelUsed}</span>
                 </div>
