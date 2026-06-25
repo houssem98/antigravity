@@ -342,7 +342,26 @@ export default function GridView() {
     const filteredTickers = getFilteredTickers();
 
     return (
-        <div className="p-6 bg-gradient-to-b from-[#0a0a0a] via-[#0f0f1a] to-[#0a0a0a] text-[color:var(--text-2)] min-h-screen">
+        <div className="p-6 bg-gradient-to-b from-[#0a0a0a] via-[#0f0f1a] to-[#0a0a0a] text-[color:var(--text-2)] min-h-screen" style={{
+            '--scrollbar-track': '#1a1a2e',
+            '--scrollbar-thumb': '#d4af37',
+        } as React.CSSProperties}>
+            <style>{`
+                .scrollbar-thin::-webkit-scrollbar {
+                    height: 8px;
+                    width: 8px;
+                }
+                .scrollbar-thin::-webkit-scrollbar-track {
+                    background: #1a1a2e;
+                }
+                .scrollbar-thin::-webkit-scrollbar-thumb {
+                    background: #d4af37;
+                    border-radius: 4px;
+                }
+                .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+                    background: #ffed4e;
+                }
+            `}</style>
             <div className="max-w-[1600px] mx-auto">
                 {/* Header */}
                 <div className="flex items-center gap-4 mb-8">
@@ -527,8 +546,8 @@ export default function GridView() {
                 {/* Grid */}
                 {state && (
                     <div className="mt-6 rounded-lg border border-[#d4af37]/30 overflow-hidden shadow-2xl shadow-[#d4af37]/20 bg-[#0a0a0a]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
-                        <div className="overflow-x-auto overflow-y-auto h-full">
-                            <table className="w-full text-xs">
+                        <div className="overflow-x-auto overflow-y-auto h-full scrollbar-thin scrollbar-track-[#1a1a2e] scrollbar-thumb-[#d4af37]/50 hover:scrollbar-thumb-[#d4af37]">
+                            <table className="text-xs border-collapse" style={{ minWidth: 'max-content' }}>
                                 <thead className="sticky top-0 z-20">
                                     <tr className="bg-gradient-to-r from-[#2d2416]/80 via-[#3d3420]/80 to-[#2d2416]/80 border-b-2 border-[#d4af37]/40">
                                         <th
