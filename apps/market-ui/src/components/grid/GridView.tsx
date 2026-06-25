@@ -528,7 +528,7 @@ export default function GridView() {
                 {state && (
                     <div className="mt-6 rounded-xl border border-[color:var(--line)] overflow-hidden shadow-xl shadow-[color:color-mix(in_oklch,var(--accent)_5%,transparent)]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
                         <div className="overflow-x-auto overflow-y-auto h-full">
-                            <table className="w-full">
+                            <table className="w-full text-xs">
                                 <thead className="sticky top-0 z-20">
                                     <tr className="bg-gradient-to-r from-[color:var(--surface-2)] to-[color:var(--surface-2)] border-b-2 border-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]">
                                         <th
@@ -540,24 +540,24 @@ export default function GridView() {
                                                     setSortDesc(false);
                                                 }
                                             }}
-                                            className="sticky left-0 z-30 px-5 py-4 text-left font-bold text-xs text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[90px] cursor-pointer hover:text-[color:var(--accent)] transition-colors uppercase tracking-wider"
+                                            className="sticky left-0 z-30 px-3 py-3 text-left font-bold text-[10px] text-[color:var(--text)] bg-[color:var(--surface-2)] min-w-[70px] cursor-pointer hover:text-[color:var(--accent)] transition-colors uppercase tracking-wider"
                                         >
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex items-center gap-1.5">
                                                 TICKER
                                                 {sortBy === 'ticker' && (
-                                                    <span className="text-sm">{sortDesc ? '↓' : '↑'}</span>
+                                                    <span className="text-xs">{sortDesc ? '↓' : '↑'}</span>
                                                 )}
                                             </div>
                                         </th>
                                         {state.def.prompts.map(p => (
                                             <th
                                                 key={p.id}
-                                                className={`px-5 py-4 text-left font-bold text-xs text-[color:var(--text)] cursor-pointer transition-colors uppercase tracking-wider ${
+                                                className={`px-3 py-3 text-left font-bold text-[10px] text-[color:var(--text)] cursor-pointer transition-colors uppercase tracking-wider ${
                                                     p.synthesis
                                                         ? 'bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_15%,transparent)]'
                                                         : 'bg-[color:var(--surface-2)] hover:bg-[color:var(--surface)]'
                                                 }`}
-                                                style={{ minWidth: p.synthesis ? '280px' : '220px' }}
+                                                style={{ minWidth: p.synthesis ? '200px' : '160px' }}
                                             >
                                                 {p.label}
                                             </th>
@@ -567,7 +567,7 @@ export default function GridView() {
                                 <tbody className="divide-y divide-[color:var(--line)]">
                                     {filteredTickers.length === 0 ? (
                                         <tr>
-                                            <td colSpan={state.def.prompts.length + 1} className="px-4 py-8 text-center text-sm text-[color:var(--text-3)]">
+                                            <td colSpan={state.def.prompts.length + 1} className="px-3 py-6 text-center text-xs text-[color:var(--text-3)]">
                                                 No cells match your search
                                             </td>
                                         </tr>
@@ -581,7 +581,7 @@ export default function GridView() {
                                                     : 'bg-[color:color-mix(in_oklch,var(--surface)_50%,transparent)]'
                                             } hover:bg-[color:color-mix(in_oklch,var(--accent)_6%,transparent)]`}
                                         >
-                                            <td className="sticky left-0 z-10 px-4 py-4 font-mono font-semibold text-sm text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit">
+                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-semibold text-xs text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit whitespace-nowrap">
                                                 {ticker}
                                             </td>
                                             {state.def.prompts.map(p => {
@@ -590,7 +590,7 @@ export default function GridView() {
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-4 py-4 align-top relative group ${
+                                                        className={`px-3 py-3 align-top relative group ${
                                                             cell?.status === 'done'
                                                                 ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_10%,transparent)]'
                                                                 : ''
@@ -604,13 +604,13 @@ export default function GridView() {
                                                                     e.stopPropagation();
                                                                     copyCell(ticker, p.id, cell.answer!);
                                                                 }}
-                                                                className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-[color:var(--surface)] border border-[color:var(--line)] hover:bg-[color:var(--surface-2)]"
+                                                                className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-[color:var(--surface)] border border-[color:var(--line)] hover:bg-[color:var(--surface-2)]"
                                                                 title="Copy to clipboard"
                                                             >
                                                                 {isCopied ? (
-                                                                    <CheckIcon className="w-3.5 h-3.5 text-up" />
+                                                                    <CheckIcon className="w-3 h-3 text-up" />
                                                                 ) : (
-                                                                    <Copy className="w-3.5 h-3.5 text-[color:var(--text-3)]" />
+                                                                    <Copy className="w-3 h-3 text-[color:var(--text-3)]" />
                                                                 )}
                                                             </button>
                                                         )}
@@ -622,16 +622,16 @@ export default function GridView() {
                                     {/* Synthesis row (comparison) */}
                                     {state.def.prompts.some(p => p.synthesis) && (
                                         <tr className="bg-[color:color-mix(in_oklch,var(--accent)_12%,transparent)] border-t-2 border-[color:var(--accent)]">
-                                            <td className="sticky left-0 z-10 px-4 py-4 font-mono font-semibold text-sm text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit flex items-center gap-2">
-                                                <span className="inline-block w-2 h-2 rounded-full bg-[color:var(--accent)]" />
-                                                COMPARISON
+                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-semibold text-xs text-[color:var(--accent)] border-r border-[color:var(--line)] bg-inherit flex items-center gap-1.5 whitespace-nowrap">
+                                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[color:var(--accent)]" />
+                                                COMP
                                             </td>
                                             {state.def.prompts.map(p => {
                                                 const cell = state.cells[cellKey('ALL', p.id)];
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-4 py-4 align-top ${
+                                                        className={`px-3 py-3 align-top ${
                                                             p.synthesis
                                                                 ? cell?.status === 'done'
                                                                     ? 'cursor-pointer hover:bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)]'
@@ -813,56 +813,56 @@ export default function GridView() {
 
 function CellContent({ cell }: { cell?: GridCell }) {
     if (!cell || cell.status === 'pending') {
-        return <span className="text-[color:var(--text-4)] text-xs">—</span>;
+        return <span className="text-[color:var(--text-4)] text-[10px]">—</span>;
     }
     if (cell.status === 'running') {
         return (
-            <div className="flex items-center gap-2.5 text-xs text-[color:var(--text-3)]">
-                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-[color:var(--accent)]" />
-                <span>Running…</span>
+            <div className="flex items-center gap-1.5 text-[10px] text-[color:var(--text-3)]">
+                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-[color:var(--accent)]" />
+                <span>Running</span>
             </div>
         );
     }
     if (cell.status === 'error') {
         return (
-            <div className="flex items-start gap-2 text-xs text-[color:var(--down)] title={cell.error}" title={cell.error}>
-                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                <span className="truncate max-w-xs">{cell.error || 'Error'}</span>
+            <div className="flex items-start gap-1 text-[10px] text-[color:var(--down)]" title={cell.error}>
+                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                <span className="truncate max-w-[150px]">{cell.error || 'Error'}</span>
             </div>
         );
     }
     if (cell.status === 'cancelled') {
-        return <span className="text-xs text-[color:var(--text-3)]">Cancelled</span>;
+        return <span className="text-[10px] text-[color:var(--text-3)]">Cancelled</span>;
     }
     const isNoData = cell.modelUsed === 'no-sources';
-    const excerpt = (cell.answer ?? '').slice(0, 180);
+    const excerpt = (cell.answer ?? '').slice(0, 120);
 
     return (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
             {cell.ragUsed && (
-                <div className="inline-flex gap-1">
-                    <span className="inline-block px-2 py-1 rounded text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] text-[color:var(--accent)]">
-                        SEC RAG
+                <div className="inline-block">
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[color:color-mix(in_oklch,var(--accent)_20%,transparent)] text-[color:var(--accent)] uppercase">
+                        RAG
                     </span>
                 </div>
             )}
             {isNoData && (
-                <div className="inline-flex gap-1">
-                    <span className="inline-block px-2 py-1 rounded text-[10px] font-medium bg-[color:color-mix(in_oklch,var(--text-4)_25%,transparent)] text-[color:var(--text-3)]">
-                        NO SOURCES
+                <div className="inline-block">
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[color:color-mix(in_oklch,var(--text-4)_25%,transparent)] text-[color:var(--text-3)] uppercase">
+                        —
                     </span>
                 </div>
             )}
-            <p className={`text-sm leading-snug line-clamp-4 max-w-xs ${
+            <p className={`text-[10px] leading-tight line-clamp-3 max-w-[150px] ${
                 isNoData
                     ? 'text-[color:var(--text-3)] italic'
                     : 'text-[color:var(--text-2)]'
             }`}>
-                {excerpt}{(cell.answer ?? '').length > 180 ? '…' : ''}
+                {excerpt}{(cell.answer ?? '').length > 120 ? '…' : ''}
             </p>
             {cell.durationMs && (
-                <div className="flex items-center gap-1.5 text-[10px] text-[color:var(--text-4)]">
-                    <span className="font-medium">{(cell.durationMs / 1000).toFixed(1)}s</span>
+                <div className="flex items-center gap-1 text-[9px] text-[color:var(--text-4)]">
+                    <span className="font-bold">{(cell.durationMs / 1000).toFixed(1)}s</span>
                     <span>•</span>
                     <span className="truncate">{cell.modelUsed}</span>
                 </div>
