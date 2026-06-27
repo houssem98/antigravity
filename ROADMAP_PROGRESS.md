@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P0-c — grid concurrency: parallel 5–8 for deepseek/claude, keep 1 for free Gemini.
+- **NEXT:** P0-d — clean `filing_date` (many "2026", some future 2027–2031) across chunks/doc_trees/financials.
 
 ---
 
@@ -13,7 +13,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 ### P0 — Fix what's broken
 - [x] **P0-a** Build/confirm eval harness + capture baselines — *DONE. FinanceBench sample-15 vs prod: numeric 33%, citation 20%, halluc 7%, 5/15 timed out, p50 33.6s.*
 - [x] **P0-b** Fix table column-alignment bug + regression test — *DONE. Root cause: `table_indexer._extract_rows` mapped header col_idx into data row; SEC `$`/spacer `<td>`s misalign it. Fixed: align numeric cells to period cols by ORDER (`_row_numeric_values`). 2 regression tests pass. NOTE: stored 152k rows stay wrong until re-ingest (P1-a) — FinanceBench won't move from code alone.*
-- [ ] **P0-c** Grid concurrency: parallel 5–8 workers for deepseek/claude, keep 1 for free Gemini
+- [x] **P0-c** Grid concurrency: parallel for deepseek/claude, serial for Gemini — *DONE. `startRun` concurrency = `selectedModel==='gemini' ? 1 : 6`. `runGrid` already has a safe cursor worker-pool. Built + deployed; bundle shows `==="gemini"?1:6`. Expected ~6× grid wall-time for paid models (exact /100-cell throughput needs in-browser timing).*
 - [ ] **P0-d** Clean `filing_date` (many dated "2026", some future 2027–2031) across chunks/doc_trees/financials
 - [ ] **P0-e** Confirm reranker fires in `app/core/retrieval/fusion.py`; wire if not
 

@@ -2,8 +2,12 @@
 // Rows=tickers × Columns=analyst prompts. Each cell is an independent
 // cancellable LLM call with per-cell status.
 
-import { useState, useRef, useEffect } from 'react';
-import { Play, X, Grid as GridIcon, Sparkles, Loader2, Check, AlertCircle, Download, Clock, Trash2, Copy, Check as CheckIcon } from 'lucide-react';
+import { useState, useRef, useEffect, Children, type ReactNode } from 'react';
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'motion/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Play, X, Grid as GridIcon, Sparkles, Loader2, Check, AlertCircle, Download, Clock, Trash2, Copy, Check as CheckIcon, ExternalLink } from 'lucide-react';
+import type { Citation } from '../../services/deepResearchService';
 import {
     initializeGrid,
     runGrid,
@@ -67,7 +71,19 @@ export default function GridView() {
     const [sortDesc, setSortDesc] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [copiedCell, setCopiedCell] = useState<string | null>(null);
+    const [burst, setBurst] = useState(false);
+    const [activeCitation, setActiveCitation] = useState<number | null>(null);
     const abortRef = useRef<AbortController | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+    // Click an inline [N] citation → reveal & highlight that source below.
+    const openCitation = (id: number) => {
+        setActiveCitation(id);
+        requestAnimationFrame(() => {
+            document.getElementById(`grid-src-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+        window.setTimeout(() => setActiveCitation(cur => (cur === id ? null : cur)), 2200);
+    };
 
     const copyCell = async (ticker: string, promptId: string, answer: string) => {
         await navigator.clipboard.writeText(answer);
@@ -142,6 +158,12 @@ export default function GridView() {
                 e.preventDefault();
                 handleExportCSV();
             }
+
+            // Ctrl/Cmd+K: focus search
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                searchInputRef.current?.focus();
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
@@ -177,13 +199,20 @@ export default function GridView() {
 
         try {
             const final = await runGrid(initial, deps, {
-                // Serial: the shared LLM is a free-tier Gemini key (~15 req/min).
-                // Concurrency >1 bursts past the quota -> 429 on most cells.
-                concurrency: 1,
+                // Free Gemini key (~15 req/min) must stay serial or it 429s on
+                // most cells. Paid DeepSeek/Claude handle parallel fan-out, so
+                // run the grid concurrently for them (huge wall-time win).
+                concurrency: selectedModel === 'gemini' ? 1 : 6,
                 signal: controller.signal,
                 onCellUpdate: (s) => { setState({ ...s }); },
             });
             setState(final);
+            // Success micro-interaction: cyan/gold particle burst (spec §11.4)
+            const anyDone = Object.values(final.cells).some(c => c.status === 'done');
+            if (anyDone && !controller.signal.aborted) {
+                setBurst(true);
+                setTimeout(() => setBurst(false), 1000);
+            }
             // Best-effort persist — non-blocking. Refresh history on success.
             saveGridRun(final).then(() => refreshHistory()).catch(() => { /* ignore */ });
         } finally {
@@ -342,7 +371,7 @@ export default function GridView() {
     const filteredTickers = getFilteredTickers();
 
     return (
-        <div className="p-6 bg-gradient-to-b from-[#0a0a0a] via-[#0f0f1a] to-[#0a0a0a] text-[color:var(--text-2)] min-h-screen" style={{
+        <div className="relative overflow-hidden p-6 bg-gradient-to-b from-[#0b0c12] via-[#0f0f1a] to-[#0b0c12] text-[color:var(--text-2)] min-h-screen" style={{
             '--scrollbar-track': '#1a1a2e',
             '--scrollbar-thumb': '#d4af37',
         } as React.CSSProperties}>
@@ -361,21 +390,71 @@ export default function GridView() {
                 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
                     background: #ffed4e;
                 }
+                /* Research Grid design spec — neon glow + module utilities */
+                .glow-cyan {
+                    box-shadow: 0 0 8px #00f0ff, 0 0 20px rgba(0, 240, 255, 0.3);
+                }
+                .glow-cyan-strong {
+                    box-shadow: 0 0 16px #00f0ff, 0 0 50px rgba(0, 240, 255, 0.5);
+                }
+                .glow-cyan-bottom {
+                    box-shadow: 0 6px 18px -4px rgba(0, 240, 255, 0.45), 0 0 30px rgba(0, 240, 255, 0.12), inset 1px 1px 0 0 rgba(255, 255, 255, 0.06);
+                }
+                .glow-gold {
+                    box-shadow: 0 0 6px #f4c95f;
+                }
+                .metallic-header {
+                    background: linear-gradient(to bottom, #3a2f1f, #2a2418);
+                }
+                .card-module {
+                    background: #0f1118;
+                    border: 1px solid rgba(0, 240, 255, 0.1);
+                    border-radius: 10px;
+                    transition: all 0.2s ease;
+                }
+                .card-module:hover {
+                    border-color: rgba(0, 240, 255, 0.4);
+                }
+                /* Faint noise texture overlay for expensive terminal feel (spec §11.1) */
+                .noise-overlay {
+                    position: absolute;
+                    inset: 0;
+                    pointer-events: none;
+                    opacity: 0.03;
+                    z-index: 0;
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+                }
+                @media (prefers-reduced-motion: reduce) {
+                    .glow-cyan, .glow-cyan-strong { transition: none; }
+                }
             `}</style>
-            <div className="max-w-[1600px] mx-auto">
+            <div className="noise-overlay" aria-hidden />
+            <div className="relative z-10 max-w-[1600px] mx-auto">
                 {/* Header */}
                 <div className="flex items-center gap-4 mb-8">
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-gradient-to-br from-[#d4af37] to-[#aa8c2c] shadow-lg shadow-[#d4af37]/40">
                         <GridIcon className="w-5 h-5 text-[#0a0a0a]" />
                     </div>
                     <div>
-                        <h1 className="font-display font-bold text-3xl text-[#d4af37] tracking-tight drop-shadow-lg">Research Grid</h1>
+                        <motion.h1
+                            animate={{
+                                textShadow: [
+                                    '0 0 8px rgba(244, 201, 95, 0.4)',
+                                    '0 0 18px rgba(244, 201, 95, 0.7)',
+                                    '0 0 8px rgba(244, 201, 95, 0.4)',
+                                ],
+                            }}
+                            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+                            className="font-display font-bold text-3xl text-[#d4af37] tracking-tight"
+                        >
+                            Research Grid
+                        </motion.h1>
                         <p className="text-xs font-bold text-[#00d9ff] mt-1 uppercase tracking-widest">Tickers × Prompts · One Cited Answer Per Cell</p>
                     </div>
                 </div>
 
                 {/* Config */}
-                <div className="mt-8 p-6 rounded-lg bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#d4af37]/30 shadow-2xl shadow-[#d4af37]/20 backdrop-blur-sm">
+                <div className="mt-8 p-6 rounded-2xl bg-gradient-to-b from-[#1a1c24]/80 to-[#0f1118]/80 border border-[#d4af37]/30 glow-cyan-bottom backdrop-blur-md">
                     <label className="text-xs font-bold text-[#d4af37] block mb-2 uppercase tracking-wider">Tickers (comma-separated)</label>
                     <input
                         type="text"
@@ -388,19 +467,26 @@ export default function GridView() {
 
                     <label className="text-xs font-bold text-[#d4af37] block mt-4 mb-3 uppercase tracking-wider">LLM Model</label>
                     <div className="flex gap-2 mb-6">
-                        {['deepseek', 'claude', 'gemini'].map(model => (
-                            <button
-                                key={model}
-                                onClick={() => setSelectedModel(model as 'deepseek' | 'claude' | 'gemini')}
+                        {([
+                            { key: 'deepseek', name: 'DeepSeek', cost: '$' },
+                            { key: 'claude', name: 'Claude', cost: '$$' },
+                            { key: 'gemini', name: 'Gemini', cost: 'Free' },
+                        ] as const).map(({ key, name, cost }) => (
+                            <motion.button
+                                key={key}
+                                onClick={() => setSelectedModel(key)}
                                 disabled={running}
-                                className={`px-3 py-2 rounded-md text-xs font-bold transition-all border uppercase tracking-wider ${
-                                    selectedModel === model
-                                        ? 'border-[#d4af37] text-[#d4af37] bg-[#d4af37]/15 shadow-lg shadow-[#d4af37]/30'
-                                        : 'border-[#d4af37]/30 text-[#888] hover:text-[#d4af37] hover:border-[#d4af37]/50'
+                                whileHover={{ scale: running ? 1 : 1.03 }}
+                                whileTap={{ scale: running ? 1 : 0.98 }}
+                                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                                className={`px-4 py-2 rounded-full text-xs font-bold border uppercase tracking-wider ${
+                                    selectedModel === key
+                                        ? 'border-[#00f0ff] text-white bg-[#00f0ff]/20 glow-cyan'
+                                        : 'border-[#d4af37]/40 text-[#a0a8b8] hover:text-[#d4af37] hover:border-[#d4af37]/60'
                                 } disabled:opacity-40 cursor-pointer`}
                             >
-                                {model === 'deepseek' ? 'DeepSeek' : model === 'claude' ? 'Claude' : 'Gemini'}
-                            </button>
+                                {name} <span className="opacity-70">({cost})</span>
+                            </motion.button>
                         ))}
                     </div>
 
@@ -409,45 +495,60 @@ export default function GridView() {
                         {SEED_GRID_PROMPTS.map(p => {
                             const active = promptIds.includes(p.id);
                             return (
-                                <button
+                                <motion.button
                                     key={p.id}
                                     onClick={() => togglePrompt(p.id)}
                                     disabled={running}
-                                    className={`px-3 py-2 rounded-md text-xs font-bold transition-all border uppercase tracking-wider ${active
-                                        ? 'border-[#00d9ff] text-[#00d9ff] bg-[#00d9ff]/15 shadow-lg shadow-[#00d9ff]/40'
-                                        : 'border-[#d4af37]/30 text-[#888] hover:text-[#d4af37] hover:border-[#d4af37]/50'
+                                    whileHover={{ scale: running ? 1 : 1.03 }}
+                                    whileTap={{ scale: running ? 1 : 0.98 }}
+                                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                                    className={`px-4 py-2 rounded-full text-xs font-bold border uppercase tracking-wider ${active
+                                        ? 'border-[#00f0ff] text-white bg-[#00f0ff]/20 glow-cyan'
+                                        : 'border-[#d4af37]/40 text-[#a0a8b8] hover:text-[#d4af37] hover:border-[#d4af37]/60'
                                         } disabled:opacity-40 cursor-pointer`}
                                 >
                                     {p.label}
-                                </button>
+                                </motion.button>
                             );
                         })}
                     </div>
 
                     <div className="flex items-center gap-3">
                         {!running ? (
-                            <button
+                            <motion.button
                                 onClick={startRun}
                                 disabled={!tickersInput.trim() || activePrompts.length === 0}
-                                className="flex items-center gap-2 px-6 py-3 rounded-md text-sm font-bold bg-gradient-to-r from-[#00d9ff] to-[#00b8cc] text-[#0a0a0a] hover:shadow-xl hover:shadow-[#00d9ff]/50 disabled:opacity-40 active:scale-95 transition-all uppercase tracking-wider"
+                                whileHover={{ scale: 1.03 }}
+                                whileTap={{ scale: 0.97 }}
+                                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                                className="flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-bold bg-[#00f0ff] text-[#0a0a0a] glow-cyan disabled:opacity-40 disabled:shadow-none uppercase tracking-wider"
                             >
                                 <Play className="w-4 h-4" />
                                 Run Grid
-                            </button>
+                            </motion.button>
                         ) : (
-                            <button
+                            <motion.button
                                 onClick={cancelRun}
-                                className="flex items-center gap-2 px-6 py-3 rounded-md text-sm font-bold text-[#ff4444] border-2 border-[#ff4444] hover:bg-[#ff4444]/15 hover:shadow-lg hover:shadow-[#ff4444]/30 active:scale-95 transition-all uppercase tracking-wider"
+                                animate={{
+                                    boxShadow: [
+                                        '0 0 12px rgba(0,240,255,0.4), 0 0 40px rgba(0,240,255,0.25)',
+                                        '0 0 22px rgba(0,240,255,0.6), 0 0 70px rgba(0,240,255,0.4)',
+                                        '0 0 12px rgba(0,240,255,0.4), 0 0 40px rgba(0,240,255,0.25)',
+                                    ],
+                                }}
+                                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                                className="flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-bold text-[#00f0ff] border-2 border-[#00f0ff]/70 bg-[#00f0ff]/5 hover:bg-[#ff4444]/15 hover:text-[#ff4444] hover:border-[#ff4444] active:scale-95 transition-colors uppercase tracking-wider"
                             >
-                                <X className="w-4 h-4" />
-                                Cancel
-                            </button>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Processing… <span className="opacity-60">/ Cancel</span>
+                            </motion.button>
                         )}
                         {progress && (
-                            <span className="text-xs font-bold text-[#00d9ff] uppercase tracking-wider">
-                                {progress.done}/{progress.total} DONE
+                            <span className="relative text-xs font-bold text-[#00f0ff] uppercase tracking-wider">
+                                <AnimatedCount value={progress.done} />/{progress.total} DONE
                                 {progress.failed > 0 && <span className="text-[#ff4444]"> · {progress.failed} FAILED</span>}
                                 {progress.cancelled > 0 && <span className="text-[#888]"> · {progress.cancelled} CANCELLED</span>}
+                                <ParticleBurst show={burst} />
                             </span>
                         )}
 
@@ -520,13 +621,20 @@ export default function GridView() {
                 {/* Search */}
                 {state && (
                     <div className="mt-6 flex items-center gap-2.5">
-                        <input
-                            type="text"
-                            placeholder="Search cells by ticker or content..."
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
-                            className="flex-1 px-4 py-2.5 rounded-md text-sm bg-[#0a0a0a] border border-[#d4af37]/30 text-[#00d9ff] placeholder:text-[#444] focus:outline-none focus:ring-2 focus:ring-[#d4af37]/50 focus:border-[#d4af37] transition-all"
-                        />
+                        <div className="relative flex-1">
+                            <motion.input
+                                ref={searchInputRef}
+                                type="text"
+                                placeholder="Search cells by ticker or content..."
+                                value={searchQuery}
+                                onChange={e => setSearchQuery(e.target.value)}
+                                whileFocus={{ boxShadow: '0 0 0 1px #00f0ff, 0 0 20px rgba(0, 240, 255, 0.25)' }}
+                                className="w-full px-4 py-2.5 pr-16 rounded-xl text-sm bg-[#111218] border border-white/10 text-[#e8e8f0] placeholder:text-[#666] focus:outline-none focus:border-[#00f0ff]/60 transition-colors"
+                            />
+                            <kbd className="absolute right-3 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[10px] font-mono text-[#a0a8b8] border border-white/10 bg-[#0a0b10] pointer-events-none">
+                                ⌘K
+                            </kbd>
+                        </div>
                         {searchQuery && (
                             <button
                                 onClick={() => setSearchQuery('')}
@@ -545,9 +653,16 @@ export default function GridView() {
 
                 {/* Grid */}
                 {state && (
-                    <div className="mt-6 rounded-lg border border-[#d4af37]/30 overflow-hidden shadow-2xl shadow-[#d4af37]/20 bg-[#0a0a0a]" style={{ maxHeight: 'calc(100vh - 450px)' }}>
-                        <div className="overflow-x-auto overflow-y-auto h-full scrollbar-thin scrollbar-track-[#1a1a2e] scrollbar-thumb-[#d4af37]/50 hover:scrollbar-thumb-[#d4af37]">
-                            <table className="text-xs border-collapse" style={{ minWidth: 'max-content' }}>
+                    <div className="mt-6 rounded-lg border border-[#d4af37]/30 overflow-hidden shadow-2xl shadow-[#d4af37]/20 bg-[#0a0a0a]">
+                        <div className="overflow-x-hidden">
+                            <table className="w-full table-fixed text-xs border-collapse">
+                                <colgroup>
+                                    {/* Fixed narrow TICKER column; all prompt columns split the remaining width equally so the whole table fits without horizontal scroll / zoom-out */}
+                                    <col style={{ width: '72px' }} />
+                                    {state.def.prompts.map(p => (
+                                        <col key={p.id} />
+                                    ))}
+                                </colgroup>
                                 <thead className="sticky top-0 z-20">
                                     <tr className="bg-gradient-to-r from-[#2d2416]/80 via-[#3d3420]/80 to-[#2d2416]/80 border-b-2 border-[#d4af37]/40">
                                         <th
@@ -559,7 +674,7 @@ export default function GridView() {
                                                     setSortDesc(false);
                                                 }
                                             }}
-                                            className="sticky left-0 z-30 px-3 py-3 text-left font-bold text-[10px] text-[#d4af37] bg-[#2d2416]/90 min-w-[70px] cursor-pointer hover:text-[#ffed4e] transition-colors uppercase tracking-wider"
+                                            className="sticky left-0 z-30 px-2 py-3 text-left font-bold text-[10px] text-[#d4af37] bg-[#2d2416]/90 cursor-pointer hover:text-[#ffed4e] transition-colors uppercase tracking-wider"
                                         >
                                             <div className="flex items-center gap-1.5">
                                                 TICKER
@@ -571,12 +686,11 @@ export default function GridView() {
                                         {state.def.prompts.map(p => (
                                             <th
                                                 key={p.id}
-                                                className={`px-3 py-3 text-left font-bold text-[10px] cursor-pointer transition-colors uppercase tracking-wider ${
+                                                className={`px-2 py-3 text-left font-bold text-[10px] cursor-pointer transition-colors uppercase tracking-wider break-words ${
                                                     p.synthesis
                                                         ? 'bg-[#1a1a1a] text-[#00d9ff] hover:bg-[#00d9ff]/10'
                                                         : 'bg-[#2d2416]/80 text-[#d4af37] hover:text-[#ffed4e]'
                                                 }`}
-                                                style={{ minWidth: p.synthesis ? '200px' : '160px' }}
                                             >
                                                 {p.label}
                                             </th>
@@ -592,31 +706,43 @@ export default function GridView() {
                                         </tr>
                                     ) : (
                                         filteredTickers.map((ticker, idx) => (
-                                        <tr
+                                        <motion.tr
                                             key={ticker}
-                                            className={`transition-colors border-b border-[#333] ${
+                                            initial={{ opacity: 0, y: 10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            transition={{ delay: Math.min(idx * 0.03, 0.4), type: 'spring', stiffness: 120, damping: 18 }}
+                                            className={`transition-colors border-b border-[#333] hover:shadow-[inset_3px_0_0_0_#00f0ff] ${
                                                 idx % 2 === 0
                                                     ? 'bg-[#0a0a0a]'
                                                     : 'bg-[#111111]'
                                             } hover:bg-[#1a1a2e]/60`}
                                         >
-                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-xs text-[#00d9ff] border-r border-[#d4af37]/30 bg-inherit whitespace-nowrap">
+                                            <td className="sticky left-0 z-10 px-2 py-3 font-mono font-bold text-xs text-[#00d9ff] border-r border-[#d4af37]/30 bg-inherit whitespace-nowrap">
                                                 {ticker}
                                             </td>
                                             {state.def.prompts.map(p => {
+                                                // Comparison column stays empty in per-ticker rows —
+                                                // aggregate answer renders as a glowing card in the bottom row (spec §6.2).
+                                                if (p.synthesis) {
+                                                    return (
+                                                        <td key={p.id} className="px-2 py-3 align-middle border-r border-[#333] text-center">
+                                                            <span className="text-[#2a2a3a] text-xs">·</span>
+                                                        </td>
+                                                    );
+                                                }
                                                 const cell = state.cells[cellKey(ticker, p.id)];
                                                 const isCopied = copiedCell === `${ticker}::${p.id}`;
                                                 return (
                                                     <td
                                                         key={p.id}
-                                                        className={`px-3 py-3 align-top relative group border-r border-[#333] ${
+                                                        className={`px-2 py-3 align-top relative group border-r border-[#333] ${
                                                             cell?.status === 'done'
                                                                 ? 'cursor-pointer hover:bg-[#1a1a2e]/40'
                                                                 : ''
                                                         }`}
                                                         onClick={() => cell?.status === 'done' && setSelectedCell(cell)}
                                                     >
-                                                        <CellContent cell={cell} />
+                                                        <CellContent cell={cell} loading={running} />
                                                         {cell?.status === 'done' && cell?.answer && (
                                                             <button
                                                                 onClick={e => {
@@ -636,34 +762,51 @@ export default function GridView() {
                                                     </td>
                                                 );
                                             })}
-                                        </tr>
+                                        </motion.tr>
                                     )))}
-                                    {/* Synthesis row (comparison) */}
+                                    {/* Comparison row — glowing cyan info card sits bottom-right under the Comparison column (spec §6.2) */}
                                     {state.def.prompts.some(p => p.synthesis) && (
-                                        <tr className="bg-gradient-to-r from-[#1a1a2e]/80 via-[#1a1a3e]/80 to-[#1a1a2e]/80 border-t-2 border-b border-[#00d9ff]/40">
-                                            <td className="sticky left-0 z-10 px-3 py-3 font-mono font-bold text-xs text-[#00d9ff] border-r border-[#d4af37]/30 bg-[#1a1a2e]/90 flex items-center gap-1.5 whitespace-nowrap">
-                                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00d9ff]" />
-                                                COMP
+                                        <tr className="bg-gradient-to-r from-[#0b0c12] via-[#10131c] to-[#0b0c12] border-t-2 border-[#00f0ff]/40">
+                                            <td className="sticky left-0 z-10 px-2 py-4 font-mono font-bold text-[9px] text-[#00f0ff] border-r border-[#d4af37]/30 bg-[#0b0c12] uppercase tracking-wider align-top">
+                                                <span className="flex items-center gap-1.5 leading-tight break-words">
+                                                    <span className="inline-block w-1.5 h-1.5 shrink-0 rounded-full bg-[#00f0ff] glow-cyan" />
+                                                    Comp
+                                                </span>
                                             </td>
                                             {state.def.prompts.map(p => {
+                                                if (!p.synthesis) {
+                                                    // Empty cells across the comparison row.
+                                                    return <td key={p.id} className="px-2 py-4 border-r border-[#1a1a22]" />;
+                                                }
                                                 const cell = state.cells[cellKey('ALL', p.id)];
+                                                const ready = cell?.status === 'done';
+                                                const answer = cell?.answer ?? '';
                                                 return (
-                                                    <td
-                                                        key={p.id}
-                                                        className={`px-3 py-3 align-top border-r border-[#333] ${
-                                                            p.synthesis
-                                                                ? cell?.status === 'done'
-                                                                    ? 'cursor-pointer hover:bg-[#00d9ff]/10'
-                                                                    : ''
-                                                                : 'text-[#555] opacity-40'
-                                                        }`}
-                                                        onClick={() =>
-                                                            p.synthesis &&
-                                                            cell?.status === 'done' &&
-                                                            setSelectedCell(cell)
-                                                        }
-                                                    >
-                                                        {p.synthesis ? <CellContent cell={cell} /> : '—'}
+                                                    <td key={p.id} className="px-2 py-4 align-top">
+                                                        {ready ? (
+                                                            <motion.div
+                                                                onClick={() => setSelectedCell(cell)}
+                                                                whileHover={{ y: -3, boxShadow: '0 0 20px #00f0ff, 0 0 60px rgba(0, 240, 255, 0.55)' }}
+                                                                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                                                                className="cursor-pointer rounded-xl border border-[#00f0ff]/70 bg-[#0f1118] glow-cyan-strong p-3 space-y-1.5"
+                                                            >
+                                                                <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#00f0ff]/25 text-[#00f0ff] uppercase tracking-wider">
+                                                                    Comparison
+                                                                </span>
+                                                                <p className="text-[10px] leading-snug text-[#e0e4f0] line-clamp-4 w-full break-words">
+                                                                    {answer.slice(0, 180)}{answer.length > 180 ? '…' : ''}
+                                                                </p>
+                                                                {cell?.durationMs && (
+                                                                    <div className="flex items-center gap-1 text-[9px] text-[#666]">
+                                                                        <span className="font-bold text-[#888]">{(cell.durationMs / 1000).toFixed(1)}s</span>
+                                                                        <span>•</span>
+                                                                        <span className="truncate">{cell.modelUsed}</span>
+                                                                    </div>
+                                                                )}
+                                                            </motion.div>
+                                                        ) : (
+                                                            <CellContent cell={cell} loading={running} />
+                                                        )}
                                                     </td>
                                                 );
                                             })}
@@ -715,28 +858,15 @@ export default function GridView() {
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="prose prose-sm max-w-none mb-6 text-[color:var(--text-2)] leading-relaxed">
-                            <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                                {selectedCell.answer}
-                            </p>
+                        <div className="mb-6">
+                            <CellAnswer
+                                text={selectedCell.answer ?? ''}
+                                citations={selectedCell.citations ?? []}
+                                onOpenCitation={openCitation}
+                            />
                         </div>
                         {selectedCell.citations && selectedCell.citations.length > 0 && (
-                            <div className="mt-8 pt-8 border-t-2 border-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]">
-                                <h3 className="font-bold text-xs text-[color:var(--text)] mb-4 uppercase tracking-wider">
-                                    Sources ({selectedCell.citations.length})
-                                </h3>
-                                <ul className="space-y-3">
-                                    {selectedCell.citations.map(c => (
-                                        <li
-                                            key={c.id}
-                                            className="text-xs text-[color:var(--text-2)] flex gap-3 p-3 rounded-lg bg-[color:color-mix(in_oklch,var(--surface)_60%,transparent)] hover:bg-[color:color-mix(in_oklch,var(--accent)_8%,transparent)] border border-[color:var(--line)] transition-all"
-                                        >
-                                            <span className="font-mono font-bold text-[color:var(--accent)] shrink-0 w-7">[{c.id}]</span>
-                                            <span className="truncate leading-relaxed">{c.title}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
+                            <CellSources citations={selectedCell.citations} activeId={activeCitation} />
                         )}
                         <div className="mt-8 flex items-center justify-between pt-6 border-t-2 border-[color:color-mix(in_oklch,var(--accent)_20%,transparent)]">
                             <div className="flex items-center gap-2.5 text-xs text-[color:var(--text-3)]">
@@ -830,17 +960,13 @@ export default function GridView() {
     );
 }
 
-function CellContent({ cell }: { cell?: GridCell }) {
+function CellContent({ cell, loading }: { cell?: GridCell; loading?: boolean }) {
     if (!cell || cell.status === 'pending') {
-        return <span className="text-[#444] text-[10px]">—</span>;
+        // During an active run, pending cells render skeletons (spec §11.4)
+        return loading ? <SkeletonCard /> : <span className="text-[#444] text-[10px]">—</span>;
     }
     if (cell.status === 'running') {
-        return (
-            <div className="flex items-center gap-1.5 text-[10px] text-[#00d9ff]">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                <span>Running</span>
-            </div>
-        );
+        return <SkeletonCard active />;
     }
     if (cell.status === 'error') {
         return (
@@ -856,26 +982,32 @@ function CellContent({ cell }: { cell?: GridCell }) {
     const isNoData = cell.modelUsed === 'no-sources';
     const excerpt = (cell.answer ?? '').slice(0, 120);
 
+    // Self-contained "module card" per design spec §6.2:
+    // faint cyan border, rounded corners, top-left badge, padded body.
+    // Framer Motion spring hover lift + glow intensify (spec §10.2).
     return (
-        <div className="space-y-1">
-            {cell.ragUsed && (
+        <motion.div
+            whileHover={{ y: -3, boxShadow: '0 0 14px #00f0ff, 0 0 35px rgba(0, 240, 255, 0.35)' }}
+            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            className="card-module p-2.5 space-y-1.5"
+        >
+            {(isNoData || cell.ragUsed) && (
                 <div className="inline-block">
-                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#00d9ff]/20 text-[#00d9ff] uppercase">
-                        RAG
-                    </span>
+                    {isNoData ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#888]/20 text-[#888] uppercase tracking-wider">
+                            FLAG
+                        </span>
+                    ) : (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#00f0ff]/20 text-[#00f0ff] uppercase tracking-wider">
+                            RAG
+                        </span>
+                    )}
                 </div>
             )}
-            {isNoData && (
-                <div className="inline-block">
-                    <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold bg-[#888]/20 text-[#888] uppercase">
-                        —
-                    </span>
-                </div>
-            )}
-            <p className={`text-[10px] leading-tight line-clamp-3 max-w-[150px] ${
+            <p className={`text-[10px] leading-snug line-clamp-3 w-full break-words ${
                 isNoData
-                    ? 'text-[#888] italic'
-                    : 'text-[#bbb]'
+                    ? 'text-[#a0a8b8] italic'
+                    : 'text-[#e0e4f0]'
             }`}>
                 {excerpt}{(cell.answer ?? '').length > 120 ? '…' : ''}
             </p>
@@ -886,6 +1018,192 @@ function CellContent({ cell }: { cell?: GridCell }) {
                     <span className="truncate">{cell.modelUsed}</span>
                 </div>
             )}
+        </motion.div>
+    );
+}
+
+// Pulsing skeleton card shown while a cell is pending/running during a run (spec §11.4).
+function SkeletonCard({ active }: { active?: boolean }) {
+    return (
+        <motion.div
+            animate={{ opacity: [0.45, 0.85, 0.45] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+            className={`card-module p-2.5 space-y-1.5 w-full ${active ? 'glow-cyan' : ''}`}
+        >
+            <div className="h-2 w-8 rounded bg-[#00f0ff]/20" />
+            <div className="h-1.5 w-full rounded bg-white/10" />
+            <div className="h-1.5 w-[85%] rounded bg-white/10" />
+            <div className="h-1.5 w-[60%] rounded bg-white/10" />
+        </motion.div>
+    );
+}
+
+// DONE counter that springs up to its target value (spec §11.4).
+function AnimatedCount({ value }: { value: number }) {
+    const mv = useMotionValue(0);
+    const rounded = useTransform(mv, v => Math.round(v));
+    useEffect(() => {
+        const controls = animate(mv, value, { duration: 0.5, ease: 'easeOut' });
+        return () => controls.stop();
+    }, [value, mv]);
+    return <motion.span>{rounded}</motion.span>;
+}
+
+// Cyan/gold particle burst on run completion (spec §11.4).
+function ParticleBurst({ show }: { show: boolean }) {
+    const dots = [
+        { dx: -14, dy: -12, c: '#00f0ff' },
+        { dx: 16, dy: -10, c: '#f4c95f' },
+        { dx: -10, dy: 12, c: '#f4c95f' },
+        { dx: 14, dy: 14, c: '#00f0ff' },
+    ];
+    return (
+        <AnimatePresence>
+            {show && (
+                <span className="absolute left-1/2 top-1/2 pointer-events-none">
+                    {dots.map((d, i) => (
+                        <motion.span
+                            key={i}
+                            initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
+                            animate={{ x: d.dx, y: d.dy, opacity: 0, scale: 0.4 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.8, ease: 'easeOut' }}
+                            className="absolute w-1.5 h-1.5 rounded-full"
+                            style={{ background: d.c, boxShadow: `0 0 6px ${d.c}` }}
+                        />
+                    ))}
+                </span>
+            )}
+        </AnimatePresence>
+    );
+}
+
+// ─── World-class answer renderer (mirrors the search "quick answer") ───────────
+// Markdown body + inline [N] markers turned into clickable citation chips.
+
+function injectCites(
+    children: ReactNode,
+    map: Map<number, Citation>,
+    onOpen: (id: number) => void,
+): ReactNode {
+    return Children.map(children, (child) => {
+        if (typeof child !== 'string') return child;
+        const parts = child.split(/(\[\d+\])/g);
+        return parts.map((part, i) => {
+            const m = part.match(/^\[(\d+)\]$/);
+            if (!m) return part;
+            const num = parseInt(m[1], 10);
+            if (!map.has(num)) {
+                return <sup key={i} className="text-[#00f0ff] text-xs">[{num}]</sup>;
+            }
+            return (
+                <button
+                    key={i}
+                    onClick={() => onOpen(num)}
+                    title={map.get(num)!.title}
+                    className="mx-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-[#00f0ff]/20 text-[#00f0ff] text-[10px] font-bold align-super hover:bg-[#00f0ff]/40 hover:shadow-[0_0_8px_rgba(0,240,255,0.5)] active:scale-95 transition-all"
+                >
+                    {num}
+                </button>
+            );
+        });
+    });
+}
+
+function CellAnswer({ text, citations, onOpenCitation }: {
+    text: string;
+    citations: Citation[];
+    onOpenCitation: (id: number) => void;
+}) {
+    const map = new Map(citations.map(c => [c.id, c]));
+    const cite = (children: ReactNode) => injectCites(children, map, onOpenCitation);
+    const md = text.trim().replace(/\n{3,}/g, '\n\n');
+
+    return (
+        <div className="text-[#e8e8f0] text-sm leading-7 space-y-3.5 break-words">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                    p: ({ children }) => <p className="leading-7">{cite(children)}</p>,
+                    strong: ({ children }) => <strong className="font-semibold text-white">{cite(children)}</strong>,
+                    em: ({ children }) => <em className="italic text-[#cfd3e0]">{cite(children)}</em>,
+                    a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer"
+                           className="text-[#00f0ff] underline decoration-[#00f0ff]/40 hover:decoration-[#00f0ff]">
+                            {cite(children)}
+                        </a>
+                    ),
+                    ul: ({ children }) => <ul className="list-disc pl-5 space-y-1.5 marker:text-[#00f0ff]/60">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 space-y-1.5 marker:text-[#00f0ff]/60">{children}</ol>,
+                    li: ({ children }) => <li className="leading-7">{cite(children)}</li>,
+                    h1: ({ children }) => <h1 className="font-display text-lg font-bold text-white mt-5 mb-2">{cite(children)}</h1>,
+                    h2: ({ children }) => <h2 className="font-display text-base font-bold text-white mt-5 mb-2">{cite(children)}</h2>,
+                    h3: ({ children }) => <h3 className="font-display text-sm font-bold text-[#d4af37] mt-4 mb-1.5 uppercase tracking-wide">{cite(children)}</h3>,
+                    blockquote: ({ children }) => (
+                        <blockquote className="pl-3 border-l-2 border-[#00f0ff]/40 text-[#a0a8b8] italic">{children}</blockquote>
+                    ),
+                    hr: () => <hr className="border-white/[0.08] my-4" />,
+                    code: ({ children }) => (
+                        <code className="font-mono text-[12px] bg-white/[0.06] text-[#00f0ff] px-1 py-0.5 rounded">{children}</code>
+                    ),
+                    pre: ({ children }) => (
+                        <pre className="font-mono text-[12px] bg-white/[0.03] border border-white/[0.06] rounded-lg p-3 overflow-x-auto">{children}</pre>
+                    ),
+                    table: ({ children }) => (
+                        <div className="overflow-x-auto rounded-lg border border-white/[0.08] my-3">
+                            <table className="w-full text-[12.5px] border-collapse">{children}</table>
+                        </div>
+                    ),
+                    thead: ({ children }) => <thead className="bg-white/[0.04]">{children}</thead>,
+                    tr: ({ children }) => <tr className="border-b border-white/[0.06] last:border-0">{children}</tr>,
+                    th: ({ children }) => (
+                        <th className="px-3 py-2 text-left font-semibold text-[#d4af37] uppercase tracking-wider text-[11px]">{cite(children)}</th>
+                    ),
+                    td: ({ children }) => <td className="px-3 py-2 text-[#e8e8f0] align-top">{cite(children)}</td>,
+                }}
+            >
+                {md}
+            </ReactMarkdown>
+        </div>
+    );
+}
+
+function CellSources({ citations, activeId }: { citations: Citation[]; activeId: number | null }) {
+    return (
+        <div className="mt-8 pt-6 border-t border-[#d4af37]/20">
+            <h3 className="font-bold text-xs text-[#d4af37] mb-3 uppercase tracking-wider">
+                Sources ({citations.length})
+            </h3>
+            <ul className="space-y-2">
+                {citations.map(c => {
+                    const active = activeId === c.id;
+                    const hasUrl = !!c.url && c.url !== '#';
+                    const Tag: any = hasUrl ? 'a' : 'div';
+                    return (
+                        <li key={c.id} id={`grid-src-${c.id}`}>
+                            <Tag
+                                {...(hasUrl ? { href: c.url, target: '_blank', rel: 'noopener noreferrer' } : {})}
+                                className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${
+                                    active
+                                        ? 'border-[#00f0ff] bg-[#00f0ff]/10 ring-1 ring-[#00f0ff]/50 shadow-[0_0_16px_rgba(0,240,255,0.25)]'
+                                        : 'border-white/[0.08] bg-white/[0.02] hover:border-[#00f0ff]/40 hover:bg-[#00f0ff]/[0.04]'
+                                } ${hasUrl ? 'cursor-pointer' : ''}`}
+                            >
+                                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-[#00f0ff]/15 text-[#00f0ff] text-[11px] font-bold flex items-center justify-center">
+                                    {c.id}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-xs text-[#e8e8f0] leading-relaxed">{c.title}</span>
+                                    {c.source && (
+                                        <span className="block text-[10px] text-[#a0a8b8] mt-0.5 truncate">{c.source}</span>
+                                    )}
+                                </span>
+                                {hasUrl && <ExternalLink className="w-3.5 h-3.5 text-[#a0a8b8] flex-shrink-0 mt-0.5" />}
+                            </Tag>
+                        </li>
+                    );
+                })}
+            </ul>
         </div>
     );
 }
