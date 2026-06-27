@@ -170,27 +170,35 @@ class TableIndexer:
                 continue
 
             if period_cols:
-                # Each period column -> one row
-                for col_idx, period in period_cols:
-                    if col_idx < len(data_row):
-                        raw_val = data_row[col_idx]
-                        float_val = self._parse_value(raw_val)
-                        if raw_val and raw_val.strip() and raw_val.strip() not in ("-", "--", "N/A", ""):
-                            rows.append(FinancialRow(
-                                ticker=ticker,
-                                company=company,
-                                filing_type=filing_type,
-                                filing_date=filing_date,
-                                document_id=document_id,
-                                table_type=table.table_type,
-                                metric_name=metric_name,
-                                period=period,
-                                value_raw=raw_val,
-                                value_float=float_val,
-                                unit=unit,
-                                source_section=table.source_section,
-                                caption=table.caption,
-                            ))
+                # Align numeric cells to period columns BY ORDER, not by header
+                # index. SEC HTML statement rows interleave the label, '$' sign,
+                # and blank spacer <td>s, so the header's column index does not
+                # line up with the value's index in the data row (positional
+                # mapping grabbed a '$'/spacer/footnote cell -> garbage values
+                # like "33" for an $8B line item). The numeric cells, left to
+                # right, correspond to the period columns left to right.
+                nums = self._row_numeric_values(data_row)
+                if nums:
+                    # If there are more numeric cells than periods, keep the
+                    # rightmost N (value columns sit to the right of any
+                    # label-embedded ref numbers).
+                    vals = nums[-len(period_cols):] if len(nums) > len(period_cols) else nums
+                    for (_, period), (raw_val, float_val) in zip(period_cols, vals):
+                        rows.append(FinancialRow(
+                            ticker=ticker,
+                            company=company,
+                            filing_type=filing_type,
+                            filing_date=filing_date,
+                            document_id=document_id,
+                            table_type=table.table_type,
+                            metric_name=metric_name,
+                            period=period,
+                            value_raw=raw_val,
+                            value_float=float_val,
+                            unit=unit,
+                            source_section=table.source_section,
+                            caption=table.caption,
+                        ))
             else:
                 # No period columns detected: use filing_date as period
                 for col_idx, val in enumerate(data_row[1:], start=1):
@@ -252,6 +260,20 @@ class TableIndexer:
             return True
         numeric_cells = sum(1 for c in row[1:] if self._parse_value(c) is not None)
         return numeric_cells == 0 and len(row) > 1
+
+    def _row_numeric_values(self, data_row: list[str]) -> list[tuple[str, float]]:
+        """Numeric (raw, float) cells after the label column, left to right.
+
+        Used to align values to period columns by order instead of by header
+        index — robust against the '$'/blank spacer <td>s that SEC HTML
+        statement rows interleave between the label and each value.
+        """
+        out: list[tuple[str, float]] = []
+        for v in data_row[1:]:
+            f = self._parse_value(v)
+            if f is not None:
+                out.append((v, f))
+        return out
 
     def _parse_value(self, text: str) -> float | None:
         """Parse financial number from cell text."""
