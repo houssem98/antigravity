@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P1-a — broad XBRL backfill 283→full S&P (`backfill_financials.py --resume` on Fly). NOTE: mass re-ingest → ask before running.
+- **NEXT:** P1-c — agentic grid/answer cells via `orchestrator.py` (the real numeric lever; data backfill proved insufficient). P1-b (RRF tuning) after. Full S&P backfill = cheap coverage, optional/deferred.
 
 ---
 
@@ -18,7 +18,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 - [x] **P0-e** Confirm reranker fires; fix — *DONE. It fired but FAILED: prod COHERE key is an exhausted Trial key (429 every call) → no rerank + ~3.2s/query wasted. Switched `get_reranker()` to prefer Voyage rerank-2 (finance-tuned). Deployed gravity-api. Voyage fails FAST (rerank_ms 3200→172) — ~3s/query latency win. Rerank QUALITY still BLOCKED: Voyage free tier = 3 RPM (multi-query 429s); needs a PAID Voyage/Cohere key (user action). Also confirmed bm25/FTS channel fires.*
 
 ### P1 — Accuracy
-- [ ] **P1-a** Broad XBRL backfill 283 → full S&P, all statements (`backfill_financials.py --resume` on Fly)
+- [x] **P1-a** XBRL backfill (validated on 29 FinanceBench tickers) — *DONE/validated. financials 152,086→168,177; extracted with P0-b fix. RESULT (sample-30 vs 33% baseline): numeric 30% (FLAT), citation 20% (flat), but hallucinations 7%→**0%**, timeouts 5/15→**0**, latency p50 33.6s→**17.9s**. KEY: backfill FIXED coverage (0 "sources lack data", was the baseline's main failure) but numeric DIDN'T move — remaining failures are derived/analytical Qs (ratios, trends, segment compare) returning EMPTY answers in fast mode → need agentic reasoning (P1-c), not more data. Full S&P backfill = cheap coverage win but won't lift FinanceBench numeric; deferred/optional.*
 - [ ] **P1-b** Tune hybrid fusion RRF weights (dense vs FTS vs structured)
 - [ ] **P1-c** Agentic grid cells via `app/core/agents/orchestrator.py` (replace 1-shot per cell)
 - [ ] **P1-d** Span-level citations (store char offsets at ingest; highlight exact passage)
@@ -49,8 +49,8 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 | Company-correctness | 100% | unmeasured | `tests/eval/company_correctness.py` |
 | Retrieval recall@10 | ≥0.90 | unmeasured | build labeled set |
 | Citation faithfulness | ≥95% | **20%** hit-rate (3/15 sample) | `judge_model.py` |
-| Hallucination rate | <2% | **7%** (1/15 sample) | financebench hallucination flag |
-| Quick-answer p95 latency | <2s | **p50 33.6s, max 60s** (sample-15; 5/15 hit 60s timeout) | financebench latencies |
+| Hallucination rate | <2% | **0%** (0/30, was 7%) | financebench hallucination flag |
+| Quick-answer p95 latency | <2s | **p50 17.9s** (was 33.6s; 0 timeouts, was 5/15) | financebench latencies |
 | Grid throughput /100 cells | <60s | slow (serial conc=1) | — |
 | Corpus coverage | 500+ cos, +transcripts, <1h fresh | 283 cos, 1,603 filings, SEC-only | Supabase |
 
