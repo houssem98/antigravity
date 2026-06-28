@@ -846,7 +846,7 @@ class SearchPipeline:
                     "chunk_id": p.chunk_id,
                     "title": p.document_title,
                     "section": p.section,
-                    "text": p.text[:500],  # Preview
+                    "text": p.text[:2000],  # Source passage (was 500 — too short for evidence display / recall scoring)
                     "ticker": p.ticker,
                     "date": p.filing_date,
                     "document_type": p.document_type,

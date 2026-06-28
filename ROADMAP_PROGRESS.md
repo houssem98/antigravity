@@ -47,7 +47,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 |---|---|---|---|
 | FinanceBench numeric QA | ≥80% | **33%** (5/15 sample, prod) | `tests/eval/financebench.py` |
 | Company-correctness | 100% | unmeasured | `tests/eval/company_correctness.py` |
-| Retrieval recall@10 | ≥0.90 | metric BUILT but BLOCKED | API returns source `text` truncated ~118 chars → can't overlap long gold evidence (reads 0). Needs full-chunk text or a retrieval-only endpoint for a real number. |
+| Retrieval recall@10 | ≥0.90 | **~7%** (weak proxy) | source text widened 500→2000 (recall 0→7%); still a weak proxy — gold evidence phrased differently than chunks, 0.5 token-overlap too strict. Directional only. |
 | Citation faithfulness | ≥95% | **27%** hit-rate (8/30, was 20%) | financebench citation_check |
 | Hallucination rate | <2% | **0%** (0/30, was 7%) | financebench hallucination flag |
 | Quick-answer p95 latency | <2s | **p50 17.9s** (was 33.6s; 0 timeouts, was 5/15) | financebench latencies |
@@ -63,6 +63,8 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 - **P0-a (baseline)** — eval harness present: `financebench.py`, `financebench_xbrl.py`, `company_correctness.py`, `latency_cost_runner.py`, `judge_model.py`, `run_eval.py`. Local venv has httpx/datasets/tqdm/rouge_score. Prod `/v1/search` reachable (HTTP 200, ~13.5s, channels `[structured,dense,tree_nav]`). FinanceBench sample-15 baseline running → results pending.
 
 ## Observations / leads
+- **n=30 FinanceBench is NOISY** — citation swung 27%→17% and halluc 0→20% on the SAME deterministic sample across runs (LLM nondeterminism). Numeric is stable (~30%). Use n≥50 (or full 150) for trustworthy small deltas; treat ±10pt at n=30 as noise.
+- Widened source text 500→2000 (`search_pipeline.py:849`) — better citation-panel snippets + recall headroom; recall 0→7% (still weak proxy).
 - Prod fast-mode query returned channels `[structured, dense, tree_nav]` — **FTS/bm25 keyword channel did NOT fire** despite the 101k-chunk backfill. Investigate whether `search_chunks_fts` is wired into the fast pipeline / fusion (candidate sub-task under P1-b or new P0).
 - Latency ~13.5s single probe; **sample-15 p50 33.6s, 5/15 timed out at 60s** → latency is also an accuracy floor (timeouts score as errors). Big P4-a problem, partially blocks accuracy.
 - Baseline failures cluster on **derived/ratio metrics** (DPO, quick ratio, gross-margin trend, regional revenue) and tickers possibly outside the 283-corpus (AMCOR, Boeing, Corning, MGM) → answer = "sources do not contain". Points at P1-a (broad backfill) + P2 (coverage) + structured-channel depth, not just the column bug.
