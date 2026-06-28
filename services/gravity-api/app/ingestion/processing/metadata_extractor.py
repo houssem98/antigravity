@@ -126,23 +126,39 @@ class MetadataExtractor:
         return "document"
 
     def _extract_date(self, text: str) -> str:
-        # Try ISO date first
-        m = DATE_PATTERNS[0].search(text)
-        if m:
-            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        """Best-effort filing date from document text.
 
-        # Try written date
-        m = DATE_PATTERNS[1].search(text)
-        if m:
-            month = MONTH_MAP.get(m.group(1).lower(), 1)
-            return f"{m.group(3)}-{month:02d}-{int(m.group(2)):02d}"
+        Collects every date-like match and returns the latest one that is
+        *plausible* as a filing date — within the EDGAR era and on or before
+        today. This rejects future dates lifted from the body (lease terms,
+        debt maturities, contract end dates) that previously produced
+        impossible filing_dates like 2031-12-31.
+        """
+        today = date.today()
+        floor = date(1994, 1, 1)  # EDGAR full-text era
+        candidates: list[date] = []
 
-        # Try MM/DD/YYYY
-        m = DATE_PATTERNS[2].search(text)
-        if m:
-            return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+        for m in DATE_PATTERNS[0].finditer(text):  # YYYY-MM-DD
+            try:
+                candidates.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+            except ValueError:
+                pass
+        for m in DATE_PATTERNS[1].finditer(text):  # Month DD, YYYY
+            month = MONTH_MAP.get(m.group(1).lower(), 0)
+            try:
+                candidates.append(date(int(m.group(3)), month, int(m.group(2))))
+            except ValueError:
+                pass
+        for m in DATE_PATTERNS[2].finditer(text):  # MM/DD/YYYY
+            try:
+                candidates.append(date(int(m.group(3)), int(m.group(1)), int(m.group(2))))
+            except ValueError:
+                pass
 
-        return str(date.today())
+        plausible = [d for d in candidates if floor <= d <= today]
+        if plausible:
+            return max(plausible).isoformat()
+        return today.isoformat()
 
     def _extract_fiscal_year(self, text: str) -> str:
         m = FISCAL_YEAR_PATTERN.search(text)

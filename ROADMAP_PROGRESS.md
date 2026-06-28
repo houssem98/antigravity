@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P0-d — clean `filing_date` (many "2026", some future 2027–2031) across chunks/doc_trees/financials.
+- **NEXT:** P0-e — confirm reranker fires in `app/core/retrieval/fusion.py`; wire if not.
 
 ---
 
@@ -14,7 +14,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 - [x] **P0-a** Build/confirm eval harness + capture baselines — *DONE. FinanceBench sample-15 vs prod: numeric 33%, citation 20%, halluc 7%, 5/15 timed out, p50 33.6s.*
 - [x] **P0-b** Fix table column-alignment bug + regression test — *DONE. Root cause: `table_indexer._extract_rows` mapped header col_idx into data row; SEC `$`/spacer `<td>`s misalign it. Fixed: align numeric cells to period cols by ORDER (`_row_numeric_values`). 2 regression tests pass. NOTE: stored 152k rows stay wrong until re-ingest (P1-a) — FinanceBench won't move from code alone.*
 - [x] **P0-c** Grid concurrency: parallel for deepseek/claude, serial for Gemini — *DONE. `startRun` concurrency = `selectedModel==='gemini' ? 1 : 6`. `runGrid` already has a safe cursor worker-pool. Built + deployed; bundle shows `==="gemini"?1:6`. Expected ~6× grid wall-time for paid models (exact /100-cell throughput needs in-browser timing).*
-- [ ] **P0-d** Clean `filing_date` (many dated "2026", some future 2027–2031) across chunks/doc_trees/financials
+- [x] **P0-d** Clean `filing_date` + fix root cause — *DONE. Ledger overstated it: 2026 dates are VALID (current year); real issue = impossible future dates. Nulled future-dated (chunks 2,829, doc_trees 7; financials clean, no NULLs) via `scripts/fix_future_filing_dates.py` on Fly (Supabase PostgREST 500s on the 2,829 because the generated `tsv` recomputes per row → ran server-side w/ statement_timeout=0). Root cause: `metadata_extractor._extract_date` returned the FIRST body date → grabbed lease/debt-maturity future dates. Fixed: pick latest plausible (1994..today). +4 regression tests pass. gravity-api redeploy deferred to P1-a (EDGAR poller uses explicit metadata dates, so low urgency).*
 - [ ] **P0-e** Confirm reranker fires in `app/core/retrieval/fusion.py`; wire if not
 
 ### P1 — Accuracy
