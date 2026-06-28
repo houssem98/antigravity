@@ -87,10 +87,17 @@ def get_llm_router():
 @lru_cache()
 def get_reranker():
     from app.config import settings
+    # Prefer Voyage rerank-2 (finance-tuned, working key). The prod COHERE key
+    # is a rate-limited Trial key that 429s on EVERY call -> reranking silently
+    # falls back to RRF order (no rerank benefit) AND burns ~3s/query on the
+    # failed round-trip + retries. Voyage works and is finance-domain tuned.
+    if settings.voyage_api_key:
+        from app.core.reranking.voyage_reranker import VoyageReranker
+        return VoyageReranker()
     if settings.cohere_api_key:
         from app.core.reranking.cohere_reranker import CohereReranker
         return CohereReranker()
-    logger.warning("no_reranker", reason="no COHERE_API_KEY")
+    logger.warning("no_reranker", reason="no VOYAGE_API_KEY or COHERE_API_KEY")
     return None
 
 

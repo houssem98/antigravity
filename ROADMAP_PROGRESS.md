@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P0-e — confirm reranker fires in `app/core/retrieval/fusion.py`; wire if not.
+- **NEXT:** P1-a — broad XBRL backfill 283→full S&P (`backfill_financials.py --resume` on Fly). NOTE: mass re-ingest → ask before running.
 
 ---
 
@@ -15,7 +15,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 - [x] **P0-b** Fix table column-alignment bug + regression test — *DONE. Root cause: `table_indexer._extract_rows` mapped header col_idx into data row; SEC `$`/spacer `<td>`s misalign it. Fixed: align numeric cells to period cols by ORDER (`_row_numeric_values`). 2 regression tests pass. NOTE: stored 152k rows stay wrong until re-ingest (P1-a) — FinanceBench won't move from code alone.*
 - [x] **P0-c** Grid concurrency: parallel for deepseek/claude, serial for Gemini — *DONE. `startRun` concurrency = `selectedModel==='gemini' ? 1 : 6`. `runGrid` already has a safe cursor worker-pool. Built + deployed; bundle shows `==="gemini"?1:6`. Expected ~6× grid wall-time for paid models (exact /100-cell throughput needs in-browser timing).*
 - [x] **P0-d** Clean `filing_date` + fix root cause — *DONE. Ledger overstated it: 2026 dates are VALID (current year); real issue = impossible future dates. Nulled future-dated (chunks 2,829, doc_trees 7; financials clean, no NULLs) via `scripts/fix_future_filing_dates.py` on Fly (Supabase PostgREST 500s on the 2,829 because the generated `tsv` recomputes per row → ran server-side w/ statement_timeout=0). Root cause: `metadata_extractor._extract_date` returned the FIRST body date → grabbed lease/debt-maturity future dates. Fixed: pick latest plausible (1994..today). +4 regression tests pass. gravity-api redeploy deferred to P1-a (EDGAR poller uses explicit metadata dates, so low urgency).*
-- [ ] **P0-e** Confirm reranker fires in `app/core/retrieval/fusion.py`; wire if not
+- [x] **P0-e** Confirm reranker fires; fix — *DONE. It fired but FAILED: prod COHERE key is an exhausted Trial key (429 every call) → no rerank + ~3.2s/query wasted. Switched `get_reranker()` to prefer Voyage rerank-2 (finance-tuned). Deployed gravity-api. Voyage fails FAST (rerank_ms 3200→172) — ~3s/query latency win. Rerank QUALITY still BLOCKED: Voyage free tier = 3 RPM (multi-query 429s); needs a PAID Voyage/Cohere key (user action). Also confirmed bm25/FTS channel fires.*
 
 ### P1 — Accuracy
 - [ ] **P1-a** Broad XBRL backfill 283 → full S&P, all statements (`backfill_financials.py --resume` on Fly)
@@ -69,3 +69,4 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 ## Blockers
 - Qdrant/DB backfills must run on Fly (local Qdrant `:6333` down, DB password not local).
 - Supabase DDL only via dashboard SQL editor.
+- **Rerank quality BLOCKED on paid key (user action):** prod COHERE_API_KEY = exhausted Trial (429); VOYAGE_API_KEY works but free tier = 3 RPM → 429s under multi-query load. Add a payment method on Voyage (dashboard.voyageai.com) OR a production Cohere key to unlock real reranking (~+0.02–0.08 NDCG). Code already prefers Voyage and fails fast (172ms), so no latency cost meanwhile.
