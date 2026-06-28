@@ -47,7 +47,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 |---|---|---|---|
 | FinanceBench numeric QA | ≥80% | **33%** (5/15 sample, prod) | `tests/eval/financebench.py` |
 | Company-correctness | 100% | unmeasured | `tests/eval/company_correctness.py` |
-| Retrieval recall@10 | ≥0.90 | unmeasured | build labeled set |
+| Retrieval recall@10 | ≥0.90 | harness READY, run pending | `financebench.py` `evidence_recall` (token-overlap vs gold evidence) |
 | Citation faithfulness | ≥95% | **20%** hit-rate (3/15 sample) | `judge_model.py` |
 | Hallucination rate | <2% | **0%** (0/30, was 7%) | financebench hallucination flag |
 | Quick-answer p95 latency | <2s | **p50 17.9s** (was 33.6s; 0 timeouts, was 5/15) | financebench latencies |
@@ -57,6 +57,8 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 ---
 
 ## Eval log (before → after per task)
+
+- **Recall eval infra (P1-b support)** — added `evidence_recall` to `financebench.py` (token-overlap of gold FinanceBench `evidence` vs retrieved source text, hit ≥0.5) + `retrieval_recall` per-Q + `recall_rate` in report/summary. 4 unit tests pass. Built deploy-free during backfill; RUN it alongside the P1-b deploy+measure once backfill done (gives the first retrieval recall@k number + makes fusion tuning principled). Note: sample is deterministic (`seed(42)`) so same-N runs ARE comparable before/after.
 
 - **P0-a (baseline)** — eval harness present: `financebench.py`, `financebench_xbrl.py`, `company_correctness.py`, `latency_cost_runner.py`, `judge_model.py`, `run_eval.py`. Local venv has httpx/datasets/tqdm/rouge_score. Prod `/v1/search` reachable (HTTP 200, ~13.5s, channels `[structured,dense,tree_nav]`). FinanceBench sample-15 baseline running → results pending.
 

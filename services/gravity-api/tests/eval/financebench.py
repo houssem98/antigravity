@@ -187,6 +187,7 @@ class QuestionResult:
     numeric_match: bool = False
     hallucination_flag: bool = False
     citation_found: bool = False
+    retrieval_recall: bool = False
     latency_ms: float = 0.0
     error: Optional[str] = None
 
@@ -198,6 +199,7 @@ class EvalReport:
     numeric_matches: int = 0
     hallucinations: int = 0
     citation_hits: int = 0
+    recall_hits: int = 0
     errors: int = 0
     latencies: list[float] = field(default_factory=list)
     by_category: dict = field(default_factory=dict)
@@ -223,6 +225,10 @@ class EvalReport:
     @property
     def citation_rate(self) -> float:
         return self.citation_hits / max(self.total, 1)
+
+    @property
+    def recall_rate(self) -> float:
+        return self.recall_hits / max(self.total, 1)
 
     @staticmethod
     def is_correct(r) -> bool:
@@ -403,6 +409,43 @@ async def query_gravity(client: httpx.AsyncClient, question: str) -> dict:
 
 # ─── Load FinanceBench dataset ────────────────────────────────────────────────
 
+_RECALL_STOP = {
+    "the", "and", "for", "was", "were", "are", "with", "that", "this", "from",
+    "have", "has", "had", "not", "its", "our", "their", "year", "ended",
+    "december", "fiscal", "period", "company", "total", "net", "in", "of", "to",
+    "a", "an", "as", "at", "by", "on", "or", "is", "be", "we",
+}
+
+
+def _recall_tokens(text: str) -> set[str]:
+    return {
+        w for w in re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split()
+        if len(w) > 2 and w not in _RECALL_STOP
+    }
+
+
+def evidence_recall(evidence: list, sources: list[dict], threshold: float = 0.5) -> bool:
+    """Did retrieval surface the gold evidence?
+
+    Token-overlap recall: fraction of the gold evidence's distinctive words that
+    appear in the concatenated retrieved passages. Hit when >= threshold. Robust
+    to chunk-boundary / formatting differences (vs exact substring match).
+    Returns True (neutral) when the dataset has no evidence to score against.
+    """
+    gold_text = " ".join(
+        (e.get("evidence_text", "") if isinstance(e, dict) else str(e))
+        for e in (evidence or [])
+    )
+    gold = _recall_tokens(gold_text)
+    if not gold:
+        return True  # nothing to measure → don't penalise
+    src = set()
+    for s in (sources or []):
+        src |= _recall_tokens(s.get("text", "") if isinstance(s, dict) else str(s))
+    overlap = len(gold & src) / len(gold)
+    return overlap >= threshold
+
+
 def load_dataset(sample: Optional[int] = None, category: Optional[str] = None, embedded: bool = False) -> list[dict]:
     """
     Load FinanceBench questions.
@@ -428,6 +471,7 @@ def load_dataset(sample: Optional[int] = None, category: Optional[str] = None, e
                     "company":  row.get("company", ""),
                     "filing":   row.get("doc_name", ""),
                     "category": row.get("question_type", "general"),
+                    "evidence": row.get("evidence", []) or [],
                 })
             print(f"  Loaded {len(questions)} questions from HuggingFace", flush=True)
         except Exception as e:
@@ -514,6 +558,7 @@ async def evaluate_question(
             result.numeric_match = numeric_match(answer_text, q["answer"]) if _has_number(q["answer"]) else True
             result.hallucination_flag = hallucination_flag(answer_text, sources)
             result.citation_found = citation_check(citations, q.get("ticker", ""), sources)
+            result.retrieval_recall = evidence_recall(q.get("evidence", []), sources)
 
         except httpx.TimeoutException:
             result.error = "TIMEOUT"
@@ -571,6 +616,8 @@ async def run_eval(
                     report.hallucinations += 1
                 if r.citation_found:
                     report.citation_hits += 1
+                if r.retrieval_recall:
+                    report.recall_hits += 1
 
             # Per-category tracking
             cat = r.category
@@ -612,6 +659,7 @@ def print_report(report: EvalReport):
     print(f"  Numeric Accuracy    : {report.numeric_rate:.1%}  {grade(report.numeric_rate, WORLD_CLASS['numeric'])}  (target ≥ {WORLD_CLASS['numeric']:.0%})")
     print(f"  Hallucination Rate  : {report.hallucination_rate:.1%}  {grade(report.hallucination_rate, WORLD_CLASS['hallucination'], invert=True)}  (target ≤ {WORLD_CLASS['hallucination']:.0%})")
     print(f"  Citation Hit Rate   : {report.citation_rate:.1%}")
+    print(f"  Retrieval Recall    : {report.recall_rate:.1%}  {grade(report.recall_rate, 0.90)}  (target ≥ 90%)")
     print()
     print(f"  Latency P50         : {report.p50_latency:.0f}ms")
     print(f"  Latency P95         : {report.p95_latency:.0f}ms")
