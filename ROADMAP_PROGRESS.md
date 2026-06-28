@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P1-d span citations OR deploy+measure the P1-b fusion fix once backfill done. ⚠️ DO NOT `fly deploy` gravity-api until the full backfill finishes (would restart the machine + kill the bg backfill, losing ephemeral progress). Full backfill RUNNING on Fly (/tmp/bf_full.log, ~316 tickers).
+- **NEXT:** P1-d span-level citations (needs gravity-api char-offset storage + deploy) OR P3 frontend. Backfill STOPPED at 77/316 (~106 tickers backfilled); deploys unblocked. P1-b deployed + validated.
 
 ---
 
@@ -19,7 +19,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 ### P1 — Accuracy
 - [x] **P1-a** XBRL backfill (validated on 29 FinanceBench tickers) — *DONE/validated. financials 152,086→168,177; extracted with P0-b fix. RESULT (sample-30 vs 33% baseline): numeric 30% (FLAT), citation 20% (flat), but hallucinations 7%→**0%**, timeouts 5/15→**0**, latency p50 33.6s→**17.9s**. KEY: backfill FIXED coverage (0 "sources lack data", was the baseline's main failure) but numeric DIDN'T move — remaining failures are derived/analytical Qs (ratios, trends, segment compare) returning EMPTY answers in fast mode → need agentic reasoning (P1-c), not more data. Full S&P backfill = cheap coverage win but won't lift FinanceBench numeric; deferred/optional.*
-- [~] **P1-b** Tune hybrid fusion RRF weights — *CODE DONE (committed), deploy+measure DEFERRED until backfill finishes (deploy would kill it). Found latent bug: live `authority_aware_rrf` called PLAIN `reciprocal_rank_fusion` → the per-channel weights in `weighted_rrf` (structured=1.2, tree_nav=1.1) were NEVER applied. Wired weighted base into authority_aware_rrf via shared `DEFAULT_CHANNEL_WEIGHTS` (+added tree_nav=1.1). 3 regression tests pass (structured/tree_nav outrank equal-rank dense). NOTE: structured facts are also force-pinned, so live impact mainly reorders prose — measure post-deploy, accept FinanceBench n=30 noise.*
+- [x] **P1-b** Tune hybrid fusion RRF weights — *DONE + deployed + validated. Fixed latent bug: live `authority_aware_rrf` used PLAIN RRF, so `weighted_rrf` channel weights (structured=1.2, tree_nav=1.1) never applied. Wired weighted base via shared `DEFAULT_CHANNEL_WEIGHTS`. 3 tests. Deployed (backfill stopped first). WARM sample-30 vs post-P1-a 30%: numeric 30% (FLAT — structured already pinned, as predicted), citation 20%→**27%**, errors 0, p50 17.9s→**13.2s**. Net neutral-positive → KEEP. (First post-deploy run was cold-start confounded: 8/30 timeouts; warm re-run clean.)*
 - [~] **P1-c** Agentic cells — *INVESTIGATED, redirected. Probed fast vs agentic on a derived-metric Q (AMCOR quick-ratio YoY): IDENTICAL answers, both compute FY2023 (0.89x) but report FY2022 missing. Agentic is NOT the lever — the class is data-DEPTH limited, not reasoning limited. Also found: eval's "empty got" was a wrong-field display artifact; the model DOES answer (declines correctly when prior-year data absent). `structured_search` already requests multi-period (line 88-95); the FY2022 facts are simply not ingested (backfill depth = 4 filings/3yr). Real lever for YoY-derived Qs = deeper historical backfill (more 10-Ks/years) — big, slow. Deferred pending that.*
 - [ ] **P1-d** Span-level citations (store char offsets at ingest; highlight exact passage)
 
@@ -47,8 +47,8 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 |---|---|---|---|
 | FinanceBench numeric QA | ≥80% | **33%** (5/15 sample, prod) | `tests/eval/financebench.py` |
 | Company-correctness | 100% | unmeasured | `tests/eval/company_correctness.py` |
-| Retrieval recall@10 | ≥0.90 | harness READY, run pending | `financebench.py` `evidence_recall` (token-overlap vs gold evidence) |
-| Citation faithfulness | ≥95% | **20%** hit-rate (3/15 sample) | `judge_model.py` |
+| Retrieval recall@10 | ≥0.90 | metric BUILT but BLOCKED | API returns source `text` truncated ~118 chars → can't overlap long gold evidence (reads 0). Needs full-chunk text or a retrieval-only endpoint for a real number. |
+| Citation faithfulness | ≥95% | **27%** hit-rate (8/30, was 20%) | financebench citation_check |
 | Hallucination rate | <2% | **0%** (0/30, was 7%) | financebench hallucination flag |
 | Quick-answer p95 latency | <2s | **p50 17.9s** (was 33.6s; 0 timeouts, was 5/15) | financebench latencies |
 | Grid throughput /100 cells | <60s | slow (serial conc=1) | — |

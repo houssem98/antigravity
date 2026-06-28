@@ -431,6 +431,11 @@ def evidence_recall(evidence: list, sources: list[dict], threshold: float = 0.5)
     appear in the concatenated retrieved passages. Hit when >= threshold. Robust
     to chunk-boundary / formatting differences (vs exact substring match).
     Returns True (neutral) when the dataset has no evidence to score against.
+
+    LIMITATION: /v1/search returns each source's `text` truncated (~118 chars),
+    so long gold evidence rarely reaches the threshold and this reads near 0 —
+    it is NOT a true recall@k yet. A real number needs full-chunk source text
+    or a retrieval-only endpoint.
     """
     gold_text = " ".join(
         (e.get("evidence_text", "") if isinstance(e, dict) else str(e))
