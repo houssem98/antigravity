@@ -4,7 +4,7 @@ Durable state ledger for the `/loop` engineering run. **Read this first every it
 One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 - **Branch:** `roadmap/world-class`
-- **NEXT:** P1-b — RRF fusion weight tuning (cheap). Full S&P backfill RUNNING on Fly bg (/tmp/bf_full.log, 316 tickers ~2h). See P1-c finding: agentic NOT the numeric lever; the wall is historical-statement coverage DEPTH (deeper backfill = bigger lever but slow).
+- **NEXT:** P1-d span citations OR deploy+measure the P1-b fusion fix once backfill done. ⚠️ DO NOT `fly deploy` gravity-api until the full backfill finishes (would restart the machine + kill the bg backfill, losing ephemeral progress). Full backfill RUNNING on Fly (/tmp/bf_full.log, ~316 tickers).
 
 ---
 
@@ -19,7 +19,7 @@ One shippable task per iteration. P0 before P1, etc. Skip BLOCKED tasks.
 
 ### P1 — Accuracy
 - [x] **P1-a** XBRL backfill (validated on 29 FinanceBench tickers) — *DONE/validated. financials 152,086→168,177; extracted with P0-b fix. RESULT (sample-30 vs 33% baseline): numeric 30% (FLAT), citation 20% (flat), but hallucinations 7%→**0%**, timeouts 5/15→**0**, latency p50 33.6s→**17.9s**. KEY: backfill FIXED coverage (0 "sources lack data", was the baseline's main failure) but numeric DIDN'T move — remaining failures are derived/analytical Qs (ratios, trends, segment compare) returning EMPTY answers in fast mode → need agentic reasoning (P1-c), not more data. Full S&P backfill = cheap coverage win but won't lift FinanceBench numeric; deferred/optional.*
-- [ ] **P1-b** Tune hybrid fusion RRF weights (dense vs FTS vs structured)
+- [~] **P1-b** Tune hybrid fusion RRF weights — *CODE DONE (committed), deploy+measure DEFERRED until backfill finishes (deploy would kill it). Found latent bug: live `authority_aware_rrf` called PLAIN `reciprocal_rank_fusion` → the per-channel weights in `weighted_rrf` (structured=1.2, tree_nav=1.1) were NEVER applied. Wired weighted base into authority_aware_rrf via shared `DEFAULT_CHANNEL_WEIGHTS` (+added tree_nav=1.1). 3 regression tests pass (structured/tree_nav outrank equal-rank dense). NOTE: structured facts are also force-pinned, so live impact mainly reorders prose — measure post-deploy, accept FinanceBench n=30 noise.*
 - [~] **P1-c** Agentic cells — *INVESTIGATED, redirected. Probed fast vs agentic on a derived-metric Q (AMCOR quick-ratio YoY): IDENTICAL answers, both compute FY2023 (0.89x) but report FY2022 missing. Agentic is NOT the lever — the class is data-DEPTH limited, not reasoning limited. Also found: eval's "empty got" was a wrong-field display artifact; the model DOES answer (declines correctly when prior-year data absent). `structured_search` already requests multi-period (line 88-95); the FY2022 facts are simply not ingested (backfill depth = 4 filings/3yr). Real lever for YoY-derived Qs = deeper historical backfill (more 10-Ks/years) — big, slow. Deferred pending that.*
 - [ ] **P1-d** Span-level citations (store char offsets at ingest; highlight exact passage)
 

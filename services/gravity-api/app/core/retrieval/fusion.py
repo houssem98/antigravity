@@ -190,6 +190,20 @@ class RetrievalResult:
             )
 
 
+# Per-channel fusion weights. Exact-fact channels (structured XBRL, navigated
+# tree sections) are ground truth for numeric/section queries and should outrank
+# generic prose at equal ranks; sparse/graph are noisier so sit below 1.0.
+DEFAULT_CHANNEL_WEIGHTS = {
+    "dense": 1.0,
+    "bm25": 1.0,
+    "splade": 0.8,
+    "graph": 0.6,
+    "structured": 1.2,   # exact XBRL facts
+    "tree_nav": 1.1,     # navigated filing sections
+    "mcp": 1.0,
+}
+
+
 def reciprocal_rank_fusion(
     ranked_lists: dict[str, list[RetrievalResult]],
     k: int = 60,
@@ -261,15 +275,7 @@ def weighted_rrf(
     Use this when you have evidence that certain channels are more reliable
     for specific query types (e.g., structured queries boost structured channel).
     """
-    default_weights = {
-        "dense": 1.0,
-        "bm25": 1.0,
-        "splade": 0.8,
-        "graph": 0.6,
-        "structured": 1.2,
-        "mcp": 1.0,     # MCP institutional data — on par with dense/BM25
-    }
-    weights = weights or default_weights
+    weights = weights or DEFAULT_CHANNEL_WEIGHTS
 
     scores: dict[str, float] = {}
     doc_map: dict[str, RetrievalResult] = {}
@@ -315,7 +321,10 @@ def authority_aware_rrf(
       0.15 — primary filings outrank tier-2 news at ties (recommended)
       0.30 — primary always beats news (use for compliance-strict outputs)
     """
-    base = reciprocal_rank_fusion(ranked_lists, k=k)
+    # Weighted base so exact-fact channels (structured/tree_nav) get their
+    # intended boost — previously this used plain RRF and the channel weights
+    # in weighted_rrf were never applied on the live path.
+    base = weighted_rrf(ranked_lists, k=k)
     if not base:
         return base
 
